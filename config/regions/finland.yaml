@@ -1,0 +1,291 @@
+# ============================================================================
+# Finland Region Configuration
+# ============================================================================
+# This file defines all data sources, locations, features, holidays, and
+# consumer pricing for the Finnish electricity market.
+#
+# The training pipeline and HA YAML generator both read this file.
+# To adapt the system for another region, create a new YAML file
+# following this structure (e.g., sweden.yaml, estonia.yaml).
+# ============================================================================
+
+region:
+  name: "Finland"
+  timezone: "Europe/Helsinki"
+  latitude: 62.0                     # Representative latitude for daylight calculation
+  currency: "EUR"
+  bidding_zone: "FI"
+
+# ============================================================================
+# Price data source (REQUIRED)
+# ============================================================================
+price_source:
+  name: "sahkotin"
+  url: "https://sahkotin.fi/prices"
+  unit: "EUR/MWh"                    # Raw unit from API (value / 10)
+  divisor: 10                        # API returns value in 0.1 EUR/MWh
+  vat_param: false                   # Whether to request VAT-included prices
+
+# ============================================================================
+# Weather data source (REQUIRED)
+# ============================================================================
+weather_source:
+  name: "open-meteo"
+  forecast_url: "https://api.open-meteo.com/v1/forecast"
+  archive_url: "https://archive-api.open-meteo.com/v1/archive"
+  wind_height_m: 120                 # Hub height for wind speed
+  solar_tilt_deg: 45                 # Panel tilt angle (south-facing)
+  variables:
+    wind: "wind_speed_120m"
+    solar: "global_tilted_irradiance_instant"
+    temperature: "temperature_2m"
+
+  # 7 Finnish locations with capacity-based weighting
+  # Wind weights: Finnish Wind Power Association (FWPA) 2024 capacity register
+  # Solar weights: Energiavirasto 2024 solar plant register + RENEWFM EU data
+  # Temp weights: Population-based (drives consumption patterns)
+  locations:
+    - name: "Raahe coast (Kalajoki-Raahe)"
+      lat: 64.25
+      lon: 24.40
+      wind_weight: 0.22             # Largest wind cluster
+      solar_weight: 0.08
+      temp_weight: 0.05
+
+    - name: "Rauma / SW Satakunta"
+      lat: 61.10
+      lon: 21.50
+      wind_weight: 0.12
+      solar_weight: 0.22            # Largest solar farm (32 MW Lakari)
+      temp_weight: 0.08
+
+    - name: "Ii-Simo, N. Ostrobothnia coast"
+      lat: 65.30
+      lon: 25.40
+      wind_weight: 0.18             # Fastest-growing wind corridor
+      solar_weight: 0.06
+      temp_weight: 0.05
+
+    - name: "Joroinen, Eastern Finland"
+      lat: 62.18
+      lon: 27.83
+      wind_weight: 0.05
+      solar_weight: 0.20            # 230 MWp planned solar
+      temp_weight: 0.10
+
+    - name: "Helsinki / Uusimaa"
+      lat: 60.17
+      lon: 24.94
+      wind_weight: 0.04
+      solar_weight: 0.24            # Dense rooftop solar (Kivikko 850 kWp)
+      temp_weight: 0.38             # 38% population -> highest consumption density
+
+    - name: "Lapua / S. Ostrobothnia"
+      lat: 62.97
+      lon: 23.00
+      wind_weight: 0.10
+      solar_weight: 0.12            # EPV solar + Palloneva project
+      temp_weight: 0.12
+
+    - name: "Kolari-Muonio fells, Lapland"
+      lat: 67.30
+      lon: 23.80
+      wind_weight: 0.08             # Arctic wind resource
+      solar_weight: 0.04
+      temp_weight: 0.05
+
+    # Note: Remaining wind weight (0.21) is captured by proximity
+    # of sensors 1 & 3 to Lestijärvi + Pyhäjoki clusters
+    # Total weights: wind=0.79+0.21 residual, solar=0.96, temp=0.83
+
+# ============================================================================
+# Cross-border price sources (OPTIONAL - Tier 2, free, no auth)
+# ============================================================================
+# Used to compute 7-day rolling average price spreads,
+# from which import_potential_xx and export_potential_xx features are derived.
+#
+# Verified by analysis (Oct 2025 - Apr 2026, 27 weeks):
+#   FI-SE1 spread: lag-1 autocorrelation 0.662, sign persistence 100%
+#   FI-SE3 spread: lag-1 autocorrelation 0.543, sign persistence 100%
+#   FI-EE  spread: lag-1 autocorrelation 0.733, sign persistence 100%
+
+neighbor_price_sources:
+  - name: "elpriset_se1"
+    url: "https://www.elprisetjustnu.se/api/v1/prices/{year}/{mmdd}_{zone}.json"
+    zone: "SE1"
+    unit: "eur_per_kwh"              # API returns EUR/kWh
+    to_eur_mwh_factor: 1000          # Multiply by 1000 to get EUR/MWh
+    feature_prefix: "se1"
+    bulk_history: true               # Day-by-day but fast, history from 2022
+    use_for: "both"
+    source_type: "elpriset"
+
+  - name: "elpriset_se3"
+    url: "https://www.elprisetjustnu.se/api/v1/prices/{year}/{mmdd}_{zone}.json"
+    zone: "SE3"
+    unit: "eur_per_kwh"
+    to_eur_mwh_factor: 1000
+    feature_prefix: "se3"
+    bulk_history: true
+    use_for: "both"
+    source_type: "elpriset"
+
+  - name: "elering_ee"
+    url: "https://dashboard.elering.ee/api/nps/price"
+    zone: "EE"
+    unit: "eur_per_mwh"              # API returns EUR/MWh directly
+    to_eur_mwh_factor: 1
+    feature_prefix: "ee"
+    resolution: "15min"              # Needs hourly resampling
+    bulk_history: true               # Supports bulk historical queries
+    use_for: "both"                  # Training + HA inference
+
+spread_window_days: 7                # Rolling average window for spread calculation
+
+# ============================================================================
+# Grid data sources (OPTIONAL - Tier 3, requires free API key)
+# ============================================================================
+# Skipped automatically if FINGRID_API_KEY env var is missing.
+# Register for free at https://data.fingrid.fi
+
+grid_sources:
+  - name: "fingrid_nuclear"
+    env_key: "FINGRID_API_KEY"
+    url: "https://data.fingrid.fi/api/datasets/188/data"
+    feature_name: "nuclear_mw"
+    max_value: 4372                  # Total Finnish nuclear capacity (MW)
+    resolution: "3min"               # Needs hourly aggregation
+    update_interval_hours: 1
+
+  # Commercial flows: negative = import to FI, positive = export from FI
+  # These reflect actual market-driven power exchange (better than capacity)
+  # Day-ahead capacity datasets (24/25/27) returned empty as of Apr 2025
+  - name: "fingrid_flow_se1"
+    env_key: "FINGRID_API_KEY"
+    url: "https://data.fingrid.fi/api/datasets/31/data"
+    feature_name: "flow_fi_se1"      # Negative = import to FI from SE1
+    max_value: 5500                  # Peak flows can exceed line capacity (MW)
+    resolution: "15min"
+    update_interval_hours: 1
+
+  - name: "fingrid_flow_se3"
+    env_key: "FINGRID_API_KEY"
+    url: "https://data.fingrid.fi/api/datasets/32/data"
+    feature_name: "flow_fi_se3"
+    max_value: 1200
+    resolution: "15min"
+    update_interval_hours: 1
+
+  - name: "fingrid_flow_ee"
+    env_key: "FINGRID_API_KEY"
+    url: "https://data.fingrid.fi/api/datasets/140/data"
+    feature_name: "flow_fi_ee"
+    max_value: 1016                  # EstLink 1+2 combined
+    resolution: "15min"
+    update_interval_hours: 1
+
+# ============================================================================
+# Demand modeling parameters
+# ============================================================================
+demand:
+  hdd_threshold: 17.0                # Heating Degree Day base temperature (C)
+                                     # Tuned for Finnish building stock; no AC needed
+                                     # (<1% AC penetration in Finland)
+
+  # Peak hours verified from 1-year spot price analysis (Apr 2025 - Apr 2026)
+  # Actual workday AM peak = hour 9 (9.1 EUR/MWh)
+  # Actual workday PM peak = hour 19 (8.3 EUR/MWh)
+  # PM peak shifts seasonally: hour 17 (winter) to 20 (summer), r=0.91 with daylight
+  # Fixed 9/19 reduces peak center error by 39% vs original 8/18
+  peak_am_center: 9
+  peak_am_sigma: 1.8
+  peak_pm_center: 19
+  peak_pm_sigma: 2.0
+
+  sauna_hours: [20, 21]              # Cultural load spike (Fri/Sat evenings)
+  sauna_days: ["friday", "saturday"]
+  monday_ramp_hours: [6, 7, 8, 9]   # Factory cold-start after weekend
+
+  wind_rated_speed: 14               # Rated wind speed (m/s) for power density cap
+
+# ============================================================================
+# Holidays
+# ============================================================================
+# Python training pipeline: uses holidays.py with these rules
+# Home Assistant deployment: two options
+#   Option A (recommended): HA Workday integration (binary_sensor.workday_sensor)
+#     - Automatically resolves Finnish holidays and weekends
+#     - Zero maintenance, updated by HA community
+#   Option B: Hardcoded rules from this config
+#     - More portable, no HA integration dependency
+
+holidays:
+  ha_workday_integration: true       # If true, generated YAML uses workday.check_date
+  country_code: "FI"                 # For HA Workday integration
+
+  fixed:
+    - { month: 1,  day: 1,  name: "New Year's Day" }
+    - { month: 1,  day: 6,  name: "Epiphany" }
+    - { month: 5,  day: 1,  name: "May Day (Vappu)" }
+    - { month: 6,  day: 4,  name: "Flag Day of the Defence Forces" }
+    - { month: 12, day: 6,  name: "Independence Day" }
+    - { month: 12, day: 24, name: "Christmas Eve" }
+    - { month: 12, day: 25, name: "Christmas Day" }
+    - { month: 12, day: 26, name: "St. Stephen's Day" }
+
+  easter_based:                      # Days relative to Easter Sunday
+    - { offset: -2,  name: "Good Friday" }
+    - { offset: 0,   name: "Easter Sunday" }
+    - { offset: 1,   name: "Easter Monday" }
+    - { offset: 39,  name: "Ascension Day" }
+    - { offset: 49,  name: "Whit Sunday" }
+
+  special_rules:
+    - { type: "midsummer", name: "Midsummer Eve" }       # Friday between Jun 19-25
+    - { type: "midsummer_day", name: "Midsummer Day" }   # Saturday between Jun 20-26
+    - { type: "all_saints", name: "All Saints' Day" }    # Saturday between Oct 31 - Nov 6
+
+# ============================================================================
+# Consumer pricing
+# ============================================================================
+# All values in EUR unless otherwise noted.
+# Operators define day/night transfer tariffs.
+# Day = Mon-Fri 07:00-22:00 local time
+# Night = Mon-Fri 22:00-07:00 + all Sat/Sun
+
+consumer_pricing:
+  vat_multiplier: 1.255              # 25.5% VAT (updated Sep 2024)
+  energy_tax_eur_kwh: 0.02253        # Electricity tax class I (2025)
+
+  operators:
+    - name: "Elenia"
+      day_rate_eur_kwh: 0.0560
+      night_rate_eur_kwh: 0.0430
+
+    - name: "Caruna South"
+      day_rate_eur_kwh: 0.0590
+      night_rate_eur_kwh: 0.0450
+
+    - name: "Caruna North"
+      day_rate_eur_kwh: 0.0520
+      night_rate_eur_kwh: 0.0410
+
+    - name: "Helen (Helsinki)"
+      day_rate_eur_kwh: 0.0537
+      night_rate_eur_kwh: 0.0403
+
+  default_operator: "Elenia"
+
+# ============================================================================
+# Model training parameters
+# ============================================================================
+training:
+  years: 4                           # Historical data window
+  test_split: 0.15                   # 85/15 time-ordered split
+  half_life_days: 365                # Exponential time-decay half-life
+  ridge_alpha: 1.0                   # Ridge regularization strength
+  batch_size: 512                    # Batch size for memory-efficient training
+  price_clip_max: 500                # Max price (EUR/MWh) to reduce outlier influence
+  piecewise_breakpoints: auto        # "auto" = derived from training data percentiles
+                                     # or explicit list like [5, 15, 50] (EUR/MWh)
+  forecast_hours: 170                # Forecast window (7.08 days)
