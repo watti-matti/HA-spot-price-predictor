@@ -1,0 +1,39 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Select Region",
+        "description": "Choose the electricity market region.",
+        "data": {
+          "region": "Region"
+        }
+      },
+      "operator": {
+        "title": "Electricity Operator",
+        "description": "Select your network operator for transfer tariff calculation.",
+        "data": {
+          "operator": "Operator",
+          "custom_day_rate": "Day transfer rate (EUR/kWh)",
+          "custom_night_rate": "Night transfer rate (EUR/kWh)",
+          "custom_vat": "VAT multiplier (e.g. 1.255)",
+          "custom_energy_tax": "Energy tax (EUR/kWh)"
+        }
+      },
+      "optional_apis": {
+        "title": "Optional Data Sources",
+        "description": "Configure optional API keys and data tiers for enhanced predictions.",
+        "data": {
+          "fingrid_api_key": "Fingrid API key (optional)",
+          "enable_tier2": "Enable cross-border price data (Tier 2)"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "This integration is already configured."
+    },
+    "error": {
+      "invalid_fingrid_key": "Invalid Fingrid API key.",
+      "cannot_connect": "Cannot connect to API."
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "domain": "spot_price_predictor",
+  "name": "Spot Price Predictor",
+  "codeowners": ["@watti-matti"],
+  "config_flow": true,
+  "documentation": "https://github.com/watti-matti/HA-spot-price-predictor",
+  "issue_tracker": "https://github.com/watti-matti/HA-spot-price-predictor/issues",
+  "requirements": [],
+  "version": "1.0.0",
+  "iot_class": "cloud_polling",
+  "integration_type": "service"
+}

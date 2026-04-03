@@ -1,0 +1,39 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Valitse alue",
+        "description": "Valitse sahkomarkkinan alue.",
+        "data": {
+          "region": "Alue"
+        }
+      },
+      "operator": {
+        "title": "Sahkoverkon haltija",
+        "description": "Valitse verkkoyhtiosi siirtotariffin laskentaa varten.",
+        "data": {
+          "operator": "Verkkooperaattori",
+          "custom_day_rate": "Paivasiirtohinta (EUR/kWh)",
+          "custom_night_rate": "Yosiirtohinta (EUR/kWh)",
+          "custom_vat": "ALV-kerroin (esim. 1.255)",
+          "custom_energy_tax": "Sahkovero (EUR/kWh)"
+        }
+      },
+      "optional_apis": {
+        "title": "Valinnaiset tietolahteet",
+        "description": "Aseta valinnaiset API-avaimet ja tietotasot tarkempiin ennusteisiin.",
+        "data": {
+          "fingrid_api_key": "Fingrid API-avain (valinnainen)",
+          "enable_tier2": "Ota kayttoon rajat ylittavat hintatiedot (Taso 2)"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Tama integraatio on jo maaritetty."
+    },
+    "error": {
+      "invalid_fingrid_key": "Virheellinen Fingrid API-avain.",
+      "cannot_connect": "API-yhteytta ei voida muodostaa."
+    }
+  }
+}
