@@ -335,6 +335,9 @@ def main():
         if not neighbor_prices:
             logger.info("No neighbor prices available, Tier 2 disabled")
             neighbor_prices = None
+        else:
+            # Cache for evaluation
+            pd.DataFrame(neighbor_prices).to_parquet(out_dir / "fi_neighbor_prices.parquet")
 
     # Tier 3: Grid data
     grid_data = None
@@ -343,6 +346,8 @@ def main():
         if not grid_data:
             logger.info("No grid data available, Tier 3 disabled")
             grid_data = None
+        else:
+            pd.DataFrame(grid_data).to_parquet(out_dir / "fi_grid_data.parquet")
 
     # ── Build features ────────────────────────────────────────────────
     df, feature_cols = build_features(
