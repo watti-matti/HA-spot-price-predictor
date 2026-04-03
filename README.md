@@ -79,7 +79,7 @@ After training, copy `output/model_coefs.json` to Home Assistant and use the `sp
 
 ## Documentation
 
-See [PROJECT_PLAN.md](PROJECT_PLAN.md) for detailed technical documentation including architecture diagrams, feature formulas, and model description.
+See [TECHNICAL_GUIDE.md](TECHNICAL_GUIDE.md) for detailed technical documentation including architecture diagrams, feature formulas, and model description.
 
 ## License
 

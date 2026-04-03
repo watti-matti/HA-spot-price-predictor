@@ -1,4 +1,4 @@
-# Project Plan: HA-spot-price-predictor
+# Documentation: HA-spot-price-predictor
 
 Finnish electricity spot price forecasting for Home Assistant using Ridge regression with physics-based features and multi-source data integration.
 
@@ -199,7 +199,7 @@ Evaluation uses time-ordered 85/15 split with hourly, monthly, and segment-level
 ```
 HA-spot-price-predictor/
 ├── README.md
-├── PROJECT_PLAN.md              # This document
+├── TECHNICAL_GUIDE.md           # This document
 ├── docs/diagrams/               # draw.io architecture diagrams
 ├── requirements.txt
 ├── .env.example                 # FINGRID_API_KEY placeholder
