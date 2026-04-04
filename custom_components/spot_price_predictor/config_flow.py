@@ -24,6 +24,10 @@ from .const import (
     CONF_CUSTOM_ENERGY_TAX,
     CONF_SELLER_MARGIN,
     DEFAULT_SELLER_MARGIN,
+    CONF_NORDPOOL_ENTITY,
+    CONF_ENABLE_PV_SELLING,
+    CONF_PV_SELL_COMMISSION,
+    DEFAULT_PV_SELL_COMMISSION,
     CONF_SEARCH_START_HOURS,
     CONF_SEARCH_DURATION_HOURS,
     REGIONS,
@@ -89,6 +93,15 @@ class SpotPricePredictorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._data[CONF_SELLER_MARGIN] = user_input.get(
                 CONF_SELLER_MARGIN, DEFAULT_SELLER_MARGIN
             )
+            self._data[CONF_NORDPOOL_ENTITY] = user_input.get(
+                CONF_NORDPOOL_ENTITY, ""
+            )
+            self._data[CONF_ENABLE_PV_SELLING] = user_input.get(
+                CONF_ENABLE_PV_SELLING, False
+            )
+            self._data[CONF_PV_SELL_COMMISSION] = user_input.get(
+                CONF_PV_SELL_COMMISSION, DEFAULT_PV_SELL_COMMISSION
+            )
             return await self.async_step_optional_apis()
 
         operator_options = {k: v["name"] for k, v in OPERATORS.items()}
@@ -118,6 +131,13 @@ class SpotPricePredictorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_CUSTOM_ENERGY_TAX,
                 default=DEFAULT_ENERGY_TAX,
                 description={"suggested_value": DEFAULT_ENERGY_TAX},
+            ): vol.Coerce(float),
+            vol.Optional(CONF_NORDPOOL_ENTITY, default=""): str,
+            vol.Optional(CONF_ENABLE_PV_SELLING, default=False): bool,
+            vol.Optional(
+                CONF_PV_SELL_COMMISSION,
+                default=DEFAULT_PV_SELL_COMMISSION,
+                description={"suggested_value": DEFAULT_PV_SELL_COMMISSION},
             ): vol.Coerce(float),
         })
         return self.async_show_form(step_id="operator", data_schema=schema)
@@ -238,6 +258,15 @@ class SpotPriceOptionsFlow(config_entries.OptionsFlow):
                 new_data[CONF_SEARCH_DURATION_HOURS] = user_input.get(
                     CONF_SEARCH_DURATION_HOURS, DEFAULT_SEARCH_DURATION_HOURS
                 )
+                new_data[CONF_NORDPOOL_ENTITY] = user_input.get(
+                    CONF_NORDPOOL_ENTITY, ""
+                )
+                new_data[CONF_ENABLE_PV_SELLING] = user_input.get(
+                    CONF_ENABLE_PV_SELLING, False
+                )
+                new_data[CONF_PV_SELL_COMMISSION] = user_input.get(
+                    CONF_PV_SELL_COMMISSION, DEFAULT_PV_SELL_COMMISSION
+                )
 
                 self.hass.config_entries.async_update_entry(
                     self._config_entry, data=new_data
@@ -296,6 +325,19 @@ class SpotPriceOptionsFlow(config_entries.OptionsFlow):
                 default=current.get(CONF_SEARCH_DURATION_HOURS, DEFAULT_SEARCH_DURATION_HOURS),
                 description={"suggested_value": current.get(CONF_SEARCH_DURATION_HOURS, DEFAULT_SEARCH_DURATION_HOURS)},
             ): vol.All(vol.Coerce(int), vol.Range(min=6, max=168)),
+            vol.Optional(
+                CONF_NORDPOOL_ENTITY,
+                default=current.get(CONF_NORDPOOL_ENTITY, ""),
+            ): str,
+            vol.Optional(
+                CONF_ENABLE_PV_SELLING,
+                default=current.get(CONF_ENABLE_PV_SELLING, False),
+            ): bool,
+            vol.Optional(
+                CONF_PV_SELL_COMMISSION,
+                default=current.get(CONF_PV_SELL_COMMISSION, DEFAULT_PV_SELL_COMMISSION),
+                description={"suggested_value": current.get(CONF_PV_SELL_COMMISSION, DEFAULT_PV_SELL_COMMISSION)},
+            ): vol.Coerce(float),
         })
         return self.async_show_form(
             step_id="init", data_schema=schema, errors=errors

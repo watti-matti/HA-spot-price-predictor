@@ -17,7 +17,10 @@
           "custom_day_rate": "Day transfer rate (EUR/kWh)",
           "custom_night_rate": "Night transfer rate (EUR/kWh)",
           "custom_vat": "VAT multiplier (e.g. 1.255 = 25.5%)",
-          "custom_energy_tax": "Energy tax (EUR/kWh)"
+          "custom_energy_tax": "Energy tax (EUR/kWh)",
+          "nordpool_entity": "Nordpool sensor entity ID (e.g., sensor.nordpool_kwh_fi_eur_3_10_0, leave empty to skip)",
+          "enable_pv_selling": "Enable PV selling price sensor",
+          "pv_sell_commission": "PV selling commission (EUR/kWh, e.g., 0.002 = 0.2 c/kWh)"
         }
       },
       "optional_apis": {

@@ -20,6 +20,12 @@ CONF_SELLER_MARGIN = "seller_margin"
 
 # Default seller margin (EUR/kWh, excl. VAT)
 DEFAULT_SELLER_MARGIN = 0.0
+CONF_NORDPOOL_ENTITY = "nordpool_entity"
+CONF_ENABLE_PV_SELLING = "enable_pv_selling"
+CONF_PV_SELL_COMMISSION = "pv_sell_commission"
+
+DEFAULT_PV_SELL_COMMISSION = 0.002   # EUR/kWh (0.2 c/kWh)
+
 CONF_SEARCH_START_HOURS = "search_start_hours"
 CONF_SEARCH_DURATION_HOURS = "search_duration_hours"
 

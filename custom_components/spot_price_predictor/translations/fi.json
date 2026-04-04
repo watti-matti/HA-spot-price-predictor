@@ -17,7 +17,10 @@
           "custom_day_rate": "Päiväsiirtohinta (EUR/kWh)",
           "custom_night_rate": "Yösiirtohinta (EUR/kWh)",
           "custom_vat": "ALV-kerroin (esim. 1.255 = 25,5%)",
-          "custom_energy_tax": "Sähkövero (EUR/kWh)"
+          "custom_energy_tax": "Sähkövero (EUR/kWh)",
+          "nordpool_entity": "Nordpool-sensorin entiteetti-ID (esim. sensor.nordpool_kwh_fi_eur_3_10_0, tyhjä = ohita)",
+          "enable_pv_selling": "Ota käyttöön aurinkosähkön myyntihintasensori",
+          "pv_sell_commission": "Aurinkosähkön myyntipalkkio (EUR/kWh, esim. 0.002 = 0,2 c/kWh)"
         }
       },
       "optional_apis": {

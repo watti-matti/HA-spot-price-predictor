@@ -2,20 +2,11 @@
 # ================================================
 # Requires: custom:apexcharts-card (install via HACS Frontend)
 #
-# Shows:
-#   - Consumer price forecast (color-coded by price level)
-#   - Spot price forecast (EUR/MWh)
-#   - Weekly average price reference line
-#   - Weighted wind speed forecast (key price driver)
-#   - Weighted temperature forecast (demand driver)
+# Shows actual Nordpool prices vs forecast for ground truth comparison,
+# plus weighted wind speed as the key price driver.
 #
-# Sensor entities from the Spot Price Predictor integration:
-#   - sensor.spot_price_predictor_consumer_price
-#   - sensor.spot_price_predictor_spot_price_forecast
-#   - sensor.spot_price_predictor_week_price_stats
-#
-# Adjust entity names if your integration uses different names.
-# The entity prefix depends on your HA configuration.
+# Configure your Nordpool entity in the integration settings.
+# Adjust entity names if your installation uses different names.
 
 type: custom:apexcharts-card
 graph_span: 7d
@@ -50,7 +41,7 @@ yaxis:
     apex_config:
       forceNiceScale: true
       title:
-        text: "Price (c/kWh)"
+        text: Price (c/kWh)
   - id: wind
     opposite: true
     min: 0
@@ -59,35 +50,65 @@ yaxis:
     apex_config:
       forceNiceScale: true
       title:
-        text: "Wind (m/s)"
-  - id: temp
-    opposite: true
-    min: ~-25
-    max: ~30
-    decimals: 0
-    apex_config:
-      forceNiceScale: true
-      title:
-        text: "Temp (°C)"
+        text: Wind (m/s)
 span:
   start: day
   offset: +0d
 now:
   show: true
   label: Now
-
 series:
-  # ── Consumer Price Forecast (main series, color-coded) ─────────
+  # ── Actual Nordpool Consumer Price (ground truth) ──────────────
+  # Uses the processed timeline from spot_electricity_price sensor.
+  # Step-line shows actual hourly prices up to current time.
+  - entity: sensor.spot_price_predictor_spot_electricity_price
+    yaxis_id: price
+    name: Actual Consumer Price
+    unit: c/kWh
+    type: area
+    curve: stepline
+    stroke_width: 2
+    color: lightblue
+    opacity: 0.6
+    float_precision: 2
+    extend_to: now
+    show:
+      in_header: true
+      in_chart: true
+      extremas: false
+      datalabels: false
+      legend_value: false
+    color_threshold:
+      - value: 5
+        color: "#8ee80e"
+      - value: 10
+        color: "#a0b40b"
+      - value: 15
+        color: "#b28008"
+      - value: 20
+        color: "#c44c05"
+      - value: 30
+        color: "#d61600"
+    data_generator: |
+      const timeline = entity.attributes.timeline;
+      if (!timeline) return [];
+      return timeline.map(t => [
+        new Date(t.timestamp).getTime(),
+        Math.max(0, t.price_eur_kwh * 100)
+      ]);
+
+  # ── Forecast Consumer Price ────────────────────────────────────
+  # Model prediction extending into the future.
   - entity: sensor.spot_price_predictor_consumer_price
     yaxis_id: price
-    name: Consumer Price Forecast
+    name: Forecast Consumer Price
     unit: c/kWh
     color: grey
     opacity: 1
     stroke_width: 3
     show:
       legend_value: false
-      in_header: true
+      in_header: false
       in_chart: true
       extremas: false
       datalabels: false
@@ -110,33 +131,10 @@ series:
         Math.max(0, f.price_eur_kwh * 100)
       ]);
 
-  # ── Spot Price Forecast (EUR/MWh, thinner line) ────────────────
-  - entity: sensor.spot_price_predictor_spot_price_forecast
-    yaxis_id: price
-    name: Spot Price (EUR/MWh → c/kWh)
-    unit: c/kWh
-    color: "#60a5fa"
-    opacity: 0.6
-    stroke_width: 2
-    type: area
-    show:
-      legend_value: false
-      in_header: false
-      in_chart: true
-      extremas: false
-      datalabels: false
-    data_generator: |
-      const forecast = entity.attributes.forecast;
-      if (!forecast) return [];
-      return forecast.map(f => [
-        new Date(f.timestamp).getTime(),
-        Math.max(0, f.price_eur_mwh / 10)
-      ]);
-
-  # ── Weekly Average Price (reference line) ──────────────────────
+  # ── Forecast Week Average (reference line) ─────────────────────
   - entity: sensor.spot_price_predictor_week_price_stats
     yaxis_id: price
-    name: Week Average
+    name: Forecast Week Average
     unit: c/kWh
     color: orange
     opacity: 0.8
@@ -148,17 +146,22 @@ series:
       in_chart: true
       extremas: false
       datalabels: false
-    data_generator: |
+    data_generator: >
       const avg = entity.attributes.week_avg;
+
       if (!avg) return [];
-      const forecast = hass.states['sensor.spot_price_predictor_consumer_price']?.attributes?.forecast;
+
+      const forecast =
+      hass.states['sensor.spot_price_predictor_consumer_price']?.attributes?.forecast;
+
       if (!forecast || forecast.length === 0) return [];
+
       const avgCents = avg * 100;
+
       return forecast.map(f => [new Date(f.timestamp).getTime(), avgCents]);
 
   # ── Weighted Wind Speed Forecast ───────────────────────────────
   # Wind is the #1 driver of Finnish electricity prices.
-  # High wind → low prices, low wind → high prices.
   - entity: sensor.spot_price_predictor_spot_price_forecast
     yaxis_id: wind
     name: Wind Forecast (weighted)
@@ -178,28 +181,4 @@ series:
       return forecast.map(f => [
         new Date(f.timestamp).getTime(),
         f.wind_weighted || 0
-      ]);
-
-  # ── Weighted Temperature Forecast ──────────────────────────────
-  # Temperature drives heating demand: cold → higher prices.
-  - entity: sensor.spot_price_predictor_spot_price_forecast
-    yaxis_id: temp
-    name: Temperature (weighted)
-    unit: °C
-    color: "#f97316"
-    opacity: 0.5
-    stroke_width: 1
-    type: line
-    show:
-      legend_value: false
-      in_header: false
-      in_chart: true
-      extremas: false
-      datalabels: false
-    data_generator: |
-      const forecast = entity.attributes.forecast;
-      if (!forecast || !forecast[0]?.temp_weighted) return [];
-      return forecast.map(f => [
-        new Date(f.timestamp).getTime(),
-        f.temp_weighted || 0
       ]);
