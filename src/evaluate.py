@@ -792,7 +792,7 @@ setWindow(30);
 (function() {{
   const ctx = document.getElementById('hourlyChart').getContext('2d');
   const labels = Array.from({{length: 24}}, (_, i) => String(i).padStart(2, '0') + ':00');
-  const values = DATA.hourly_mae_test;
+  const values = DATA.hourly_mae_full;
   const maxV = Math.max(...values);
   const colors = values.map(v => {{
     const t = v / (maxV || 1);
@@ -802,7 +802,7 @@ setWindow(30);
     type: 'bar',
     data: {{
       labels: labels,
-      datasets: [{{ label: 'MAE (test)', data: values, backgroundColor: colors, borderWidth: 0 }}]
+      datasets: [{{ label: 'MAE (full dataset)', data: values, backgroundColor: colors, borderWidth: 0 }}]
     }},
     options: {{
       scales: {{
@@ -817,7 +817,7 @@ setWindow(30);
 (function() {{
   const ctx = document.getElementById('monthlyChart').getContext('2d');
   const labels = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  const values = DATA.monthly_mae_test;
+  const values = DATA.monthly_mae_full;
   const maxV = Math.max(...values);
   const colors = values.map(v => {{
     const t = v / (maxV || 1);
@@ -827,7 +827,7 @@ setWindow(30);
     type: 'bar',
     data: {{
       labels: labels,
-      datasets: [{{ label: 'MAE (test)', data: values, backgroundColor: colors, borderWidth: 0 }}]
+      datasets: [{{ label: 'MAE (full dataset)', data: values, backgroundColor: colors, borderWidth: 0 }}]
     }},
     options: {{
       scales: {{
