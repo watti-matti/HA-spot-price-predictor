@@ -137,17 +137,16 @@ Derived from 7-day rolling average price spreads:
 
 Configurable per operator in `finland.yaml`. Default: Elenia (day 5.60, night 4.30 c/kWh), VAT 25.5%, energy tax 2.253 c/kWh.
 
-**Output signals (170-hour lists):**
+**Sensors:**
 
-| Signal | Range | Use case |
-|--------|-------|----------|
-| `price_with_tariff_forecast` | EUR/kWh | Absolute consumer price |
-| `power_control_factor_pm1` | [-1, +1] | Cheapest(+1) to most expensive(-1) |
-| `power_control_factor_0_1` | [0, 1] | ON/OFF threshold control |
-| `power_control_windowed_average_N_largest_0_1` | [0, 1] | Smoothed sliding window |
-| `power_control_windowed_average_N_largest_pm1` | [-1, +1] | Smoothed, bipolar |
+| Sensor | Unit | Description |
+|--------|------|-------------|
+| Spot Price Forecast | EUR/MWh | Current predicted price + 170h forecast attribute |
+| Consumer Price | EUR/kWh | Total price including transfer tariff, VAT, energy tax |
+| Cheapest Hours | timestamp | Cheapest 1h/2h/3h/4h/6h/8h blocks + hours below average |
+| Week Price Stats | EUR/kWh | Min/avg/max consumer price over forecast window |
 
-The `*_pm1` and `*_0_1` control signals are based on the approach in [T3m3z/spotprices2ha](https://github.com/T3m3z/spotprices2ha). These signals can be useful for adjusting controllable loads (EV charging, water heating, heat pumps) or finding the cheapest N-hour windows.
+The **Cheapest Hours** sensor is the primary automation tool. Its attributes provide start times and average prices for the cheapest consecutive N-hour blocks within the next 24 hours, plus a list of all hours with below-average prices. This is useful for scheduling controllable loads (EV charging, water heating, heat pumps) to the cheapest time windows.
 
 ---
 

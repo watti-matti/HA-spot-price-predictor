@@ -142,12 +142,16 @@ Konfiguroitavissa operaattorikohtaisesti tiedostossa `finland.yaml`. Oletus: Ele
 | Signaali | Alue | Käyttötarkoitus |
 |----------|------|-----------------|
 | `price_with_tariff_forecast` | EUR/kWh | Absoluuttinen kuluttajahinta |
-| `power_control_factor_pm1` | [-1, +1] | Halvin(+1) ... kallein(-1) |
-| `power_control_factor_0_1` | [0, 1] | ON/OFF-kynnysarvo-ohjaus |
-| `power_control_windowed_average_N_largest_0_1` | [0, 1] | Tasoitettu liukuva ikkuna |
-| `power_control_windowed_average_N_largest_pm1` | [-1, +1] | Tasoitettu, bipolaarinen |
+**Sensorit:**
 
-`*_pm1`- ja `*_0_1`-ohjaussignaalit perustuvat [T3m3z/spotprices2ha](https://github.com/T3m3z/spotprices2ha)-projektin lähestymistapaan. Signaalit soveltuvat ohjattavien kuormien säätöön (sähköauton lataus, lämminvesivaraaja, lämpöpumput) sekä edullisimpien N tunnin jaksojen etsintään.
+| Sensori | Yksikkö | Kuvaus |
+|---------|---------|--------|
+| Spot Price Forecast | EUR/MWh | Ennustettu spot-hinta + 170h ennusteattribuutti |
+| Consumer Price | EUR/kWh | Kokonaishinta sisältäen siirtohinnan, ALV:n, energiaveron |
+| Cheapest Hours | aikaleima | Halvimmat 1h/2h/3h/4h/6h/8h jaksot + keskiarvon alittavat tunnit |
+| Week Price Stats | EUR/kWh | Kuluttajahinnan min/ka/max ennusteikkunassa |
+
+**Cheapest Hours** -sensori on ensisijainen automaatio-ohjauksen työkalu. Sen attribuutit tarjoavat alkamisajat ja keskihinnat halvimmille peräkkäisille N tunnin jaksoille seuraavan 24 tunnin aikana, sekä listan kaikista tunneista joiden hinta on keskiarvon alapuolella. Tämä soveltuu ohjattavien kuormien ajoitukseen (sähköauton lataus, lämminvesivaraaja, lämpöpumput) edullisimpiin aikaikkunoihin.
 
 ---
 

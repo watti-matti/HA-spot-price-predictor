@@ -10,7 +10,7 @@
 - **170-hour price forecast** — predict Nord Pool day-ahead prices a full week into the future
 - **Works out-of-the-box** — pre-trained model included, no setup beyond choosing your operator
 - **3-tier data architecture** — starts with free weather data, optionally adds cross-border prices and Fingrid nuclear/grid data for improved accuracy
-- **Smart automation signals** — power control factor [-1, +1] and cheapest-hours detection for EV charging, water heating, and thermal storage
+- **Cheapest hours detection** — find the optimal 1-8 hour windows for EV charging, water heating, and thermal storage
 - **Consumer price calculation** — adds your operator's transfer tariff, energy tax, and VAT automatically
 - **Retainable** — advanced users can retrain the model with local data for better personalization
 - **Localizable** — region configuration files allow adaptation to other Nordic/European countries
@@ -32,10 +32,10 @@ All data sources are **free**. The optional Fingrid API key is also free (email 
 |--------|-------------|
 | `sensor.spot_price_forecast` | Current hour predicted price (EUR/MWh) with 170h forecast attribute |
 | `sensor.consumer_price` | Total consumer price (EUR/kWh) including VAT, transfer tariff, energy tax |
-| `sensor.power_control_factor` | Smart signal [-1, +1] for automation (+1 = cheapest hour) |
-| `sensor.cheapest_hours` | Timestamps of cheapest upcoming 4h and 8h blocks |
+| `sensor.cheapest_hours` | Cheapest 1/2/3/4/6/8h blocks with start times, avg prices, and all hours below average |
+| `sensor.week_price_stats` | Weekly consumer price min/avg/max (EUR/kWh) |
 
-Each sensor carries a `forecast` attribute with the full 170-hour prediction array — ideal for ApexCharts dashboards and automations.
+The **Cheapest Hours** sensor is the primary automation tool — use its attributes to schedule EV charging, water heating, or heat pump operation during the cheapest N-hour windows. The forecast sensors carry full 170-hour prediction arrays for ApexCharts dashboards.
 
 ## Feature Tiers
 

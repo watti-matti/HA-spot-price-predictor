@@ -134,53 +134,12 @@ class SpotPriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "price_eur_kwh": round(consumer_price, 5),
                 })
 
-            # Power control factor: normalize price to [-1, +1]
-            prices_list = [f["price_eur_mwh"] for f in forecast]
-            if prices_list:
-                p_min = min(prices_list)
-                p_max = max(prices_list)
-                p_range = p_max - p_min if p_max > p_min else 1.0
-                p_median = sorted(prices_list)[len(prices_list) // 2]
-            else:
-                p_min = p_max = p_range = p_median = 0.0
-
-            control_forecast = []
-            for f in forecast:
-                if p_range > 0:
-                    factor = -1.0 + 2.0 * (f["price_eur_mwh"] - p_min) / p_range
-                    # Invert: cheap = +1, expensive = -1
-                    factor = -factor
-                else:
-                    factor = 0.0
-                control_forecast.append({
-                    "timestamp": f["timestamp"],
-                    "factor": round(max(-1.0, min(1.0, factor)), 3),
-                })
-
             # Cheapest hours calculation
             cheapest_hours = self._find_cheapest_hours(forecast, now)
-
-            # Windowed average (24h sliding window of top N values)
-            window_hours = 24
-            windowed_forecast = []
-            for i in range(len(control_forecast)):
-                start_idx = max(0, i - window_hours // 2)
-                end_idx = min(len(control_forecast), i + window_hours // 2)
-                window = [control_forecast[j]["factor"] for j in range(start_idx, end_idx)]
-                if window:
-                    avg = sum(window) / len(window)
-                else:
-                    avg = 0.0
-                windowed_forecast.append({
-                    "timestamp": control_forecast[i]["timestamp"],
-                    "factor": round(max(-1.0, min(1.0, avg)), 3),
-                })
 
             # Current hour values
             current_spot = forecast[0]["price_eur_mwh"] if forecast else 0.0
             current_consumer = consumer_forecast[0]["price_eur_kwh"] if consumer_forecast else 0.0
-            current_control = control_forecast[0]["factor"] if control_forecast else 0.0
-            current_windowed = windowed_forecast[0]["factor"] if windowed_forecast else 0.0
 
             # Tiers active description
             tiers = ["Tier 1 (weather)"]
@@ -194,10 +153,6 @@ class SpotPriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "spot_forecast": forecast,
                 "consumer_price": current_consumer,
                 "consumer_forecast": consumer_forecast,
-                "control_factor_pm1": current_control,
-                "control_forecast_pm1": control_forecast,
-                "windowed_avg_pm1": current_windowed,
-                "windowed_forecast_pm1": windowed_forecast,
                 "cheapest_hours": cheapest_hours,
                 "tiers_active": " + ".join(tiers),
                 "last_update": now.isoformat(),
@@ -211,11 +166,15 @@ class SpotPriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     @staticmethod
     def _find_cheapest_hours(
-        forecast: list[dict[str, Any]], now: datetime
+        forecast: list[dict[str, Any]], now: datetime, window_hours: int = 24
     ) -> dict[str, Any]:
-        """Find cheapest consecutive hour blocks in the next 24h."""
-        # Filter to next 24 hours
-        cutoff = now + timedelta(hours=24)
+        """Find cheapest consecutive hour blocks in the next window.
+
+        Returns start timestamps and average prices for blocks of
+        1, 2, 3, 4, 6, and 8 consecutive hours, plus a list of all
+        hours with below-average price (useful for flexible loads).
+        """
+        cutoff = now + timedelta(hours=window_hours)
         upcoming = [
             f for f in forecast
             if datetime.fromisoformat(f["timestamp"]) >= now
@@ -223,29 +182,39 @@ class SpotPriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         ]
 
         if not upcoming:
-            return {"next_cheapest": None, "cheapest_4h": None, "cheapest_8h": None}
+            return {"window_hours": window_hours}
 
-        # Single cheapest hour
-        cheapest = min(upcoming, key=lambda x: x["price_eur_mwh"])
+        prices = [f["price_eur_mwh"] for f in upcoming]
+        avg_price = sum(prices) / len(prices)
 
-        # Cheapest N consecutive hours
-        def cheapest_block(n: int) -> dict[str, Any] | None:
+        # Find cheapest N consecutive hours
+        def cheapest_block(n: int) -> tuple[str | None, float | None]:
             if len(upcoming) < n:
-                return None
+                return None, None
             best_avg = float("inf")
             best_start = None
             for i in range(len(upcoming) - n + 1):
-                block = upcoming[i:i + n]
-                avg = sum(b["price_eur_mwh"] for b in block) / n
-                if avg < best_avg:
-                    best_avg = avg
-                    best_start = block[0]["timestamp"]
-            if best_start is None:
-                return None
-            return {"start": best_start, "avg_price": round(best_avg, 2)}
+                block_avg = sum(prices[i:i + n]) / n
+                if block_avg < best_avg:
+                    best_avg = block_avg
+                    best_start = upcoming[i]["timestamp"]
+            return best_start, round(best_avg, 2) if best_start else None
 
-        return {
-            "next_cheapest": cheapest["timestamp"],
-            "cheapest_4h": cheapest_block(4),
-            "cheapest_8h": cheapest_block(8),
-        }
+        # Hours with price below the window average
+        hours_below_avg = [
+            f["timestamp"] for f in upcoming
+            if f["price_eur_mwh"] < avg_price
+        ]
+
+        result: dict[str, Any] = {"window_hours": window_hours,
+                                   "avg_price_in_window": round(avg_price, 2)}
+
+        for n in (1, 2, 3, 4, 6, 8):
+            start, avg = cheapest_block(n)
+            result[f"cheapest_{n}h_start"] = start
+            key = "cheapest_1h_price" if n == 1 else f"cheapest_{n}h_avg_price"
+            result[key] = avg
+
+        result["hours_below_avg"] = hours_below_avg
+
+        return result
