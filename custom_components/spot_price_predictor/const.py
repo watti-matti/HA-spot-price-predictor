@@ -41,8 +41,8 @@ REGIONS = {
 OPERATORS = {
     "elenia": {
         "name": "Elenia",
-        "day_rate": 0.0560,
-        "night_rate": 0.0430,
+        "day_rate": 0.0361,
+        "night_rate": 0.0220,
     },
     "caruna_south": {
         "name": "Caruna South",
@@ -68,7 +68,7 @@ OPERATORS = {
 
 # Finnish consumer pricing defaults
 DEFAULT_VAT_MULTIPLIER = 1.255       # 25.5%
-DEFAULT_ENERGY_TAX = 0.02253         # EUR/kWh, class I 2025
+DEFAULT_ENERGY_TAX = 0.02325         # EUR/kWh, class I 2026
 
 # Weather locations for Finland (capacity-weighted)
 FINLAND_LOCATIONS = [

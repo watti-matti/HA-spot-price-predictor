@@ -99,13 +99,13 @@ class SpotPricePredictorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             ): vol.Coerce(float),
             vol.Optional(
                 CONF_CUSTOM_DAY_RATE,
-                default=0.056,
-                description={"suggested_value": 0.056},
+                default=0.0361,
+                description={"suggested_value": 0.0361},
             ): vol.Coerce(float),
             vol.Optional(
                 CONF_CUSTOM_NIGHT_RATE,
-                default=0.043,
-                description={"suggested_value": 0.043},
+                default=0.0220,
+                description={"suggested_value": 0.0220},
             ): vol.Coerce(float),
             vol.Optional(
                 CONF_CUSTOM_VAT,
@@ -208,10 +208,10 @@ class SpotPriceOptionsFlow(config_entries.OptionsFlow):
                     CONF_OPERATOR, new_data.get(CONF_OPERATOR, "elenia")
                 )
                 new_data[CONF_CUSTOM_DAY_RATE] = user_input.get(
-                    CONF_CUSTOM_DAY_RATE, 0.056
+                    CONF_CUSTOM_DAY_RATE, 0.0361
                 )
                 new_data[CONF_CUSTOM_NIGHT_RATE] = user_input.get(
-                    CONF_CUSTOM_NIGHT_RATE, 0.043
+                    CONF_CUSTOM_NIGHT_RATE, 0.0220
                 )
                 new_data[CONF_CUSTOM_VAT] = user_input.get(
                     CONF_CUSTOM_VAT, DEFAULT_VAT_MULTIPLIER
@@ -258,13 +258,13 @@ class SpotPriceOptionsFlow(config_entries.OptionsFlow):
             ): vol.Coerce(float),
             vol.Optional(
                 CONF_CUSTOM_DAY_RATE,
-                default=current.get(CONF_CUSTOM_DAY_RATE, 0.056),
-                description={"suggested_value": current.get(CONF_CUSTOM_DAY_RATE, 0.056)},
+                default=current.get(CONF_CUSTOM_DAY_RATE, 0.0361),
+                description={"suggested_value": current.get(CONF_CUSTOM_DAY_RATE, 0.0361)},
             ): vol.Coerce(float),
             vol.Optional(
                 CONF_CUSTOM_NIGHT_RATE,
-                default=current.get(CONF_CUSTOM_NIGHT_RATE, 0.043),
-                description={"suggested_value": current.get(CONF_CUSTOM_NIGHT_RATE, 0.043)},
+                default=current.get(CONF_CUSTOM_NIGHT_RATE, 0.0220),
+                description={"suggested_value": current.get(CONF_CUSTOM_NIGHT_RATE, 0.0220)},
             ): vol.Coerce(float),
             vol.Optional(
                 CONF_CUSTOM_VAT,

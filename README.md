@@ -11,7 +11,7 @@
 - **Works out-of-the-box** — pre-trained model included, no setup beyond choosing your operator
 - **3-tier data architecture** — starts with free weather data, optionally adds cross-border prices and Fingrid nuclear/grid data for improved accuracy
 - **Cheapest hours detection** — find the optimal 1-8 hour windows for EV charging, water heating, and thermal storage
-- **Consumer price calculation** — adds your operator's transfer tariff, energy tax, and VAT automatically
+- **Consumer price calculation** — adds your energy seller's margin, operator's transfer tariff, energy tax, and VAT automatically
 - **Retainable** — advanced users can retrain the model with local data for better personalization
 - **Localizable** — region configuration files allow adaptation to other Nordic/European countries
 
@@ -57,15 +57,16 @@ The model automatically adapts to available data sources:
 
 ## Supported Operators (Finland)
 
-| Operator | Day rate | Night rate |
-|----------|----------|------------|
-| Elenia | 5.60 c/kWh | 4.30 c/kWh |
+| Operator | Day rate (07-22) | Night rate (22-07) |
+|----------|:---:|:---:|
+| Elenia | 3.61 c/kWh | 2.20 c/kWh |
 | Caruna South | 5.90 c/kWh | 4.50 c/kWh |
 | Caruna North | 5.20 c/kWh | 4.10 c/kWh |
 | Helen (Helsinki) | 5.37 c/kWh | 4.03 c/kWh |
-| Custom | User-defined rates | |
+| Custom | User-defined | User-defined |
 
-VAT: 25.5% · Energy tax: 2.253 c/kWh (class I, 2025)
+VAT: 25.5% · Energy tax: 2.325 c/kWh (class I, 2026) · Seller margin: configurable (from your contract)
+For yleissiirto (general transfer), set day and night rates equal.
 
 ## Installation
 

@@ -255,12 +255,13 @@ holidays:
 
 consumer_pricing:
   vat_multiplier: 1.255              # 25.5% VAT (updated Sep 2024)
-  energy_tax_eur_kwh: 0.02253        # Electricity tax class I (2025)
+  energy_tax_eur_kwh: 0.02325        # Electricity tax class I (2026)
+  seller_margin_eur_kwh: 0.0         # Energy seller's margin (excl. VAT, from contract)
 
   operators:
     - name: "Elenia"
-      day_rate_eur_kwh: 0.0560
-      night_rate_eur_kwh: 0.0430
+      day_rate_eur_kwh: 0.0361       # Updated April 2026
+      night_rate_eur_kwh: 0.0220     # Updated April 2026
 
     - name: "Caruna South"
       day_rate_eur_kwh: 0.0590

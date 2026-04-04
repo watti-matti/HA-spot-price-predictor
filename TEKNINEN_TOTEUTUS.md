@@ -1,6 +1,6 @@
 # Tekninen toteutus: HA-spot-price-predictor
 
-Suomen sähkön spot-hinnan ennustaminen Home Assistantiin Ridge-regressiolla käyttäen fysiikkapohjaisia piirteitä ja useiden datalähteiden integrointia.
+Suomen pörssisähkön spot-hinnan ennustaminen tunnin tarkkuudella Home Assistantiin Ridge-regressiolla käyttäen fysiikkapohjaisia piirteitä ja useiden datalähteiden integrointia
 
 ## Arkkitehtuuri
 
@@ -13,8 +13,8 @@ Järjestelmä koostuu kahdesta vaiheesta: **koulutus** (Python, ajetaan ajoittai
 ### Koulutusputki
 
 ```
-Sahkotin API ──┐
-Open-Meteo API ─┼──> Piirre-engineering ──> Kaksivaiheinen Ridge ──> model_coefs.json
+Sahkotin API  ──┐
+Open-Meteo API ─┼──> Piirteiden käsittely ──> Kaksivaiheinen Ridge ──> model_coefs.json
 mgrey.se API ───┤    (28-38 piirrettä)      Regressio
 Elering API ────┤
 Fingrid API ────┘ (valinnainen)
@@ -28,7 +28,7 @@ REST-sensorit ──> Painotettu keskiarvo ──> Spot-hintaennuste ──> Kul
                                                                   + Kojelauta
 ```
 
-![Tietovirta](docs/diagrams/data-flow.drawio.png)
+![Vuokaavio](docs/diagrams/data-flow.drawio.png)
 
 *Lähde: [docs/diagrams/data-flow.drawio](docs/diagrams/data-flow.drawio)*
 
@@ -51,7 +51,7 @@ REST-sensorit ──> Painotettu keskiarvo ──> Spot-hintaennuste ──> Kul
 | [mgrey.se](https://mgrey.se/espot/api) | SE1, SE3 | Ruotsin spot-hinnat hintaeron laskentaan |
 | [Elering API](https://dashboard.elering.ee/api/nps/price) | EE | Viron spot-hinnat hintaeron laskentaan |
 
-Käytetään 7 päivän liukuvan hintaeron laskentaan, josta johdetaan `import_potential_xx` / `export_potential_xx` -piirteet. Analyysissa vahvistettu vahva autokorrelaatio (viikkotason lag-1 r=0,54-0,73, suunnan pysyvyys 100%).
+Käytetään 7 päivän liukuvan hintaeron laskentaan, josta johdetaan `import_potential_xx` / `export_potential_xx` -piirteet. Analyysissa vahvistettu vahva autokorrelaatio (testijaksolla viikkotason lag-1 r=0,54-0,73, suunnan pysyvyys 100%).
 
 ### Valinnainen verkkodata (ilmainen API-avain)
 
@@ -69,11 +69,11 @@ Rekisteröidy ilmaiseksi osoitteessa data.fingrid.fi. Ilman tätä avainta malli
 
 | Kategoria | Määrä | Piirteet |
 |-----------|-------|----------|
-| Tarjontapuoli | 3 | `wind_speed_weighted`, `solar_irradiance_weighted`, `temperature_weighted` |
+| Energiallähteet | 3 | `wind_speed_weighted`, `solar_irradiance_weighted`, `temperature_weighted` |
 | Aikajaksot | 4 | `hour_sin/cos`, `month_sin/cos` |
 | Kysyntämallit | 8 | `double_peak_am/pm` (Gauss, keskipiste 9h/19h), viikonloppuvariantit, `sauna_hour`, `monday_ramp`, `is_holiday`, `is_weekend` |
 | Lämpökysyntä | 6 | `hdd`, `hdd_sq`, `daylight_deficit`, ristitermit (`wind_x_hdd`, `solar_x_deficit`, `temp_x_hdd`) |
-| Fysiikkakorjattu tarjonta | 3 | `wind_power_density` (tiheykorjattu), `solar_power_temp` (NOCT-malli), `renewable_surplus` |
+| Fysiikaaliset korjauskertiomet | 3 | `wind_power_density` (tiheykorjattu), `solar_power_temp` (NOCT-malli), `renewable_surplus` |
 | Niukkuus | 4 | `scarcity_indicator`, `wind_drought_penalty`, `cold_morning_stress`, `cold_calm_dark` (Dunkelflaute) |
 
 ### Taso 2: Rajat ylittävän kaupan piirteet (6) — ei API-avaimia tarvita
@@ -125,7 +125,7 @@ Johdettu 7 päivän liukuvasta hintaerosta:
   - pw_relu_120 = max(0, s1 - 120)
 - Korjaa systemaattisen harhan eri hintatasoilla
 
-**Koulutus:** 4 vuoden historiallinen data, aikajärjestetty 85/15 jako, eräkäsittely (512 riviä).
+**Koulutus:** 4 vuoden historiallinen data, aikajärjestetty 85/15 jako, prosessointikehys (512 riviä).
 
 **Tuloste:** `model_coefs.json` sisältäen vaiheiden 1 ja 2 kertoimet, piirteiden nimet ja tasojen tiedot.
 
@@ -133,9 +133,9 @@ Johdettu 7 päivän liukuvasta hintaerosta:
 
 ## Kuluttajahinta ja ohjaussignaalit
 
-**Kaava:** `(spot_EUR_MWh / 1000 + siirtohinta + energiavero) × ALV`
+**Kaava:** `(spot_EUR_MWh / 1000 + marginaali + siirtohinta + energiavero) × ALV`
 
-Konfiguroitavissa operaattorikohtaisesti tiedostossa `finland.yaml`. Oletus: Elenia (päivä 5,60, yö 4,30 c/kWh), ALV 25,5%, energiavero 2,253 c/kWh.
+Konfiguroitavissa operaattorikohtaisesti tiedostossa `finland.yaml`. Oletus: Elenia (päivä 3,61, yö 2,20 c/kWh), ALV 25,5%, energiavero 2,325 c/kWh. Jos käytössä on yleissiirto niin yö- ja päivähinta asetetaan samaksi.
 
 **Tulosignaalit (170 tunnin listat):**
 
@@ -146,12 +146,12 @@ Konfiguroitavissa operaattorikohtaisesti tiedostossa `finland.yaml`. Oletus: Ele
 
 | Sensori | Yksikkö | Kuvaus |
 |---------|---------|--------|
-| Spot Price Forecast | EUR/MWh | Ennustettu spot-hinta + 170h ennusteattribuutti |
+| Spot Price Forecast | EUR/MWh | Ennustettu spot-hinta + 170h ennuste |
 | Consumer Price | EUR/kWh | Kokonaishinta sisältäen siirtohinnan, ALV:n, energiaveron |
 | Cheapest Hours | aikaleima | Halvimmat 1h/2h/3h/4h/6h/8h jaksot + keskiarvon alittavat tunnit |
-| Week Price Stats | EUR/kWh | Kuluttajahinnan min/ka/max ennusteikkunassa |
+| Week Price Stats | EUR/kWh | Kuluttajahinnan min/keskiarvo/max ennusteikkunassa |
 
-**Cheapest Hours** -sensori on ensisijainen automaatio-ohjauksen työkalu. Sen attribuutit tarjoavat alkamisajat ja keskihinnat halvimmille peräkkäisille N tunnin jaksoille seuraavan 24 tunnin aikana, sekä listan kaikista tunneista joiden hinta on keskiarvon alapuolella. Tämä soveltuu ohjattavien kuormien ajoitukseen (sähköauton lataus, lämminvesivaraaja, lämpöpumput) edullisimpiin aikaikkunoihin.
+**Cheapest Hours** -sensori on ensisijainen automaatio-ohjauksen työkalu. Sen attribuutit tarjoavat alkamisajat ja keskihinnat halvimmille peräkkäisille N tunnin jaksoille seuraavan 24 tunnin aikana sekä listan kaikista tunneista, joiden hinta on keskiarvon alapuolella. Tämä soveltuu ohjattavien kuormien ajoitukseen (sähköauton lataus, lämminvesivaraaja, lämpöpumput) edullisimpiin aikaikkunoihin.
 
 ---
 
@@ -159,7 +159,7 @@ Konfiguroitavissa operaattorikohtaisesti tiedostossa `finland.yaml`. Oletus: Ele
 
 ### Pyhäpäivien ja arkipäivien tunnistus
 
-Malli käyttää arkipäivä/pyhäpäivä-tietoa kysyntämallien valintaan (arkipäivän huiput vs viikonloppu/pyhäpäivä). Kaksi vaihtoehtoa on tuettu ja integraatio voi vaihtaa niiden välillä `holidays.ha_workday_integration` -asetuksella aluekonfiguraatiossa.
+Malli käyttää arkipäivä/pyhäpäivä-tietoa kysyntämallien valintaan (arkipäivän huiput vs viikonloppu/pyhäpäivä). Malli tukee kahta vaihtoehtoista toteutusta, joiden välillä voi vaihtaa `holidays.ha_workday_integration` -asetuksella aluekonfiguraatiossa.
 
 #### Vaihtoehto A: HA:n Workday-integraatio (suositeltu)
 
@@ -206,12 +206,12 @@ Kaikki sensorit luodaan automaattisesti koulutetun mallin aktiivisten tasojen pe
 Järjestelmää ohjaa yksittäinen aluekonfiguraatiotiedosto (`config/regions/finland.yaml`). Uuden alueen tukeminen:
 
 1. **Tunnista säämittauspisteet** — etsi 5-8 maantieteellistä sijaintia kohdemaasta, jotka edustavat tuulivoiman, aurinkoenergian ja energiankulutuksen keskittymiä. Sijainnit painotetaan asennetun kapasiteetin (tuuli, aurinko) ja väestötiheyden (lämpötila/kysyntä) mukaan. Käytä alla olevaa tekoälykehotepohjaa.
-2. **Luo uusi YAML-tiedosto** (esim. `sweden.yaml`) tunnistetuilla sijainneilla, painoilla ja paikallisilla parametreilla
-3. **Määrittele paikallinen hinta-API** — etsi ilmainen rajapinta, joka tarjoaa day-ahead spot-hinnat kohteen tarjousalueelle
-4. **Konfiguroi pyhäpäivät** — kiinteät päivämäärät, pääsiäiseen sidotut päivät ja maakohtaiset erikoissäännöt
-5. **Lisää naapurimaiden hintalähteet** rajat ylittäville piirteille
-6. **Aseta kuluttajahinnoittelu** — ALV-kanta, energiavero ja jakeluverkko-operaattorien tariffit
-7. **Aja koulutus** komennolla `--region sweden`
+2. **Luo uusi YAML-tiedosto** (esim. `sweden.yaml`) tunnistetuilla sijainneilla, painoilla ja paikallisilla parametreilla.
+3. **Määrittele paikallinen hinta-API** — etsi ilmainen rajapinta, joka tarjoaa day-ahead spot-hinnat kohteen tarjousalueelle.
+4. **Konfiguroi pyhäpäivät** — kiinteät päivämäärät, pääsiäiseen sidotut päivät ja maakohtaiset erikoissäännöt.
+5. **Lisää naapurimaiden hintalähteet** rajat ylittäville piirteille.
+6. **Aseta kuluttajahinnoittelu** — ALV-kanta, energiavero ja jakeluverkko-operaattorien tariffit.
+7. **Aja koulutus** halutulle alueelle esimerkiksi komennolla `--region sweden`.
 
 Valinnaiset datalähteet ohitetaan automaattisesti, jos niiden API-avain puuttuu tai aluekonfiguraatio ei sisällä niitä.
 

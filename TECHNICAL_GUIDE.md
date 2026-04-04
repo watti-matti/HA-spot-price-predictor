@@ -13,7 +13,7 @@ The system has two phases: **training** (Python, run periodically on PC) and **i
 ### Training Pipeline
 
 ```
-Sahkotin API ──┐
+Sahkotin API  ──┐
 Open-Meteo API ─┼──> Feature Engineering ──> Two-Stage Ridge ──> model_coefs.json
 mgrey.se API ───┤    (28-38 features)        Regression
 Elering API ────┤
@@ -133,9 +133,9 @@ Derived from 7-day rolling average price spreads:
 
 ## Consumer Price & Control Signals
 
-**Formula:** `(spot_EUR_MWh / 1000 + transfer_rate + energy_tax) x VAT`
+**Formula:** `(spot_EUR_MWh / 1000 + seller_margin + transfer_rate + energy_tax) × VAT`
 
-Configurable per operator in `finland.yaml`. Default: Elenia (day 5.60, night 4.30 c/kWh), VAT 25.5%, energy tax 2.253 c/kWh.
+Configurable per operator in `finland.yaml`. Default: Elenia (day 3.61, night 2.20 c/kWh), VAT 25.5%, energy tax 2.325 c/kWh, seller margin 0.00 c/kWh (set from your electricity contract). For yleissiirto (general transfer), set day and night rates equal.
 
 **Sensors:**
 
