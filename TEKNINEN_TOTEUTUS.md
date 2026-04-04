@@ -63,7 +63,7 @@ Rekisteröidy ilmaiseksi osoitteessa data.fingrid.fi. Ilman tätä avainta malli
 
 ---
 
-## Piirre-engineering
+## Mallin piirteet
 
 ### Taso 1: Peruspiirteet (28) — ei API-avaimia tarvita
 
