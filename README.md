@@ -35,7 +35,11 @@ All data sources are **free**. The optional Fingrid API key is also free (email 
 | `sensor.cheapest_hours` | Cheapest 1/2/3/4/6/8h blocks with start times, avg prices, and all hours below average |
 | `sensor.week_price_stats` | Weekly consumer price min/avg/max (EUR/kWh) |
 
-The **Cheapest Hours** sensor is the primary automation tool — use its attributes to schedule EV charging, water heating, or heat pump operation during the cheapest N-hour windows. The forecast sensors carry full 170-hour prediction arrays for ApexCharts dashboards.
+The **Cheapest Hours** sensor is the primary automation tool — use its attributes to schedule EV charging, water heating, or heat pump operation during the cheapest N-hour windows. The forecast sensors carry full 170-hour prediction arrays including weather context (wind, solar, temperature) for dashboards.
+
+### Dashboard
+
+An [ApexCharts dashboard example](docs/yaml_examples/apexcharts_dashboard.yaml) is included showing consumer price forecast with color-coded price levels, spot price, weekly average, wind speed, and temperature. Requires the [apexcharts-card](https://github.com/RomRider/apexcharts-card) custom card (install via HACS Frontend).
 
 ## Feature Tiers
 

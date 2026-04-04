@@ -21,7 +21,7 @@
       },
       "optional_apis": {
         "title": "Optional Data Sources",
-        "description": "Cross-border prices (Tier 2) improve predictions using Swedish and Estonian price data — no API key needed. Fingrid data (Tier 3) adds nuclear production and cross-border power flow data — requires a free API key from data.fingrid.fi.",
+        "description": "Cross-border prices (Tier 2) improve predictions using Swedish and Estonian price data — no API key needed. Fingrid data (Tier 3) adds nuclear production and cross-border power flow data — requires a free API key from data.fingrid.fi.\n\nApexCharts dashboard example: https://github.com/watti-matti/HA-spot-price-predictor/blob/main/docs/yaml_examples/apexcharts_dashboard.yaml",
         "data": {
           "fingrid_api_key": "Fingrid API key (optional, free at data.fingrid.fi)",
           "enable_tier2": "Enable cross-border price data (Sweden SE1/SE3, Estonia)",
