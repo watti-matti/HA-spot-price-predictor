@@ -3,37 +3,54 @@
     "step": {
       "user": {
         "title": "Valitse alue",
-        "description": "Valitse sahkomarkkinan alue.",
+        "description": "Valitse sähkömarkkinan alue spot-hintaennustetta varten.",
         "data": {
           "region": "Alue"
         }
       },
       "operator": {
-        "title": "Sahkoverkon haltija",
-        "description": "Valitse verkkoyhtiosi siirtotariffin laskentaa varten.",
+        "title": "Sähköverkkoyhtiö ja tariffit",
+        "description": "Valitse verkkoyhtiösi tai valitse 'Custom' syöttääksesi omat hinnat. Päiväsiirto Ma-Pe 07:00-22:00, yösiirto muina aikoina.",
         "data": {
-          "operator": "Verkkooperaattori",
-          "custom_day_rate": "Paivasiirtohinta (EUR/kWh)",
-          "custom_night_rate": "Yosiirtohinta (EUR/kWh)",
-          "custom_vat": "ALV-kerroin (esim. 1.255)",
-          "custom_energy_tax": "Sahkovero (EUR/kWh)"
+          "operator": "Verkkoyhtiö",
+          "custom_day_rate": "Päiväsiirtohinta (EUR/kWh)",
+          "custom_night_rate": "Yösiirtohinta (EUR/kWh)",
+          "custom_vat": "ALV-kerroin (esim. 1.255 = 25,5%)",
+          "custom_energy_tax": "Sähkövero (EUR/kWh)"
         }
       },
       "optional_apis": {
-        "title": "Valinnaiset tietolahteet",
-        "description": "Aseta valinnaiset API-avaimet ja tietotasot tarkempiin ennusteisiin.",
+        "title": "Valinnaiset tietolähteet",
+        "description": "Rajat ylittävät hintatiedot (Taso 2) parantavat ennusteita Ruotsin ja Viron hintadatalla — ei API-avainta tarvita. Fingrid-data (Taso 3) lisää ydinvoimatuotannon ja rajasiirtojen tiedot — vaatii ilmaisen API-avaimen osoitteesta data.fingrid.fi.",
         "data": {
-          "fingrid_api_key": "Fingrid API-avain (valinnainen)",
-          "enable_tier2": "Ota kayttoon rajat ylittavat hintatiedot (Taso 2)"
+          "fingrid_api_key": "Fingrid API-avain (valinnainen, ilmainen osoitteessa data.fingrid.fi)",
+          "enable_tier2": "Ota käyttöön rajat ylittävät hintatiedot (Ruotsi SE1/SE3, Viro)"
         }
       }
     },
     "abort": {
-      "already_configured": "Tama integraatio on jo maaritetty."
+      "already_configured": "Integraatio on jo määritetty. Käytä Asetukset-painiketta muuttaaksesi asetuksia."
     },
     "error": {
-      "invalid_fingrid_key": "Virheellinen Fingrid API-avain.",
-      "cannot_connect": "API-yhteytta ei voida muodostaa."
+      "invalid_fingrid_key": "Virheellinen Fingrid API-avain. Rekisteröidy ilmaiseksi osoitteessa data.fingrid.fi.",
+      "cannot_connect": "API-yhteyttä ei voida muodostaa. Tarkista verkkoyhteys."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Spot-hintaennusteen asetukset",
+        "description": "Muuta verkkoyhtiötä, tariffeja tai API-asetuksia. Valitse 'Custom' verkkoyhtiöksi käyttääksesi omia päivä/yö-hintoja.",
+        "data": {
+          "operator": "Verkkoyhtiö",
+          "custom_day_rate": "Päiväsiirtohinta (EUR/kWh)",
+          "custom_night_rate": "Yösiirtohinta (EUR/kWh)",
+          "custom_vat": "ALV-kerroin (esim. 1.255 = 25,5%)",
+          "custom_energy_tax": "Sähkövero (EUR/kWh)",
+          "enable_tier2": "Rajat ylittävät hintatiedot",
+          "fingrid_api_key": "Fingrid API-avain"
+        }
+      }
     }
   }
 }

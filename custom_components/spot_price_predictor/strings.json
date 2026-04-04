@@ -3,37 +3,54 @@
     "step": {
       "user": {
         "title": "Select Region",
-        "description": "Choose the electricity market region.",
+        "description": "Choose the electricity market region for spot price prediction.",
         "data": {
           "region": "Region"
         }
       },
       "operator": {
-        "title": "Electricity Operator",
-        "description": "Select your network operator for transfer tariff calculation.",
+        "title": "Electricity Operator & Tariffs",
+        "description": "Select your network operator or choose 'Custom' to enter your own rates. Day rate applies Mon-Fri 07:00-22:00, night rate applies at other times.",
         "data": {
           "operator": "Operator",
           "custom_day_rate": "Day transfer rate (EUR/kWh)",
           "custom_night_rate": "Night transfer rate (EUR/kWh)",
-          "custom_vat": "VAT multiplier (e.g. 1.255)",
+          "custom_vat": "VAT multiplier (e.g. 1.255 = 25.5%)",
           "custom_energy_tax": "Energy tax (EUR/kWh)"
         }
       },
       "optional_apis": {
         "title": "Optional Data Sources",
-        "description": "Configure optional API keys and data tiers for enhanced predictions.",
+        "description": "Cross-border prices (Tier 2) improve predictions using Swedish and Estonian price data — no API key needed. Fingrid data (Tier 3) adds nuclear production and cross-border power flow data — requires a free API key from data.fingrid.fi.",
         "data": {
-          "fingrid_api_key": "Fingrid API key (optional)",
-          "enable_tier2": "Enable cross-border price data (Tier 2)"
+          "fingrid_api_key": "Fingrid API key (optional, free at data.fingrid.fi)",
+          "enable_tier2": "Enable cross-border price data (Sweden SE1/SE3, Estonia)"
         }
       }
     },
     "abort": {
-      "already_configured": "This integration is already configured."
+      "already_configured": "This integration is already configured. Use the Options button to change settings."
     },
     "error": {
-      "invalid_fingrid_key": "Invalid Fingrid API key.",
-      "cannot_connect": "Cannot connect to API."
+      "invalid_fingrid_key": "Invalid Fingrid API key. Register for free at data.fingrid.fi.",
+      "cannot_connect": "Cannot connect to API. Check your network connection."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Spot Price Predictor Settings",
+        "description": "Change your operator, tariffs, or API configuration. Select 'Custom' as operator to use your own day/night rates.",
+        "data": {
+          "operator": "Operator",
+          "custom_day_rate": "Day transfer rate (EUR/kWh)",
+          "custom_night_rate": "Night transfer rate (EUR/kWh)",
+          "custom_vat": "VAT multiplier (e.g. 1.255 = 25.5%)",
+          "custom_energy_tax": "Energy tax (EUR/kWh)",
+          "enable_tier2": "Enable cross-border price data",
+          "fingrid_api_key": "Fingrid API key"
+        }
+      }
     }
   }
 }
