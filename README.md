@@ -55,17 +55,17 @@ The model automatically adapts to available data sources:
 
 **Tier 3 adds Fingrid real-time data**: nuclear power production (dataset #188) and commercial cross-border flows with Sweden and Estonia (datasets #31, #32, #140).
 
-## Supported Operators (Finland)
+## Supported Operators (Finland) (check your contract)
 
-| Operator | Day rate (07-22) | Night rate (22-07) |
+| Operator (1.4.2026) | Day rate (07-22) | Night rate (22-07) |
 |----------|:---:|:---:|
 | Elenia | 3.61 c/kWh | 2.20 c/kWh |
-| Caruna South | 5.90 c/kWh | 4.50 c/kWh |
-| Caruna North | 5.20 c/kWh | 4.10 c/kWh |
-| Helen (Helsinki) | 5.37 c/kWh | 4.03 c/kWh |
+| Caruna Espoo | 2.21 c/kWh | 2.21 c/kWh |
+| Caruna North | 4.07 c/kWh | 2.49 c/kWh |
+| Helen | 3.54 c/kWh | 3.54 c/kWh |
 | Custom | User-defined | User-defined |
 
-VAT: 25.5% · Energy tax: 2.325 c/kWh (class I, 2026) · Seller margin: configurable (from your contract)
+Excl. VAT: 25.5% · Energy tax: 2.325 c/kWh (class I, 2026) · Seller margin: configurable (from your contract)
 For yleissiirto (general transfer), set day and night rates equal.
 
 ## Installation

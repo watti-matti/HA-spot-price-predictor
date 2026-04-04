@@ -263,17 +263,17 @@ consumer_pricing:
       day_rate_eur_kwh: 0.0361       # Updated April 2026
       night_rate_eur_kwh: 0.0220     # Updated April 2026
 
-    - name: "Caruna South"
-      day_rate_eur_kwh: 0.0590
-      night_rate_eur_kwh: 0.0450
+    - name: "Caruna Espoo"
+      day_rate_eur_kwh: 0.0221
+      night_rate_eur_kwh: 0.0221
 
     - name: "Caruna North"
-      day_rate_eur_kwh: 0.0520
-      night_rate_eur_kwh: 0.0410
+      day_rate_eur_kwh: 0.0407
+      night_rate_eur_kwh: 0.0249
 
-    - name: "Helen (Helsinki)"
-      day_rate_eur_kwh: 0.0537
-      night_rate_eur_kwh: 0.0403
+    - name: "Helen"
+      day_rate_eur_kwh: 0.0354
+      night_rate_eur_kwh: 0.0354
 
   default_operator: "Elenia"
 

@@ -44,20 +44,20 @@ OPERATORS = {
         "day_rate": 0.0361,
         "night_rate": 0.0220,
     },
-    "caruna_south": {
-        "name": "Caruna South",
-        "day_rate": 0.0590,
-        "night_rate": 0.0450,
+    "caruna_espoo": {
+        "name": "Caruna Espoo",
+        "day_rate": 0.0221,
+        "night_rate": 0.0221,
     },
     "caruna_north": {
         "name": "Caruna North",
-        "day_rate": 0.0520,
-        "night_rate": 0.0410,
+        "day_rate": 0.0407,
+        "night_rate": 0.0249,
     },
     "helen": {
-        "name": "Helen (Helsinki)",
-        "day_rate": 0.0537,
-        "night_rate": 0.0403,
+        "name": "Helen",
+        "day_rate": 0.0354,
+        "night_rate": 0.0354,
     },
     "custom": {
         "name": "Custom",
