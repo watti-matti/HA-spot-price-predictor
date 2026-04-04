@@ -222,10 +222,14 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
         window_end = window_start + timedelta(hours=duration_hours)
 
         # Filter forecast to the search window
-        upcoming = [
-            f for f in forecast
-            if window_start <= datetime.fromisoformat(f["timestamp"]) < window_end
-        ]
+        upcoming = []
+        for f in forecast:
+            try:
+                ts = datetime.fromisoformat(f["timestamp"])
+                if window_start <= ts < window_end:
+                    upcoming.append(f)
+            except (ValueError, TypeError):
+                continue
 
         result: dict[str, Any] = {
             "search_start": window_start.isoformat(),

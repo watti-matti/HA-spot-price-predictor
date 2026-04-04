@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import Any
 
 from homeassistant.components.sensor import (
@@ -55,8 +56,6 @@ class SpotPriceForecastSensor(CoordinatorEntity, SensorEntity):
     _attr_has_entity_name = True
     _attr_name = "Spot Price Forecast"
     _attr_native_unit_of_measurement = "EUR/MWh"
-    _attr_device_class = SensorDeviceClass.MONETARY
-    _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:chart-line"
     _attr_suggested_display_precision = 2
 
@@ -94,8 +93,6 @@ class ConsumerPriceSensor(CoordinatorEntity, SensorEntity):
     _attr_has_entity_name = True
     _attr_name = "Consumer Price"
     _attr_native_unit_of_measurement = "EUR/kWh"
-    _attr_device_class = SensorDeviceClass.MONETARY
-    _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:currency-eur"
     _attr_suggested_display_precision = 4
 
@@ -144,10 +141,15 @@ class CheapestHoursSensor(CoordinatorEntity, SensorEntity):
         self._entry = entry
 
     @property
-    def native_value(self) -> str | None:
+    def native_value(self) -> datetime | None:
         if self.coordinator.data:
             ch = self.coordinator.data.get("cheapest_hours", {})
-            return ch.get("cheapest_1h_start")
+            ts = ch.get("cheapest_1h_start")
+            if ts:
+                try:
+                    return datetime.fromisoformat(ts)
+                except (ValueError, TypeError):
+                    return None
         return None
 
     @property
@@ -184,8 +186,6 @@ class WeekStatsSensor(CoordinatorEntity, SensorEntity):
     _attr_has_entity_name = True
     _attr_name = "Week Price Stats"
     _attr_native_unit_of_measurement = "EUR/kWh"
-    _attr_device_class = SensorDeviceClass.MONETARY
-    _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:chart-box-outline"
     _attr_suggested_display_precision = 4
 
