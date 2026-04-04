@@ -1,5 +1,7 @@
 """Pure Python feature engineering for inference. No numpy/pandas."""
 
+from __future__ import annotations
+
 import math
 import logging
 from datetime import datetime, timedelta, timezone

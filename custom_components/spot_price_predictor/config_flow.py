@@ -1,5 +1,7 @@
 """Config flow for Spot Price Predictor."""
 
+from __future__ import annotations
+
 import logging
 from typing import Any
 
@@ -45,7 +47,7 @@ class SpotPricePredictorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
-    ) -> config_entries.ConfigFlowResult:
+    ) -> config_entries.FlowResult:
         """Step 1: Select region."""
         if user_input is not None:
             self._data[CONF_REGION] = user_input[CONF_REGION]
@@ -60,7 +62,7 @@ class SpotPricePredictorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_operator(
         self, user_input: dict[str, Any] | None = None
-    ) -> config_entries.ConfigFlowResult:
+    ) -> config_entries.FlowResult:
         """Step 2: Select operator and tariff."""
         if user_input is not None:
             self._data[CONF_OPERATOR] = user_input[CONF_OPERATOR]
@@ -122,7 +124,7 @@ class SpotPricePredictorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_optional_apis(
         self, user_input: dict[str, Any] | None = None
-    ) -> config_entries.ConfigFlowResult:
+    ) -> config_entries.FlowResult:
         """Step 3: Optional API keys and tier selection."""
         errors: dict[str, str] = {}
 
@@ -187,7 +189,7 @@ class SpotPriceOptionsFlow(config_entries.OptionsFlow):
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
-    ) -> config_entries.ConfigFlowResult:
+    ) -> config_entries.FlowResult:
         """Options step: modify operator, tariffs, and API settings."""
         errors: dict[str, str] = {}
 

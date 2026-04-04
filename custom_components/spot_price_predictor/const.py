@@ -1,5 +1,7 @@
 """Constants for the Spot Price Predictor integration."""
 
+from __future__ import annotations
+
 from homeassistant.const import Platform
 
 DOMAIN = "spot_price_predictor"

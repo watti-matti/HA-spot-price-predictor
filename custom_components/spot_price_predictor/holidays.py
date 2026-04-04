@@ -1,5 +1,7 @@
 """Pure Python Finnish holiday calculator. No external dependencies."""
 
+from __future__ import annotations
+
 from datetime import date, timedelta
 
 
