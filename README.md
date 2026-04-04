@@ -3,7 +3,7 @@
 [![HACS Integration](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**Predict electricity spot prices up to 7 days ahead** using machine learning with physics-based weather features, cross-border trade analysis, and grid infrastructure data.
+**Predict electricity spot prices up to 7 days ahead** using machine learning with physics-based weather features, cross-border trade analysis, and grid infrastructure data. [(Suomenkieliset ohjeet)](TEKNINEN_TOTEUTUS.md)
 
 ## Key Features
 
