@@ -23,11 +23,30 @@ class SpotPriceModel:
 
     @classmethod
     def load(cls, path: Path | None = None) -> "SpotPriceModel":
-        """Load model from JSON coefficients file."""
-        p = path or DEFAULT_COEFS_PATH
+        """Load model from JSON coefficients file.
+
+        Priority: explicit path > user-uploaded > bundled default.
+        """
+        if path is not None:
+            p = path
+        else:
+            # Check for user-uploaded coefficients first
+            user_path = DEFAULT_COEFS_PATH.parent / "model_coefs_user.json"
+            if user_path.exists():
+                p = user_path
+                _LOGGER.info("Using user-uploaded coefficients: %s", p)
+            else:
+                p = DEFAULT_COEFS_PATH
+                _LOGGER.info("Using bundled default coefficients: %s", p)
+
         with open(p, "r", encoding="utf-8") as f:
             coefs = json.load(f)
-        _LOGGER.info("Loaded model %s with %d features", coefs.get("model_version"), coefs.get("feature_count"))
+        _LOGGER.info(
+            "Loaded model %s with %d features (tiers: %s)",
+            coefs.get("model_version"),
+            coefs.get("feature_count"),
+            coefs.get("tier_info", {}),
+        )
         return cls(coefs)
 
     def predict_single(self, features: dict[str, float]) -> float:

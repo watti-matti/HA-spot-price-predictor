@@ -1,0 +1,38 @@
+upload_coefficients:
+  name: Upload Model Coefficients
+  description: >
+    Upload new model coefficients from a JSON file or inline JSON string.
+    Use after retraining the model on your PC with:
+    python -m src.train_model --region finland --years 4
+  fields:
+    file_path:
+      name: File Path
+      description: >
+        Path to the model_coefs.json file on the HA host filesystem.
+        Example: /config/model_coefs.json
+      required: false
+      example: "/config/model_coefs.json"
+      selector:
+        text:
+    json_data:
+      name: JSON Data
+      description: >
+        Raw JSON string containing model coefficients.
+        Use this if you cannot place the file on the HA filesystem.
+      required: false
+      selector:
+        text:
+          multiline: true
+
+reset_coefficients:
+  name: Reset to Default Coefficients
+  description: >
+    Remove any user-uploaded coefficients and revert to the bundled
+    default model. The integration will reload automatically.
+
+model_info:
+  name: Show Model Information
+  description: >
+    Display current model information as a persistent notification,
+    including version, feature count, accuracy metrics, and
+    retraining instructions.
