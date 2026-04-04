@@ -41,7 +41,7 @@ from .model import SpotPriceModel
 _LOGGER = logging.getLogger(__name__)
 
 
-class SpotPriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
+class SpotPriceCoordinator(DataUpdateCoordinator):
     """Coordinator that fetches data and runs model inference."""
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -50,6 +50,7 @@ class SpotPriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER,
             name=DOMAIN,
             update_interval=timedelta(seconds=UPDATE_INTERVAL_WEATHER),
+            always_update=True,
         )
         self.entry = entry
         session = async_get_clientsession(hass)

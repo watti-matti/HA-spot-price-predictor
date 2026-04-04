@@ -49,7 +49,7 @@ def _device_info(entry: ConfigEntry) -> dict[str, Any]:
     }
 
 
-class SpotPriceForecastSensor(CoordinatorEntity[SpotPriceCoordinator], SensorEntity):
+class SpotPriceForecastSensor(CoordinatorEntity, SensorEntity):
     """Predicted spot price for current hour (EUR/MWh)."""
 
     _attr_has_entity_name = True
@@ -88,7 +88,7 @@ class SpotPriceForecastSensor(CoordinatorEntity[SpotPriceCoordinator], SensorEnt
         return _device_info(self._entry)
 
 
-class ConsumerPriceSensor(CoordinatorEntity[SpotPriceCoordinator], SensorEntity):
+class ConsumerPriceSensor(CoordinatorEntity, SensorEntity):
     """Consumer price including transfer tariff, VAT, energy tax (EUR/kWh)."""
 
     _attr_has_entity_name = True
@@ -125,7 +125,7 @@ class ConsumerPriceSensor(CoordinatorEntity[SpotPriceCoordinator], SensorEntity)
         return _device_info(self._entry)
 
 
-class CheapestHoursSensor(CoordinatorEntity[SpotPriceCoordinator], SensorEntity):
+class CheapestHoursSensor(CoordinatorEntity, SensorEntity):
     """Cheapest upcoming hours for load scheduling.
 
     State: start time of the single cheapest hour in the next 24h.
@@ -178,7 +178,7 @@ class CheapestHoursSensor(CoordinatorEntity[SpotPriceCoordinator], SensorEntity)
         return _device_info(self._entry)
 
 
-class WeekStatsSensor(CoordinatorEntity[SpotPriceCoordinator], SensorEntity):
+class WeekStatsSensor(CoordinatorEntity, SensorEntity):
     """Weekly consumer price forecast statistics (min, avg, max in EUR/kWh)."""
 
     _attr_has_entity_name = True
