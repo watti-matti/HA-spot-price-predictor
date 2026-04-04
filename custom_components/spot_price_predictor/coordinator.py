@@ -19,6 +19,8 @@ from .const import (
     CONF_CUSTOM_NIGHT_RATE,
     CONF_CUSTOM_VAT,
     CONF_CUSTOM_ENERGY_TAX,
+    CONF_SELLER_MARGIN,
+    DEFAULT_SELLER_MARGIN,
     CONF_SEARCH_START_HOURS,
     CONF_SEARCH_DURATION_HOURS,
     DEFAULT_SEARCH_START_HOURS,
@@ -66,6 +68,8 @@ class SpotPriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.night_rate = op["night_rate"]
             self.vat_multiplier = DEFAULT_VAT_MULTIPLIER
             self.energy_tax = DEFAULT_ENERGY_TAX
+
+        self.seller_margin = entry.data.get(CONF_SELLER_MARGIN, DEFAULT_SELLER_MARGIN)
 
         self.enable_tier2 = entry.data.get(CONF_ENABLE_TIER2, False)
         self.has_fingrid = bool(fingrid_key)
@@ -144,7 +148,7 @@ class SpotPriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 is_night = local_hour < 7 or local_hour >= 22
                 transfer = self.night_rate if is_night else self.day_rate
                 spot_kwh = entry_item["price_eur_mwh"] / 1000.0
-                consumer_price = (spot_kwh + transfer + self.energy_tax) * self.vat_multiplier
+                consumer_price = (spot_kwh + self.seller_margin + transfer + self.energy_tax) * self.vat_multiplier
                 consumer_forecast.append({
                     "timestamp": entry_item["timestamp"],
                     "price_eur_kwh": round(consumer_price, 5),

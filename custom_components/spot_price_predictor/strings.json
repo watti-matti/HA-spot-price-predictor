@@ -13,6 +13,7 @@
         "description": "Select your network operator or choose 'Custom' to enter your own rates. Day rate applies Mon-Fri 07:00-22:00, night rate applies at other times.",
         "data": {
           "operator": "Operator",
+          "seller_margin": "Energy seller's margin (EUR/kWh, excl. VAT, from your contract)",
           "custom_day_rate": "Day transfer rate (EUR/kWh)",
           "custom_night_rate": "Night transfer rate (EUR/kWh)",
           "custom_vat": "VAT multiplier (e.g. 1.255 = 25.5%)",
@@ -45,6 +46,7 @@
         "description": "Change your operator, tariffs, or API configuration. Select 'Custom' as operator to use your own day/night rates.",
         "data": {
           "operator": "Operator",
+          "seller_margin": "Energy seller's margin (EUR/kWh, excl. VAT, from your contract)",
           "custom_day_rate": "Day transfer rate (EUR/kWh)",
           "custom_night_rate": "Night transfer rate (EUR/kWh)",
           "custom_vat": "VAT multiplier (e.g. 1.255 = 25.5%)",

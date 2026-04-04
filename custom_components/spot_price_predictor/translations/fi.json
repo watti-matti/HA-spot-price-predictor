@@ -13,6 +13,7 @@
         "description": "Valitse verkkoyhtiösi tai valitse 'Custom' syöttääksesi omat hinnat. Päiväsiirto Ma-Pe 07:00-22:00, yösiirto muina aikoina.",
         "data": {
           "operator": "Verkkoyhtiö",
+          "seller_margin": "Sähkönmyyjän marginaali (EUR/kWh, alv 0%, sopimuksesi mukaan)",
           "custom_day_rate": "Päiväsiirtohinta (EUR/kWh)",
           "custom_night_rate": "Yösiirtohinta (EUR/kWh)",
           "custom_vat": "ALV-kerroin (esim. 1.255 = 25,5%)",
@@ -45,6 +46,7 @@
         "description": "Muuta verkkoyhtiötä, tariffeja tai API-asetuksia. Valitse 'Custom' verkkoyhtiöksi käyttääksesi omia päivä/yö-hintoja.",
         "data": {
           "operator": "Verkkoyhtiö",
+          "seller_margin": "Sähkönmyyjän marginaali (EUR/kWh, alv 0%, sopimuksesi mukaan)",
           "custom_day_rate": "Päiväsiirtohinta (EUR/kWh)",
           "custom_night_rate": "Yösiirtohinta (EUR/kWh)",
           "custom_vat": "ALV-kerroin (esim. 1.255 = 25,5%)",

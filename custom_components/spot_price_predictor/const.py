@@ -14,6 +14,10 @@ CONF_CUSTOM_DAY_RATE = "custom_day_rate"
 CONF_CUSTOM_NIGHT_RATE = "custom_night_rate"
 CONF_CUSTOM_VAT = "custom_vat"
 CONF_CUSTOM_ENERGY_TAX = "custom_energy_tax"
+CONF_SELLER_MARGIN = "seller_margin"
+
+# Default seller margin (EUR/kWh, excl. VAT)
+DEFAULT_SELLER_MARGIN = 0.0
 CONF_SEARCH_START_HOURS = "search_start_hours"
 CONF_SEARCH_DURATION_HOURS = "search_duration_hours"
 

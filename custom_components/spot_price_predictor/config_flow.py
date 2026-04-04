@@ -20,6 +20,8 @@ from .const import (
     CONF_CUSTOM_NIGHT_RATE,
     CONF_CUSTOM_VAT,
     CONF_CUSTOM_ENERGY_TAX,
+    CONF_SELLER_MARGIN,
+    DEFAULT_SELLER_MARGIN,
     CONF_SEARCH_START_HOURS,
     CONF_SEARCH_DURATION_HOURS,
     REGIONS,
@@ -82,11 +84,19 @@ class SpotPricePredictorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 self._data[CONF_CUSTOM_NIGHT_RATE] = op["night_rate"]
                 self._data[CONF_CUSTOM_VAT] = DEFAULT_VAT_MULTIPLIER
                 self._data[CONF_CUSTOM_ENERGY_TAX] = DEFAULT_ENERGY_TAX
+            self._data[CONF_SELLER_MARGIN] = user_input.get(
+                CONF_SELLER_MARGIN, DEFAULT_SELLER_MARGIN
+            )
             return await self.async_step_optional_apis()
 
         operator_options = {k: v["name"] for k, v in OPERATORS.items()}
         schema = vol.Schema({
             vol.Required(CONF_OPERATOR, default="elenia"): vol.In(operator_options),
+            vol.Optional(
+                CONF_SELLER_MARGIN,
+                default=DEFAULT_SELLER_MARGIN,
+                description={"suggested_value": DEFAULT_SELLER_MARGIN},
+            ): vol.Coerce(float),
             vol.Optional(
                 CONF_CUSTOM_DAY_RATE,
                 default=0.056,
@@ -209,6 +219,9 @@ class SpotPriceOptionsFlow(config_entries.OptionsFlow):
                 new_data[CONF_CUSTOM_ENERGY_TAX] = user_input.get(
                     CONF_CUSTOM_ENERGY_TAX, DEFAULT_ENERGY_TAX
                 )
+                new_data[CONF_SELLER_MARGIN] = user_input.get(
+                    CONF_SELLER_MARGIN, DEFAULT_SELLER_MARGIN
+                )
                 new_data[CONF_ENABLE_TIER2] = user_input.get(
                     CONF_ENABLE_TIER2, True
                 )
@@ -238,6 +251,11 @@ class SpotPriceOptionsFlow(config_entries.OptionsFlow):
                 CONF_OPERATOR,
                 default=current.get(CONF_OPERATOR, "elenia"),
             ): vol.In(operator_options),
+            vol.Optional(
+                CONF_SELLER_MARGIN,
+                default=current.get(CONF_SELLER_MARGIN, DEFAULT_SELLER_MARGIN),
+                description={"suggested_value": current.get(CONF_SELLER_MARGIN, DEFAULT_SELLER_MARGIN)},
+            ): vol.Coerce(float),
             vol.Optional(
                 CONF_CUSTOM_DAY_RATE,
                 default=current.get(CONF_CUSTOM_DAY_RATE, 0.056),
