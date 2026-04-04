@@ -160,19 +160,46 @@ class SpotPriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # Cheapest hours calculation
             cheapest_hours = self._find_cheapest_hours(forecast, now)
 
+            # Windowed average (24h sliding window of top N values)
+            window_hours = 24
+            windowed_forecast = []
+            for i in range(len(control_forecast)):
+                start_idx = max(0, i - window_hours // 2)
+                end_idx = min(len(control_forecast), i + window_hours // 2)
+                window = [control_forecast[j]["factor"] for j in range(start_idx, end_idx)]
+                if window:
+                    avg = sum(window) / len(window)
+                else:
+                    avg = 0.0
+                windowed_forecast.append({
+                    "timestamp": control_forecast[i]["timestamp"],
+                    "factor": round(max(-1.0, min(1.0, avg)), 3),
+                })
+
             # Current hour values
             current_spot = forecast[0]["price_eur_mwh"] if forecast else 0.0
             current_consumer = consumer_forecast[0]["price_eur_kwh"] if consumer_forecast else 0.0
             current_control = control_forecast[0]["factor"] if control_forecast else 0.0
+            current_windowed = windowed_forecast[0]["factor"] if windowed_forecast else 0.0
+
+            # Tiers active description
+            tiers = ["Tier 1 (weather)"]
+            if tier2_spreads:
+                tiers.append("Tier 2 (cross-border)")
+            if tier3_data:
+                tiers.append("Tier 3 (Fingrid)")
 
             return {
                 "spot_price": current_spot,
                 "spot_forecast": forecast,
                 "consumer_price": current_consumer,
                 "consumer_forecast": consumer_forecast,
-                "control_factor": current_control,
-                "control_forecast": control_forecast,
+                "control_factor_pm1": current_control,
+                "control_forecast_pm1": control_forecast,
+                "windowed_avg_pm1": current_windowed,
+                "windowed_forecast_pm1": windowed_forecast,
                 "cheapest_hours": cheapest_hours,
+                "tiers_active": " + ".join(tiers),
                 "last_update": now.isoformat(),
             }
 

@@ -51,7 +51,9 @@ class SpotPriceApiClient:
             params = {
                 "latitude": loc["lat"],
                 "longitude": loc["lon"],
-                "hourly": "wind_speed_10m,shortwave_radiation,temperature_2m",
+                "hourly": "wind_speed_120m,global_tilted_irradiance_instant,temperature_2m",
+                "wind_speed_unit": "ms",
+                "tilt": 45,
                 "forecast_days": 8,
                 "timezone": "UTC",
             }
@@ -61,8 +63,8 @@ class SpotPriceApiClient:
                     data = await resp.json()
                     hourly = data.get("hourly", {})
                     location_data.append({
-                        "wind": hourly.get("wind_speed_10m", []),
-                        "solar": hourly.get("shortwave_radiation", []),
+                        "wind": hourly.get("wind_speed_120m", []),
+                        "solar": hourly.get("global_tilted_irradiance_instant", []),
                         "temp": hourly.get("temperature_2m", []),
                         "loc": loc,
                     })
@@ -125,7 +127,7 @@ class SpotPriceApiClient:
                 for entry in raw:
                     prices.append({
                         "timestamp": entry.get("date") or entry.get("timestamp"),
-                        "price_eur_mwh": float(entry.get("value", 0.0)),
+                        "price_eur_mwh": float(entry.get("value", 0.0)) / 10.0,
                     })
                 _LOGGER.info("Sahkotin: fetched %d price entries", len(prices))
                 return prices

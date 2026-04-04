@@ -1,6 +1,6 @@
 <mxfile host="app.diagrams.net" agent="Claude">
   <diagram id="data-flow" name="Data Flow">
-    <mxGraphModel dx="1022" dy="660" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="1654" math="0" shadow="0">
+    <mxGraphModel dx="1369" dy="949" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="1654" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
@@ -100,7 +100,7 @@
           <mxGeometry height="40" width="109" x="526.5" y="520" as="geometry" />
         </mxCell>
         <mxCell id="ha-forecast" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=11;" value="Spot Price&#xa;Forecast&#xa;(170h)" vertex="1">
-          <mxGeometry height="60" width="110" x="526" y="598" as="geometry" />
+          <mxGeometry height="60" width="160" x="500" y="598" as="geometry" />
         </mxCell>
         <mxCell id="ha-price" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=11;" value="Consumer&#xa;Price&#xa;(VAT+tariff)" vertex="1">
           <mxGeometry height="60" width="110" x="705" y="598" as="geometry" />
@@ -148,15 +148,16 @@
         <mxCell id="a11" edge="1" parent="1" source="stage2" style="edgeStyle=orthogonalEdgeStyle;" target="json-out">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="a12" edge="1" parent="1" source="json-out" style="edgeStyle=orthogonalEdgeStyle;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.25;entryDx=0;entryDy=0;" target="ha-forecast">
+        <mxCell id="a12" edge="1" parent="1" source="json-out" style="edgeStyle=orthogonalEdgeStyle;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0.75;entryY=0;entryDx=0;entryDy=0;" target="ha-forecast">
           <mxGeometry relative="1" as="geometry">
             <Array as="points">
-              <mxPoint x="680" y="458" />
-              <mxPoint x="680" y="585" />
+              <mxPoint x="730" y="458" />
+              <mxPoint x="730" y="570" />
+              <mxPoint x="620" y="570" />
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="a13" edge="1" parent="1" source="ha-forecast" style="edgeStyle=orthogonalEdgeStyle;exitX=1;exitY=0.75;exitDx=0;exitDy=0;entryX=0;entryY=0.75;entryDx=0;entryDy=0;" target="ha-price">
+        <mxCell id="a13" edge="1" parent="1" source="ha-forecast" style="edgeStyle=orthogonalEdgeStyle;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="ha-price">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
         <mxCell id="a14" edge="1" parent="1" source="ha-price" style="edgeStyle=orthogonalEdgeStyle;" target="ha-ctrl">

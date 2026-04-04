@@ -1,7 +1,9 @@
 """Constants for the Spot Price Predictor integration."""
 
+from homeassistant.const import Platform
+
 DOMAIN = "spot_price_predictor"
-PLATFORMS = ["sensor"]
+PLATFORMS: list[Platform] = [Platform.SENSOR]
 
 # Configuration keys
 CONF_REGION = "region"
