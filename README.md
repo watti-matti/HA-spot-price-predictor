@@ -1,86 +1,133 @@
-# HA-spot-price-predictor
+# Spot Price Predictor for Home Assistant
 
-Finnish electricity spot price forecasting for Home Assistant. Predicts Nord Pool day-ahead prices up to 170 hours (7 days) ahead using Ridge regression with physics-based features.
+[![HACS Integration](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-## Installation (HACS)
+**Predict electricity spot prices up to 7 days ahead** using machine learning with physics-based weather features, cross-border trade analysis, and grid infrastructure data.
+
+## Key Features
+
+- **170-hour price forecast** — predict Nord Pool day-ahead prices a full week into the future
+- **Works out-of-the-box** — pre-trained model included, no setup beyond choosing your operator
+- **3-tier data architecture** — starts with free weather data, optionally adds cross-border prices and Fingrid nuclear/grid data for improved accuracy
+- **Smart automation signals** — power control factor [-1, +1] and cheapest-hours detection for EV charging, water heating, and thermal storage
+- **Consumer price calculation** — adds your operator's transfer tariff, energy tax, and VAT automatically
+- **Retainable** — advanced users can retrain the model with local data for better personalization
+- **Localizable** — region configuration files allow adaptation to other Nordic/European countries
+
+## How It Works
+
+The system uses a **two-stage Ridge regression** model trained on 4 years of historical data. It combines:
+
+- **Weather forecasts** from 7 Finnish locations (wind speed, solar irradiance, temperature) weighted by installed generation capacity
+- **Demand patterns** — time-of-day peaks (verified at 09:00 and 19:00), heating degree days, daylight deficit, Finnish holidays and cultural patterns
+- **Cross-border trade signals** — 7-day rolling price spreads with Sweden (SE1, SE3) and Estonia calculate import/export potential
+- **Grid infrastructure** (optional, Fingrid API) — real-time nuclear production and commercial cross-border power flows
+
+All data sources are **free**. The optional Fingrid API key is also free (email registration at [data.fingrid.fi](https://data.fingrid.fi)).
+
+## Sensors Created
+
+| Sensor | Description |
+|--------|-------------|
+| `sensor.spot_price_forecast` | Current hour predicted price (EUR/MWh) with 170h forecast attribute |
+| `sensor.consumer_price` | Total consumer price (EUR/kWh) including VAT, transfer tariff, energy tax |
+| `sensor.power_control_factor` | Smart signal [-1, +1] for automation (+1 = cheapest hour) |
+| `sensor.cheapest_hours` | Timestamps of cheapest upcoming 4h and 8h blocks |
+
+Each sensor carries a `forecast` attribute with the full 170-hour prediction array — ideal for ApexCharts dashboards and automations.
+
+## Feature Tiers
+
+The model automatically adapts to available data sources:
+
+| Tier | Features | Data Sources | API Keys | Accuracy |
+|------|----------|-------------|----------|----------|
+| 1 | 28 (weather + demand) | Sahkotin + Open-Meteo | None | Baseline |
+| 1+2 | 34 (+cross-border trade) | + elprisetjustnu.se + Elering | None | ~14% better MAE |
+| 1+2+3 | 38 (+grid infrastructure) | + Fingrid nuclear + flows | 1 (free) | Best (R² 0.55) |
+
+**Tier 2 adds import/export potential** between Finland and neighboring countries by analyzing persistent price spread patterns (verified autocorrelation r=0.54-0.73 weekly).
+
+**Tier 3 adds Fingrid real-time data**: nuclear power production (dataset #188) and commercial cross-border flows with Sweden and Estonia (datasets #31, #32, #140).
+
+## Supported Operators (Finland)
+
+| Operator | Day rate | Night rate |
+|----------|----------|------------|
+| Elenia | 5.60 c/kWh | 4.30 c/kWh |
+| Caruna South | 5.90 c/kWh | 4.50 c/kWh |
+| Caruna North | 5.20 c/kWh | 4.10 c/kWh |
+| Helen (Helsinki) | 5.37 c/kWh | 4.03 c/kWh |
+| Custom | User-defined rates | |
+
+VAT: 25.5% · Energy tax: 2.253 c/kWh (class I, 2025)
+
+## Installation
+
+### HACS (Recommended)
 
 1. Open **HACS** in Home Assistant
-2. Click **Integrations** → three-dot menu → **Custom repositories**
+2. Click **Integrations** → ⋮ menu → **Custom repositories**
 3. Add `https://github.com/watti-matti/HA-spot-price-predictor` as **Integration**
-4. Search for "Spot Price Predictor" and install
-5. Restart Home Assistant
+4. Search for "Spot Price Predictor" and **Download**
+5. **Restart** Home Assistant
 6. Go to **Settings** → **Devices & Services** → **Add Integration** → **Spot Price Predictor**
-7. Follow the setup wizard:
-   - Select your region (Finland)
-   - Select your electricity operator (Elenia, Caruna, Helen...)
-   - Optionally enter a Fingrid API key for enhanced predictions
+7. Follow the setup wizard
 
 ### Manual Installation
 
 Copy `custom_components/spot_price_predictor/` to your Home Assistant `custom_components/` directory and restart.
 
-## What You Get
-
-After installation, these sensors are created automatically:
-
-| Sensor | Description |
-|--------|-------------|
-| `sensor.spot_price_forecast` | Current hour predicted price (EUR/MWh) with 170h forecast |
-| `sensor.consumer_price` | Total consumer price (EUR/kWh) including VAT, tariff, energy tax |
-| `sensor.power_control_factor` | [-1, +1] signal for smart automation (+1 = cheapest) |
-| `sensor.cheapest_hours` | Timestamps of cheapest upcoming hours |
-
-Each sensor carries a `forecast` attribute with the full 170-hour prediction array, useful for ApexCharts dashboards and automations.
-
-## Feature Tiers
-
-The prediction model uses three tiers of data, activating automatically based on available sources:
-
-| Tier | Features | Data Sources | API Keys |
-|------|----------|-------------|----------|
-| 1 | 28 (weather + demand) | Sahkotin + Open-Meteo | None |
-| 1+2 | 34 (+cross-border trade) | + elprisetjustnu.se + Elering | None |
-| 1+2+3 | 38 (+grid infrastructure) | + Fingrid | 1 (free) |
-
-**Works out-of-the-box** with pre-trained coefficients (Tier 1+2+3). No training needed to start.
-
 ## Optional: Custom Training
 
-For advanced users who want to retrain the model with their own data:
+For advanced users who want to retrain the model with their own historical data:
 
 ```bash
-# Clone and install training tools
 git clone https://github.com/watti-matti/HA-spot-price-predictor.git
 cd HA-spot-price-predictor
 pip install -r requirements.txt
 
-# Train (adapts to available data sources)
+# Train with available data (adapts automatically)
 python -m src.train_model --region finland
 
-# With Fingrid data
+# With Fingrid nuclear + grid data
 export FINGRID_API_KEY=your_key_here
 python -m src.train_model --region finland
 
-# Evaluate model accuracy
+# Evaluate accuracy with interactive dashboard
 python -m src.evaluate --region finland
 ```
 
-After training, copy `output/model_coefs.json` to Home Assistant and use the `spot_price_predictor.upload_coefficients` service to update the model.
+Upload the resulting `output/model_coefs.json` to your Home Assistant to replace the bundled defaults.
+
+## Localization to Other Countries
+
+The system is designed around a **region configuration file** (`config/regions/finland.yaml`) that defines:
+- Price API endpoints and format
+- Weather station locations with capacity-based weights
+- Holiday rules (fixed dates, Easter-relative, special rules)
+- Demand modeling parameters (peak hours, heating thresholds)
+- Consumer pricing (VAT, energy tax, operator tariffs)
+- Neighboring country price sources for cross-border features
+- Optional grid data sources and normalization values
+
+To adapt for another country, create a new region YAML file and retrain. The model architecture (Ridge regression with physics-based features) is applicable to any electricity market with weather-dependent generation.
 
 ## Data Sources
 
-| Source | Purpose | Free |
-|--------|---------|------|
-| [Sahkotin](https://sahkotin.fi) | FI spot prices | Yes |
-| [Open-Meteo](https://open-meteo.com) | Weather forecasts (7 Finnish locations) | Yes |
-| [elprisetjustnu.se](https://www.elprisetjustnu.se) | Swedish spot prices (SE1, SE3) | Yes |
-| [Elering](https://dashboard.elering.ee) | Estonian spot prices (EE) | Yes |
-| [Fingrid](https://data.fingrid.fi) | Nuclear production + cross-border flows | Yes (API key) |
+| Source | Purpose | Free | Auth |
+|--------|---------|------|------|
+| [Sahkotin](https://sahkotin.fi) | FI Nord Pool spot prices | Yes | None |
+| [Open-Meteo](https://open-meteo.com) | Weather forecasts (7 locations) | Yes | None |
+| [elprisetjustnu.se](https://www.elprisetjustnu.se) | Swedish spot prices (SE1, SE3) | Yes | None |
+| [Elering](https://dashboard.elering.ee) | Estonian spot prices (EE) | Yes | None |
+| [Fingrid](https://data.fingrid.fi) | Nuclear production + cross-border flows | Yes | API key (free) |
 
-## Documentation
+## Technical Documentation
 
-See [TECHNICAL_GUIDE.md](TECHNICAL_GUIDE.md) for detailed technical documentation including architecture diagrams, feature formulas, and model description.
+See [TECHNICAL_GUIDE.md](TECHNICAL_GUIDE.md) for architecture diagrams, feature engineering formulas, model details, and validation results.
 
 ## License
 
-MIT
+[MIT](LICENSE)
