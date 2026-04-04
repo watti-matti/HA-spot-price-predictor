@@ -121,14 +121,20 @@ class SpotPriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # Run model inference
             predictions = self.model.predict_batch(feature_rows)
 
-            # Build forecast list with timestamps
+            # Build forecast list with timestamps and weather context
             forecast = []
             for i, pred in enumerate(predictions):
                 ts = now + timedelta(hours=i)
-                forecast.append({
+                entry = {
                     "timestamp": ts.isoformat(),
                     "price_eur_mwh": round(pred, 2),
-                })
+                }
+                # Include weather data for dashboard charts
+                if i < len(weather):
+                    entry["wind_weighted"] = round(weather[i].get("wind_weighted", 0), 1)
+                    entry["solar_weighted"] = round(weather[i].get("solar_weighted", 0), 0)
+                    entry["temp_weighted"] = round(weather[i].get("temp_weighted", 0), 1)
+                forecast.append(entry)
 
             # Compute consumer prices (EUR/kWh) with tariff
             consumer_forecast = []
