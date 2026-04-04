@@ -147,15 +147,43 @@ Konfiguroitavissa operaattorikohtaisesti tiedostossa `finland.yaml`. Oletus: Ele
 | `power_control_windowed_average_N_largest_0_1` | [0, 1] | Tasoitettu liukuva ikkuna |
 | `power_control_windowed_average_N_largest_pm1` | [-1, +1] | Tasoitettu, bipolaarinen |
 
+`*_pm1`- ja `*_0_1`-ohjaussignaalit perustuvat [T3m3z/spotprices2ha](https://github.com/T3m3z/spotprices2ha)-projektin lähestymistapaan. Signaalit soveltuvat ohjattavien kuormien säätöön (sähköauton lataus, lämminvesivaraaja, lämpöpumput) sekä edullisimpien N tunnin jaksojen etsintään.
+
 ---
 
 ## Home Assistant -integraatio
 
-### Pyhäpäivien tunnistus
+### Pyhäpäivien ja arkipäivien tunnistus
 
-**Vaihtoehto A (suositeltu):** HA:n [Workday-integraatio](https://www.home-assistant.io/integrations/workday/) asetuksella `country: FI` — nolla ylläpitoa, yhteisön ylläpitämä.
+Malli käyttää arkipäivä/pyhäpäivä-tietoa kysyntämallien valintaan (arkipäivän huiput vs viikonloppu/pyhäpäivä). Kaksi vaihtoehtoa on tuettu ja integraatio voi vaihtaa niiden välillä `holidays.ha_workday_integration` -asetuksella aluekonfiguraatiossa.
 
-**Vaihtoehto B:** Kovakoodatut pyhäpäiväsäännöt tiedostosta `finland.yaml` — siirrettävämpi, vaatii manuaalisia päivityksiä.
+#### Vaihtoehto A: HA:n Workday-integraatio (suositeltu)
+
+Käyttää Home Assistantin sisäänrakennettua [Workday-integraatiota](https://www.home-assistant.io/integrations/workday/), joka tunnistaa pyhäpäivät automaattisesti yhteisön ylläpitämistä kalentereista.
+
+**Asennus:**
+1. **Asetukset** → **Laitteet ja palvelut** → **Lisää integraatio** → hae **Workday**
+2. Aseta **Maa** arvoon `FI` (Suomi)
+3. Jätä oletusasetukset (sulkee pyhäpäivät ja viikonloput arkipäivistä)
+4. Integraatio luo `binary_sensor.workday_sensor` — **on** = arkipäivä, **off** = pyhäpäivä/viikonloppu
+
+**Miten ennustaja käyttää sitä:**
+- Koordinaattori kutsuu `workday.check_date` -palvelua jokaiselle tunnille 170h ennusteikkunassa
+- Tämä palauttaa kunkin tulevan päivän arkipäivätiedon huomioiden kaikki Suomen pyhäpäivät
+- Ei ylläpidettäviä pyhäpäivälistoja — Workday-integraatio päivittyy automaattisesti HA-päivitysten myötä
+
+**Vaihto A-vaihtoehtoon:** Aseta `holidays.ha_workday_integration: true` tiedostossa `finland.yaml`. Tämä on oletusasetus.
+
+#### Vaihtoehto B: Sisäänrakennettu pyhäpäivälaskuri
+
+Käyttää aluekonfiguraatiotiedostossa (`finland.yaml`) määriteltyjä pyhäpäiväsääntöjä sisäänrakennetulla pääsiäisalgoritmilla.
+
+**Milloin käyttää B-vaihtoehtoa:**
+- Mallin testaus Home Assistantin ulkopuolella (koulutusputki käyttää aina B-vaihtoehtoa)
+- Home Assistant ilman Workday-integraatiota
+- Käyttöönotto alueelle, jota Workday-integraation pyhäpäiväkirjasto ei vielä tue
+
+**Vaihto B-vaihtoehtoon:** Aseta `holidays.ha_workday_integration: false` tiedostossa `finland.yaml`.
 
 ### Sensorit tasoittain
 
@@ -173,12 +201,17 @@ Kaikki sensorit luodaan automaattisesti koulutetun mallin aktiivisten tasojen pe
 
 Järjestelmää ohjaa yksittäinen aluekonfiguraatiotiedosto (`config/regions/finland.yaml`). Uuden alueen tukeminen:
 
-1. Luo uusi YAML-tiedosto (esim. `sweden.yaml`)
-2. Määrittele paikallinen hinta-API, säähavaintoasemat painoilla, pyhäpäivät, tariffit
-3. Lisää naapurimaiden hintalähteet rajat ylittäville piirteille
-4. Aja koulutus komennolla `--region sweden`
+1. **Tunnista säämittauspisteet** — etsi 5-8 maantieteellistä sijaintia kohdemaasta, jotka edustavat tuulivoiman, aurinkoenergian ja energiankulutuksen keskittymiä. Sijainnit painotetaan asennetun kapasiteetin (tuuli, aurinko) ja väestötiheyden (lämpötila/kysyntä) mukaan. Käytä alla olevaa tekoälykehotepohjaa.
+2. **Luo uusi YAML-tiedosto** (esim. `sweden.yaml`) tunnistetuilla sijainneilla, painoilla ja paikallisilla parametreilla
+3. **Määrittele paikallinen hinta-API** — etsi ilmainen rajapinta, joka tarjoaa day-ahead spot-hinnat kohteen tarjousalueelle
+4. **Konfiguroi pyhäpäivät** — kiinteät päivämäärät, pääsiäiseen sidotut päivät ja maakohtaiset erikoissäännöt
+5. **Lisää naapurimaiden hintalähteet** rajat ylittäville piirteille
+6. **Aseta kuluttajahinnoittelu** — ALV-kanta, energiavero ja jakeluverkko-operaattorien tariffit
+7. **Aja koulutus** komennolla `--region sweden`
 
 Valinnaiset datalähteet ohitetaan automaattisesti, jos niiden API-avain puuttuu tai aluekonfiguraatio ei sisällä niitä.
+
+Katso englanninkielisestä dokumentaatiosta ([TECHNICAL_GUIDE.md](TECHNICAL_GUIDE.md#finding-weather-locations-for-a-new-region)) tekoälykehotepohja uusien alueiden säämittauspisteiden tunnistamiseen.
 
 ---
 
