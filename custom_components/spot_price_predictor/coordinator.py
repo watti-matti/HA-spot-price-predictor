@@ -19,6 +19,10 @@ from .const import (
     CONF_CUSTOM_NIGHT_RATE,
     CONF_CUSTOM_VAT,
     CONF_CUSTOM_ENERGY_TAX,
+    CONF_SEARCH_START_HOURS,
+    CONF_SEARCH_DURATION_HOURS,
+    DEFAULT_SEARCH_START_HOURS,
+    DEFAULT_SEARCH_DURATION_HOURS,
     OPERATORS,
     DEFAULT_VAT_MULTIPLIER,
     DEFAULT_ENERGY_TAX,
@@ -65,6 +69,12 @@ class SpotPriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         self.enable_tier2 = entry.data.get(CONF_ENABLE_TIER2, False)
         self.has_fingrid = bool(fingrid_key)
+        self.search_start_hours = entry.data.get(
+            CONF_SEARCH_START_HOURS, DEFAULT_SEARCH_START_HOURS
+        )
+        self.search_duration_hours = entry.data.get(
+            CONF_SEARCH_DURATION_HOURS, DEFAULT_SEARCH_DURATION_HOURS
+        )
 
         # Build holiday set
         now = datetime.now(timezone.utc)
@@ -134,8 +144,12 @@ class SpotPriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "price_eur_kwh": round(consumer_price, 5),
                 })
 
-            # Cheapest hours calculation
-            cheapest_hours = self._find_cheapest_hours(forecast, now)
+            # Cheapest hours calculation (user-configurable search window)
+            cheapest_hours = self._find_cheapest_hours(
+                forecast, now,
+                start_offset_hours=self.search_start_hours,
+                duration_hours=self.search_duration_hours,
+            )
 
             # Current hour values
             current_spot = forecast[0]["price_eur_mwh"] if forecast else 0.0
@@ -165,27 +179,57 @@ class SpotPriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise UpdateFailed(f"Unexpected error: {err}") from err
 
     @staticmethod
+    def _format_offset(hours: int) -> str:
+        """Format hours as 'Nd Nh' string."""
+        d, h = divmod(hours, 24)
+        return f"{d}d {h}h"
+
+    @staticmethod
     def _find_cheapest_hours(
-        forecast: list[dict[str, Any]], now: datetime, window_hours: int = 24
+        forecast: list[dict[str, Any]],
+        now: datetime,
+        start_offset_hours: int = 24,
+        duration_hours: int = 48,
     ) -> dict[str, Any]:
-        """Find cheapest consecutive hour blocks in the next window.
+        """Find cheapest consecutive hour blocks in a configurable window.
+
+        Args:
+            forecast: Full forecast list with timestamp + price_eur_mwh.
+            now: Current UTC time.
+            start_offset_hours: Hours from now to start of search window.
+                Default 24 = tomorrow midnight (approximately).
+            duration_hours: Length of search window in hours.
+                Default 48 = two days.
 
         Returns start timestamps and average prices for blocks of
         1, 2, 3, 4, 6, and 8 consecutive hours, plus a list of all
         hours with below-average price (useful for flexible loads).
         """
-        cutoff = now + timedelta(hours=window_hours)
+        window_start = now + timedelta(hours=start_offset_hours)
+        window_end = window_start + timedelta(hours=duration_hours)
+
+        # Filter forecast to the search window
         upcoming = [
             f for f in forecast
-            if datetime.fromisoformat(f["timestamp"]) >= now
-            and datetime.fromisoformat(f["timestamp"]) < cutoff
+            if window_start <= datetime.fromisoformat(f["timestamp"]) < window_end
         ]
 
+        result: dict[str, Any] = {
+            "search_start": window_start.isoformat(),
+            "search_end": window_end.isoformat(),
+            "search_window": (
+                f"start {SpotPriceCoordinator._format_offset(start_offset_hours)}"
+                f" + duration {SpotPriceCoordinator._format_offset(duration_hours)}"
+            ),
+            "hours_in_window": len(upcoming),
+        }
+
         if not upcoming:
-            return {"window_hours": window_hours}
+            return result
 
         prices = [f["price_eur_mwh"] for f in upcoming]
         avg_price = sum(prices) / len(prices)
+        result["avg_price_in_window"] = round(avg_price, 2)
 
         # Find cheapest N consecutive hours
         def cheapest_block(n: int) -> tuple[str | None, float | None]:
@@ -200,21 +244,16 @@ class SpotPriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     best_start = upcoming[i]["timestamp"]
             return best_start, round(best_avg, 2) if best_start else None
 
-        # Hours with price below the window average
-        hours_below_avg = [
-            f["timestamp"] for f in upcoming
-            if f["price_eur_mwh"] < avg_price
-        ]
-
-        result: dict[str, Any] = {"window_hours": window_hours,
-                                   "avg_price_in_window": round(avg_price, 2)}
-
         for n in (1, 2, 3, 4, 6, 8):
             start, avg = cheapest_block(n)
             result[f"cheapest_{n}h_start"] = start
             key = "cheapest_1h_price" if n == 1 else f"cheapest_{n}h_avg_price"
             result[key] = avg
 
-        result["hours_below_avg"] = hours_below_avg
+        # All hours with price below window average
+        result["hours_below_avg"] = [
+            f["timestamp"] for f in upcoming
+            if f["price_eur_mwh"] < avg_price
+        ]
 
         return result

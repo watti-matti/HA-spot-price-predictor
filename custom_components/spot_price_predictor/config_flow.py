@@ -20,10 +20,14 @@ from .const import (
     CONF_CUSTOM_NIGHT_RATE,
     CONF_CUSTOM_VAT,
     CONF_CUSTOM_ENERGY_TAX,
+    CONF_SEARCH_START_HOURS,
+    CONF_SEARCH_DURATION_HOURS,
     REGIONS,
     OPERATORS,
     DEFAULT_VAT_MULTIPLIER,
     DEFAULT_ENERGY_TAX,
+    DEFAULT_SEARCH_START_HOURS,
+    DEFAULT_SEARCH_DURATION_HOURS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -128,6 +132,12 @@ class SpotPricePredictorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 self._data[CONF_ENABLE_TIER2] = user_input.get(
                     CONF_ENABLE_TIER2, True
                 )
+                self._data[CONF_SEARCH_START_HOURS] = user_input.get(
+                    CONF_SEARCH_START_HOURS, DEFAULT_SEARCH_START_HOURS
+                )
+                self._data[CONF_SEARCH_DURATION_HOURS] = user_input.get(
+                    CONF_SEARCH_DURATION_HOURS, DEFAULT_SEARCH_DURATION_HOURS
+                )
 
                 title = f"Spot Price ({REGIONS.get(self._data.get(CONF_REGION, 'finland'), 'Finland')})"
                 return self.async_create_entry(title=title, data=self._data)
@@ -135,6 +145,16 @@ class SpotPricePredictorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         schema = vol.Schema({
             vol.Optional(CONF_FINGRID_API_KEY, default=""): str,
             vol.Optional(CONF_ENABLE_TIER2, default=True): bool,
+            vol.Optional(
+                CONF_SEARCH_START_HOURS,
+                default=DEFAULT_SEARCH_START_HOURS,
+                description={"suggested_value": DEFAULT_SEARCH_START_HOURS},
+            ): vol.All(vol.Coerce(int), vol.Range(min=0, max=168)),
+            vol.Optional(
+                CONF_SEARCH_DURATION_HOURS,
+                default=DEFAULT_SEARCH_DURATION_HOURS,
+                description={"suggested_value": DEFAULT_SEARCH_DURATION_HOURS},
+            ): vol.All(vol.Coerce(int), vol.Range(min=6, max=168)),
         })
         return self.async_show_form(
             step_id="optional_apis", data_schema=schema, errors=errors
@@ -197,6 +217,13 @@ class SpotPriceOptionsFlow(config_entries.OptionsFlow):
                 elif not user_input.get(CONF_FINGRID_API_KEY):
                     new_data.pop(CONF_FINGRID_API_KEY, None)
 
+                new_data[CONF_SEARCH_START_HOURS] = user_input.get(
+                    CONF_SEARCH_START_HOURS, DEFAULT_SEARCH_START_HOURS
+                )
+                new_data[CONF_SEARCH_DURATION_HOURS] = user_input.get(
+                    CONF_SEARCH_DURATION_HOURS, DEFAULT_SEARCH_DURATION_HOURS
+                )
+
                 self.hass.config_entries.async_update_entry(
                     self._config_entry, data=new_data
                 )
@@ -239,6 +266,16 @@ class SpotPriceOptionsFlow(config_entries.OptionsFlow):
                 CONF_FINGRID_API_KEY,
                 default=current.get(CONF_FINGRID_API_KEY, ""),
             ): str,
+            vol.Optional(
+                CONF_SEARCH_START_HOURS,
+                default=current.get(CONF_SEARCH_START_HOURS, DEFAULT_SEARCH_START_HOURS),
+                description={"suggested_value": current.get(CONF_SEARCH_START_HOURS, DEFAULT_SEARCH_START_HOURS)},
+            ): vol.All(vol.Coerce(int), vol.Range(min=0, max=168)),
+            vol.Optional(
+                CONF_SEARCH_DURATION_HOURS,
+                default=current.get(CONF_SEARCH_DURATION_HOURS, DEFAULT_SEARCH_DURATION_HOURS),
+                description={"suggested_value": current.get(CONF_SEARCH_DURATION_HOURS, DEFAULT_SEARCH_DURATION_HOURS)},
+            ): vol.All(vol.Coerce(int), vol.Range(min=6, max=168)),
         })
         return self.async_show_form(
             step_id="init", data_schema=schema, errors=errors
