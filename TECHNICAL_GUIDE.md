@@ -139,12 +139,23 @@ Configurable per operator in `finland.yaml`. Default: Elenia (day 3.61, night 2.
 
 **Sensors:**
 
+**Forecast sensors (always created):**
+
 | Sensor | Unit | Description |
 |--------|------|-------------|
 | Spot Price Forecast | EUR/MWh | Current predicted price + 170h forecast attribute |
-| Consumer Price | EUR/kWh | Total price including transfer tariff, VAT, energy tax |
-| Cheapest Hours | timestamp | Cheapest 1h/2h/3h/4h/6h/8h blocks + hours below average |
+| Consumer Price | EUR/kWh | Total price including seller margin, transfer tariff, VAT, energy tax |
+| Cheapest Hours | timestamp | Cheapest 1h/2h/3h/4h/6h/8h blocks in configurable search window |
 | Week Price Stats | EUR/kWh | Min/avg/max consumer price over forecast window |
+
+**Spot price sensors (optional, when Nordpool entity is configured):**
+
+| Sensor | Unit | Description |
+|--------|------|-------------|
+| Spot Electricity Price | EUR/kWh | Actual buying price from Nordpool with continuous timeline |
+| Spot Electricity Selling Price | EUR/kWh | Spot minus PV selling commission (for solar panel owners) |
+
+The Nordpool sensors process raw today/tomorrow attributes into a continuous timeline, enabling side-by-side comparison with forecast predictions in the dashboard.
 
 The **Cheapest Hours** sensor is the primary automation tool. Its attributes provide start times and average prices for the cheapest consecutive N-hour blocks within the next 24 hours, plus a list of all hours with below-average prices. This is useful for scheduling controllable loads (EV charging, water heating, heat pumps) to the cheapest time windows.
 

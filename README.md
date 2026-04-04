@@ -28,18 +28,39 @@ All data sources are **free**. The optional Fingrid API key is also free (email 
 
 ## Sensors Created
 
+### Forecast Sensors (always created)
+
 | Sensor | Description |
 |--------|-------------|
 | `sensor.spot_price_forecast` | Current hour predicted price (EUR/MWh) with 170h forecast attribute |
-| `sensor.consumer_price` | Total consumer price (EUR/kWh) including VAT, transfer tariff, energy tax |
-| `sensor.cheapest_hours` | Cheapest 1/2/3/4/6/8h blocks with start times, avg prices, and all hours below average |
+| `sensor.consumer_price` | Total consumer price (EUR/kWh) including VAT, seller margin, transfer tariff, energy tax |
+| `sensor.cheapest_hours` | Cheapest 1/2/3/4/6/8h blocks within configurable search window |
 | `sensor.week_price_stats` | Weekly consumer price min/avg/max (EUR/kWh) |
 
-The **Cheapest Hours** sensor is the primary automation tool — use its attributes to schedule EV charging, water heating, or heat pump operation during the cheapest N-hour windows. The forecast sensors carry full 170-hour prediction arrays including weather context (wind, solar, temperature) for dashboards.
+The **Cheapest Hours** sensor is the primary automation tool — use its attributes to schedule EV charging, water heating, or heat pump operation during the cheapest N-hour windows. The search window start and duration are configurable in the integration settings (default: starting tomorrow, 48h window).
+
+### Spot Price Sensors (optional, when Nordpool entity is configured)
+
+If you have a Nordpool integration installed (e.g., [custom-components/nordpool](https://github.com/custom-components/nordpool)), you can link it in the configuration to get additional sensors:
+
+| Sensor | Description |
+|--------|-------------|
+| `sensor.spot_electricity_price` | Actual spot buying price from Nordpool with continuous timeline attribute |
+| `sensor.spot_electricity_selling_price` | Spot price minus PV selling commission (for solar panel owners) |
+
+**Setup:** Enter your Nordpool sensor entity ID (e.g., `sensor.nordpool_kwh_fi_eur_3_10_0`) in the operator configuration step. Optionally enable PV selling price and set the commission (EUR/kWh).
+
+These sensors provide a continuous timeline in their `timeline` attribute, combining Nordpool's today and tomorrow data into a single series. This enables side-by-side comparison of actual prices vs forecast in the dashboard.
 
 ### Dashboard
 
-An [ApexCharts dashboard example](docs/yaml_examples/apexcharts_dashboard.yaml) is included showing consumer price forecast with color-coded price levels, spot price, weekly average, wind speed, and temperature. Requires the [apexcharts-card](https://github.com/RomRider/apexcharts-card) custom card (install via HACS Frontend).
+An [ApexCharts dashboard example](docs/yaml_examples/apexcharts_dashboard.yaml) is included showing:
+- **Actual consumer price** from Nordpool (step-line, color-coded) — ground truth
+- **Forecast consumer price** from the predictor (smooth line) — prediction
+- **Weekly average** reference line
+- **Wind speed forecast** on secondary axis (key price driver)
+
+This allows visual comparison of how well the forecast matches reality. Requires the [apexcharts-card](https://github.com/RomRider/apexcharts-card) custom card (install via HACS Frontend).
 
 ## Feature Tiers
 

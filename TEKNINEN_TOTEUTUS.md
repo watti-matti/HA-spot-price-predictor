@@ -144,12 +144,23 @@ Konfiguroitavissa operaattorikohtaisesti tiedostossa `finland.yaml`. Oletus: Ele
 | `price_with_tariff_forecast` | EUR/kWh | Absoluuttinen kuluttajahinta |
 **Sensorit:**
 
+**Ennustesensorit (luodaan aina):**
+
 | Sensori | Yksikkö | Kuvaus |
 |---------|---------|--------|
 | Spot Price Forecast | EUR/MWh | Ennustettu spot-hinta + 170h ennuste |
-| Consumer Price | EUR/kWh | Kokonaishinta sisältäen siirtohinnan, ALV:n, energiaveron |
-| Cheapest Hours | aikaleima | Halvimmat 1h/2h/3h/4h/6h/8h jaksot + keskiarvon alittavat tunnit |
+| Consumer Price | EUR/kWh | Kokonaishinta sisältäen marginaalin, siirtohinnan, ALV:n, energiaveron |
+| Cheapest Hours | aikaleima | Halvimmat 1h/2h/3h/4h/6h/8h jaksot säädettävässä hakuikkunassa |
 | Week Price Stats | EUR/kWh | Kuluttajahinnan min/keskiarvo/max ennusteikkunassa |
+
+**Spot-hintasensorit (valinnainen, kun Nordpool-entiteetti on konfiguroitu):**
+
+| Sensori | Yksikkö | Kuvaus |
+|---------|---------|--------|
+| Spot Electricity Price | EUR/kWh | Todellinen ostohinta Nordpoolista jatkuvalla aikajanalla |
+| Spot Electricity Selling Price | EUR/kWh | Spot-hinta miinus aurinkosähkön myyntipalkkio |
+
+Nordpool-sensorit yhdistävät raakamuotoisen tänään/huomenna-datan jatkuvaksi aikajanaksi, mikä mahdollistaa toteutuneiden ja ennustettujen hintojen vertailun kojelaudalla.
 
 **Cheapest Hours** -sensori on ensisijainen automaatio-ohjauksen työkalu. Sen attribuutit tarjoavat alkamisajat ja keskihinnat halvimmille peräkkäisille N tunnin jaksoille seuraavan 24 tunnin aikana sekä listan kaikista tunneista, joiden hinta on keskiarvon alapuolella. Tämä soveltuu ohjattavien kuormien ajoitukseen (sähköauton lataus, lämminvesivaraaja, lämpöpumput) edullisimpiin aikaikkunoihin.
 
