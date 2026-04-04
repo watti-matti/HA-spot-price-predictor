@@ -54,8 +54,10 @@ _FIXED_HOLIDAYS = [
 # Easter-relative offsets
 _EASTER_OFFSETS = [
     -2,   # Good Friday
+    0,    # Easter Sunday
     1,    # Easter Monday
     39,   # Ascension Day
+    49,   # Whit Sunday
 ]
 
 
