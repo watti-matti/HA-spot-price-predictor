@@ -242,7 +242,10 @@ def run_evaluation(config: dict, out_dir: Path) -> None:
             if mask_all.sum() > 10 else 0.0
         )
 
-    # ── Feature importance ──────────────────────────────────────────────
+    # ── Feature importance (normalized by feature std) ────────────────
+    # Raw |coefficient| is misleading because features have different scales.
+    # Normalized importance = |coefficient| × std(feature) shows actual
+    # contribution to prediction variance in EUR/MWh.
     feature_importance = []
     for feat in coefs["features"]:
         name = feat["name"]
@@ -255,8 +258,33 @@ def run_evaluation(config: dict, out_dir: Path) -> None:
             tier = "T3"
         else:
             tier = "T1"
-        feature_importance.append({"name": name, "coef": c, "abs_coef": abs(c), "tier": tier})
-    feature_importance.sort(key=lambda x: x["abs_coef"], reverse=True)
+
+        # Compute feature std for normalization
+        if name in df.columns:
+            feat_std = float(df[name].std())
+        elif name == "stage1_pred":
+            # Approximate std of stage1 predictions
+            s1_coefs_arr = np.array([f["coef"] for f in coefs["stage1"]["features"]])
+            s1_preds = X @ s1_coefs_arr + coefs["stage1"]["intercept"]
+            feat_std = float(np.std(s1_preds))
+        elif name.startswith("pw_relu_"):
+            # Piecewise ReLU std depends on stage1 predictions
+            try:
+                bp = float(name.split("_")[-1])
+                s1_coefs_arr = np.array([f["coef"] for f in coefs["stage1"]["features"]])
+                s1_preds = X @ s1_coefs_arr + coefs["stage1"]["intercept"]
+                feat_std = float(np.std(np.maximum(0.0, s1_preds - bp)))
+            except (ValueError, IndexError):
+                feat_std = 1.0
+        else:
+            feat_std = 1.0
+
+        impact = abs(c) * feat_std
+        feature_importance.append({
+            "name": name, "coef": c, "abs_coef": abs(c),
+            "std": round(feat_std, 4), "impact": round(impact, 4), "tier": tier,
+        })
+    feature_importance.sort(key=lambda x: x["impact"], reverse=True)
 
     # ── Residual analysis ───────────────────────────────────────────────
     residuals = y_te_clip - preds
@@ -324,7 +352,9 @@ def run_evaluation(config: dict, out_dir: Path) -> None:
                          for k, v in tier_results.items()},
         "feature_importance": [
             {"name": f["name"], "coef": round(f["coef"], 4),
-             "abs_coef": round(f["abs_coef"], 4), "tier": f["tier"]}
+             "abs_coef": round(f["abs_coef"], 4),
+             "std": f.get("std", 1.0), "impact": f.get("impact", 0.0),
+             "tier": f["tier"]}
             for f in top_features
         ],
         "split_index": split,
@@ -716,30 +746,40 @@ setWindow(30);
   const fi = DATA.feature_importance;
   const tierColors = {{ T1: '#34d399', T2: '#60a5fa', T3: '#fb923c', Stage2: '#c084fc' }};
   const labels = fi.map(f => f.name);
-  const values = fi.map(f => f.abs_coef);
+  const values = fi.map(f => f.impact || 0);
   const bgColors = fi.map(f => tierColors[f.tier] || '#94a3b8');
   initChart(ctx, {{
     type: 'bar',
     data: {{
       labels: labels,
-      datasets: [{{ label: '|Coefficient|', data: values, backgroundColor: bgColors, borderWidth: 0 }}]
+      datasets: [{{ label: 'Normalized impact', data: values, backgroundColor: bgColors, borderWidth: 0 }}]
     }},
     options: {{
       indexAxis: 'y',
       scales: {{
-        x: {{ title: {{ display: true, text: '|Coefficient|', color: '#64748b' }} }},
-        y: {{ ticks: {{ font: {{ size: 11, family: 'monospace' }} }} }}
+        x: {{ title: {{ display: true, text: 'Impact: |coefficient| × std(feature)  [EUR/MWh]', color: '#64748b' }} }},
+        y: {{ ticks: {{ color: '#e2e8f0', font: {{ size: 11, family: 'monospace' }} }} }}
       }},
       plugins: {{
         legend: {{ display: true,
           labels: {{
+            color: '#e2e8f0',
             generateLabels: function() {{
               return [
-                {{ text: 'T1: Base', fillStyle: '#34d399', strokeStyle: '#34d399' }},
-                {{ text: 'T2: Cross-border', fillStyle: '#60a5fa', strokeStyle: '#60a5fa' }},
-                {{ text: 'T3: Grid', fillStyle: '#fb923c', strokeStyle: '#fb923c' }},
-                {{ text: 'Stage 2', fillStyle: '#c084fc', strokeStyle: '#c084fc' }},
+                {{ text: 'T1: Base', fillStyle: '#34d399', strokeStyle: '#34d399', fontColor: '#e2e8f0' }},
+                {{ text: 'T2: Cross-border', fillStyle: '#60a5fa', strokeStyle: '#60a5fa', fontColor: '#e2e8f0' }},
+                {{ text: 'T3: Grid', fillStyle: '#fb923c', strokeStyle: '#fb923c', fontColor: '#e2e8f0' }},
+                {{ text: 'Stage 2', fillStyle: '#c084fc', strokeStyle: '#c084fc', fontColor: '#e2e8f0' }},
               ];
+            }}
+          }}
+        }},
+        tooltip: {{
+          callbacks: {{
+            afterLabel: function(ctx) {{
+              const f = fi[ctx.dataIndex];
+              return 'Coef: ' + (f.coef > 0 ? '+' : '') + f.coef.toFixed(4) +
+                     '  Std: ' + (f.std || 0).toFixed(3);
             }}
           }}
         }}
