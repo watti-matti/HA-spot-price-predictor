@@ -126,7 +126,8 @@ To adapt for another country, create a new region YAML file and retrain. The mod
 
 ## Technical Documentation
 
-See [TECHNICAL_GUIDE.md](TECHNICAL_GUIDE.md) for architecture diagrams, feature engineering formulas, model details, and validation results.
+- [TECHNICAL_GUIDE.md](TECHNICAL_GUIDE.md) — Architecture, feature engineering, model details (English)
+- [TEKNINEN_TOTEUTUS.md](TEKNINEN_TOTEUTUS.md) — Arkkitehtuuri, piirre-engineering, mallin kuvaus (suomeksi)
 
 ## License
 
