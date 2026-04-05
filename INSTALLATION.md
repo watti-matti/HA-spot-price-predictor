@@ -9,29 +9,31 @@ Step-by-step installation guide for Spot Price Predictor.
 - Optional: [Nordpool integration](https://github.com/custom-components/nordpool) for actual price comparison
 - Optional: [ApexCharts Card](https://github.com/RomRider/apexcharts-card) for dashboard (install via HACS Frontend)
 
-## Step 1: Add Repository to HACS
+## Step 1: Add Custom Repository to HACS
 
 1. Open **HACS** → **Integrations**
 2. Click the **⋮** menu (top right) → **Custom repositories**
-3. Enter URL: `https://github.com/watti-matti/HA-spot-price-predictor`
-4. Category: **Integration**
-5. Click **Add**
+3. Enter repository URL: `https://github.com/watti-matti/HA-spot-price-predictor`
+4. Select type: **Integration**
+5. Click **ADD**
 
 ![HACS Custom Repository](docs/screenshots/install-01-hacs-repo.png)
 
-## Step 2: Download Integration
+## Step 2: Download the Integration
 
-1. Search for **"Spot Price Predictor"** in HACS Integrations
+1. Find **Spot Price Predictor** in HACS Integrations
 2. Click **Download**
-3. **Restart Home Assistant**
+3. The integration will be installed to `/config/custom_components/spot_price_predictor/`
+4. **Restart Home Assistant** — this is required before the integration can be configured
 
 ![HACS Download](docs/screenshots/install-02-hacs-download.png)
 
-## Step 3: Add Integration
+## Step 3: Add the Integration
 
-1. Go to **Settings** → **Devices & Services**
+1. After restart, go to **Settings** → **Devices & Services**
 2. Click **+ Add Integration** (bottom right)
-3. Search for **"Spot Price Predictor"**
+3. Search for **"Spot Price Predictor"** (or type "spot p")
+4. Click to start the configuration wizard
 
 ![Add Integration](docs/screenshots/install-03-add-integration.png)
 
@@ -39,87 +41,128 @@ Step-by-step installation guide for Spot Price Predictor.
 
 Select your electricity market region. Currently supported: **Finland**.
 
+Click **Submit** to continue.
+
 ![Select Region](docs/screenshots/install-04-region.png)
 
-## Step 5: Configure Operator & Tariffs
+## Step 5: Configure Operator, Tariffs, and Price Sources
 
-Configure your electricity pricing:
+This is the main configuration page where you set up your electricity pricing and optional data sources.
 
-1. **Operator** — Select your network operator (Elenia, Caruna Espoo, Caruna North, Helen) or **Custom** for manual rates
-2. **Seller's margin** — Your energy retailer's margin from your contract (EUR/kWh, excl. VAT). Default 0.00.
-3. **Day/Night transfer rates** — Pre-filled based on operator selection. For **yleissiirto** (general transfer), set both to the same value.
-4. **VAT multiplier** — 1.255 (25.5%) for Finland
-5. **Energy tax** — 0.02325 EUR/kWh (class I, 2026)
-6. **Nordpool entity** — If you have a Nordpool integration, enter the entity ID (e.g., `sensor.nordpool_kwh_fi_eur_3_10_0`) to get actual price comparison sensors. Leave empty to skip.
-7. **PV selling price** — Check to enable a selling price sensor for solar panel owners. Set the commission (e.g., 0.002 = 0.2 c/kWh).
+![Operator Configuration](docs/screenshots/install-05-operator.png)
 
-![Operator Config](docs/screenshots/install-05-operator.png)
+**Operator selection:**
+- Select your network operator (**Elenia**, **Caruna Espoo**, **Caruna North**, **Helen**) — transfer rates are pre-filled
+- Select **Custom** to enter your own day/night transfer rates
 
-## Step 6: Optional Data Sources
+**Price parameters (all values excl. VAT):**
+- **Energy seller's margin** — from your electricity contract (e.g., 0.00383 EUR/kWh)
+- **Day transfer rate** — applies every day 07:00-22:00
+- **Night transfer rate** — applies every day 22:00-07:00
+- **VAT multiplier** — 1.255 for Finland (25.5%)
+- **Energy tax** — 0.02325 EUR/kWh (class I, 2026)
 
-1. **Cross-border price data** — Enabled by default. Uses free Swedish and Estonian price data to improve predictions. No API key needed.
-2. **Fingrid API key** — Optional. Register for free at [data.fingrid.fi](https://data.fingrid.fi) to add nuclear production and cross-border power flow data (Tier 3 features).
-3. **Cheapest hours search window** — Configure where to look for the cheapest hours:
-   - **Start offset**: Hours from now (default 24 = tomorrow)
-   - **Duration**: Window length in hours (default 48 = 2 days)
+**Nordpool integration (optional):**
+- **Nordpool entity ID** — enter your Nordpool sensor entity (e.g., `sensor.nordpool_kwh_fi_eur_3_10_0`) to get actual price comparison sensors. Leave empty to skip.
+- **Enable PV selling** — check if you have solar panels to get a selling price sensor
+- **PV sell commission** — your electricity retailer's selling commission (e.g., 0.002 EUR/kWh = 0.2 c/kWh)
+
+Click **Submit** to continue.
+
+## Step 6: Optional Data Sources and Cheapest Hours
+
+Configure prediction data sources and the cheapest hours search window.
 
 ![Optional APIs](docs/screenshots/install-06-apis.png)
 
-## Step 7: Done!
+**Data sources:**
+- **Cross-border price data** — enabled by default. Uses free Swedish (SE1/SE3) and Estonian price data to improve predictions.
+- **Fingrid API key** — optional. Register for free at [data.fingrid.fi](https://data.fingrid.fi) for nuclear production and cross-border flow data.
 
-After completing the setup, the following sensors are created:
+**Cheapest hours search window:**
+- **Start offset** — hours from now to begin searching (default 24 = tomorrow)
+- **Duration** — search window length in hours (default 48 = 2 days)
 
-### Forecast Sensors (always created)
+**ApexCharts dashboard:** A ready-made dashboard YAML is available at the link shown in the dialog. See [Step 8](#step-8-add-dashboard-optional) below.
+
+Click **Submit** to complete the setup.
+
+## Step 7: Device Created
+
+The integration creates a device called **Spot Price Predictor** with all sensors. You can assign it to an area (e.g., your home).
+
+Click **Finish**.
+
+![Device Created](docs/screenshots/install-07-device-created.png)
+
+## Step 8: Verify Sensors
+
+Go to **Settings** → **Devices & Services** → **Spot Price Predictor** → **Sensors** to verify all sensors are working.
+
+![Sensors](docs/screenshots/install-08-sensors.png)
+
+**Forecast sensors (always created):**
 
 | Sensor | Description |
 |--------|-------------|
-| Spot Price Forecast | Predicted price (EUR/MWh) with 170h forecast |
-| Consumer Price | Total price (EUR/kWh) with tariff, VAT, tax |
-| Cheapest Hours | Best time windows for flexible loads |
-| Week Price Stats | Weekly min/avg/max consumer price |
+| **Spot Price Forecast** | Predicted spot price (EUR/MWh) with 170h forecast |
+| **Consumer Price** | Total consumer price (EUR/kWh) including all overhead |
+| **Cheapest Hours** | Best time windows for scheduling flexible loads |
+| **Week Price Stats** | Weekly min/avg/max consumer price |
 
-### Spot Price Sensors (if Nordpool entity configured)
+**Spot price sensors (when Nordpool entity is configured):**
 
 | Sensor | Description |
 |--------|-------------|
-| Spot Electricity Price | Actual buying price with continuous timeline |
-| Spot Electricity Selling Price | Selling price for solar PV (if enabled) |
+| **Spot Electricity Price** | Actual consumer buying price from Nordpool |
+| **Spot Electricity Selling Price** | Selling price for solar PV owners |
 
-![Sensors Created](docs/screenshots/install-07-sensors.png)
+## Step 9: Add Dashboard (Optional)
 
-## Step 8: Add Dashboard (Optional)
+Install [ApexCharts Card](https://github.com/RomRider/apexcharts-card) via HACS → Frontend, then copy the dashboard YAML from the repository:
 
-1. Install [ApexCharts Card](https://github.com/RomRider/apexcharts-card) via HACS → Frontend
-2. Copy the dashboard YAML from [apexcharts_dashboard.yaml](docs/yaml_examples/apexcharts_dashboard.yaml)
-3. In HA, go to your dashboard → **Edit** → **+ Add Card** → **Manual** → paste the YAML
+![Dashboard Example](docs/screenshots/example_UI.png)
 
-The dashboard shows actual prices vs forecast for ground truth comparison:
+The dashboard YAML is available at: [docs/yaml_examples/apexcharts_dashboard.yaml](docs/yaml_examples/apexcharts_dashboard.yaml)
 
-![Dashboard](docs/screenshots/install-08-dashboard.png)
+To add it to your dashboard:
+1. Go to your HA dashboard → **Edit** → **+ Add Card** → **Manual**
+2. Paste the YAML content
+3. Adjust entity names if your installation uses different names
+
+The dashboard shows:
+- **Actual consumer price** from Nordpool (step-line, color-coded) — ground truth
+- **Forecast consumer price** (smooth line) — ML prediction
+- **PV selling price** (yellow line) — for solar panel owners
+- **Weekly average** reference line
+- **Wind speed forecast** on secondary axis
 
 ## Changing Settings Later
 
-Click **Configure** on the integration card in **Settings → Devices & Services** to change:
-- Operator and tariff rates
+You can change all settings after installation. Go to **Settings** → **Devices & Services** → **Spot Price Predictor** → **Configure** to modify:
+- Operator and transfer rates
 - Seller's margin
 - Nordpool entity and PV settings
 - Fingrid API key
 - Cheapest hours search window
 
-![Options](docs/screenshots/install-09-options.png)
-
 ## Troubleshooting
 
 **No sensors visible after installation:**
-- Make sure you completed the config flow (Step 3-6 above)
-- Check **Settings → System → Logs** for errors containing `spot_price_predictor`
+- Make sure you completed the full configuration wizard (Steps 3-6)
+- Check **Settings** → **System** → **Logs** for errors containing `spot_price_predictor`
+- Try removing the integration and adding it again
 
 **Cheapest Hours shows "unavailable":**
-- The search window may extend beyond the forecast range (170h). Reduce the start offset + duration to stay within 170 hours total.
+- The search window (start + duration) may extend beyond the forecast range (170 hours). Reduce the values.
 
-**Forecast values seem wrong:**
-- The bundled model was trained on 2024-2026 Finnish data. Retrain with your own data for better accuracy — see [TECHNICAL_GUIDE.md](TECHNICAL_GUIDE.md).
+**Spot Electricity Price shows wrong values:**
+- Verify that the Nordpool entity ID is correct in the configuration
+- The sensor applies the same overhead (margin + transfer + tax + VAT) as the forecast consumer price
+
+**Forecast seems inaccurate:**
+- The bundled model was trained on recent Finnish data. For best accuracy, retrain quarterly — see [TECHNICAL_GUIDE.md](TECHNICAL_GUIDE.md#accuracy-and-retraining).
 
 ---
 
-*[(Suomenkieliset ohjeet)](TEKNINEN_TOTEUTUS.md)*
+*[(Suomenkieliset tekniset ohjeet)](TEKNINEN_TOTEUTUS.md)*
