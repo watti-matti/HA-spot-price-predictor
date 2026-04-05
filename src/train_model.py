@@ -230,7 +230,7 @@ def train(
             tier_info["tier3"] = True
 
     coefs_dict = {
-        "model_version": "v3.1",
+        "model_version": "v4.0",
         "intercept": float(intercept2),
         "piecewise_breakpoints": pw_breaks,
         "feature_count": len(aug_names),

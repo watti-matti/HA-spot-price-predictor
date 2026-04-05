@@ -70,8 +70,8 @@ def _device_info(entry: ConfigEntry) -> dict[str, Any]:
         "identifiers": {(DOMAIN, entry.entry_id)},
         "name": "Spot Price Predictor",
         "manufacturer": "watti-matti",
-        "model": "ML Price Predictor v3.1",
-        "sw_version": "1.1.0",
+        "model": "Spot Price Predictor",
+        "sw_version": "1.4.0",
     }
 
 

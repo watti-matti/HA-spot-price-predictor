@@ -14,8 +14,8 @@
         "data": {
           "operator": "Operator",
           "seller_margin": "Energy seller's margin (EUR/kWh, excl. VAT, from your contract)",
-          "custom_day_rate": "Day transfer rate (EUR/kWh)",
-          "custom_night_rate": "Night transfer rate (EUR/kWh)",
+          "custom_day_rate": "Day transfer rate (EUR/kWh, excl. VAT)",
+          "custom_night_rate": "Night transfer rate (EUR/kWh, excl. VAT)",
           "custom_vat": "VAT multiplier (e.g. 1.255 = 25.5%)",
           "custom_energy_tax": "Energy tax (EUR/kWh)",
           "nordpool_entity": "Nordpool sensor entity ID (e.g., sensor.nordpool_kwh_fi_eur_3_10_0, leave empty to skip)",
@@ -50,8 +50,8 @@
         "data": {
           "operator": "Operator",
           "seller_margin": "Energy seller's margin (EUR/kWh, excl. VAT, from your contract)",
-          "custom_day_rate": "Day transfer rate (EUR/kWh)",
-          "custom_night_rate": "Night transfer rate (EUR/kWh)",
+          "custom_day_rate": "Day transfer rate (EUR/kWh, excl. VAT)",
+          "custom_night_rate": "Night transfer rate (EUR/kWh, excl. VAT)",
           "custom_vat": "VAT multiplier (e.g. 1.255 = 25.5%)",
           "custom_energy_tax": "Energy tax (EUR/kWh)",
           "enable_tier2": "Enable cross-border price data",

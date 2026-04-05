@@ -1,5 +1,5 @@
 {
-  "model_version": "v3.1",
+  "model_version": "v4.0",
   "intercept": -1.356780953224347,
   "piecewise_breakpoints": [
     2.2,
