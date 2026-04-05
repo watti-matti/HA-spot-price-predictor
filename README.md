@@ -91,6 +91,8 @@ For yleissiirto (general transfer), set day and night rates equal.
 
 ## Installation
 
+**[Step-by-step installation guide with screenshots](INSTALLATION.md)**
+
 ### HACS (Recommended)
 
 1. Open **HACS** in Home Assistant
