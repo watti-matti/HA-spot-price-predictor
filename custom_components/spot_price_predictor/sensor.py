@@ -277,15 +277,20 @@ def _spot_to_consumer(spot_eur_kwh: float, hour: int, tariff: dict[str, float]) 
 
 
 def _process_nordpool_data(hass: HomeAssistant, entity_id: str) -> list[dict[str, Any]]:
-    """Process Nordpool sensor today+tomorrow attributes into continuous timeline."""
+    """Process Nordpool sensor attributes into a deduplicated continuous timeline.
+
+    Tries 'data' attribute first, then falls back to today/tomorrow.
+    Returns sorted, deduplicated list with one entry per hour.
+    """
     state = hass.states.get(entity_id)
     if not state:
         return []
 
-    result = []
+    # Use dict keyed by timestamp to deduplicate
+    entries: dict[str, float] = {}
     attrs = state.attributes
 
-    # Try 'data' attribute (some Nordpool integrations)
+    # Try 'data' attribute first (some Nordpool integrations)
     data_attr = attrs.get("data")
     if data_attr and isinstance(data_attr, list):
         for d in data_attr:
@@ -293,24 +298,30 @@ def _process_nordpool_data(hass: HomeAssistant, entity_id: str) -> list[dict[str
             price = d.get("TotalPrice") or d.get("total_price") or d.get("price")
             if ts is not None and price is not None:
                 if isinstance(ts, (int, float)) and ts > 1e9:
-                    ts_iso = datetime.fromtimestamp(ts).isoformat()
+                    ts_key = datetime.fromtimestamp(ts).isoformat()
                 else:
-                    ts_iso = str(ts)
-                result.append({"timestamp": ts_iso, "price_eur_kwh": float(price)})
-        return result
+                    ts_key = str(ts)
+                entries[ts_key] = float(price)
+    else:
+        # Fallback: try today/tomorrow attributes
+        # Use raw_today/raw_tomorrow first (more reliable), then today/tomorrow
+        for attr_name in ("raw_today", "raw_tomorrow", "today", "tomorrow"):
+            prices = attrs.get(attr_name)
+            if prices and isinstance(prices, list):
+                for p in prices:
+                    if isinstance(p, dict):
+                        ts = p.get("start") or p.get("timestamp")
+                        price = p.get("value") or p.get("price")
+                        if ts and price is not None:
+                            ts_key = str(ts)
+                            if ts_key not in entries:  # Don't overwrite
+                                entries[ts_key] = float(price)
 
-    # Try today/tomorrow and raw_today/raw_tomorrow
-    for attr_name in ("today", "tomorrow", "raw_today", "raw_tomorrow"):
-        prices = attrs.get(attr_name)
-        if prices and isinstance(prices, list):
-            for p in prices:
-                if isinstance(p, dict):
-                    ts = p.get("start") or p.get("timestamp")
-                    price = p.get("value") or p.get("price")
-                    if ts and price is not None:
-                        result.append({"timestamp": str(ts), "price_eur_kwh": float(price)})
-
-    return result
+    # Sort by timestamp and return
+    return sorted(
+        [{"timestamp": k, "price_eur_kwh": v} for k, v in entries.items()],
+        key=lambda x: x["timestamp"],
+    )
 
 
 class SpotElectricityPriceSensor(CoordinatorEntity, SensorEntity):
@@ -416,32 +427,16 @@ class SpotElectricitySellingPriceSensor(CoordinatorEntity, SensorEntity):
         if not entity_id:
             return {}
 
-        # Actual selling prices from Nordpool (today + tomorrow)
+        # Selling price = spot price minus commission (no overhead added)
+        # Same time range as the buying price sensor (Nordpool today + tomorrow only)
         raw_timeline = _process_nordpool_data(self._hass, entity_id)
-        actual_selling = {
-            e["timestamp"]: round(max(0.0, e["price_eur_kwh"] - commission), 5)
+        timeline = [
+            {
+                "timestamp": e["timestamp"],
+                "price_eur_kwh": round(max(0.0, e["price_eur_kwh"] - commission), 5),
+            }
             for e in raw_timeline
-        }
-
-        # Forecasted selling prices from spot forecast (extends to 170h)
-        forecast_selling = {}
-        if self.coordinator.data:
-            spot_forecast = self.coordinator.data.get("spot_forecast", [])
-            for f in spot_forecast:
-                ts = f["timestamp"]
-                if ts not in actual_selling:  # Don't overwrite actuals
-                    spot_kwh = f["price_eur_mwh"] / 1000.0
-                    forecast_selling[ts] = round(max(0.0, spot_kwh - commission), 5)
-
-        # Merge: actuals first, then forecasted for future hours
-        combined = {}
-        combined.update(forecast_selling)
-        combined.update(actual_selling)  # Actuals overwrite forecasts
-
-        timeline = sorted(
-            [{"timestamp": k, "price_eur_kwh": v} for k, v in combined.items()],
-            key=lambda x: x["timestamp"],
-        )
+        ]
 
         return {
             "timeline": timeline,

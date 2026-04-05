@@ -73,7 +73,7 @@ series:
     color: lightblue
     opacity: 0.6
     float_precision: 2
-    extend_to: now
+    extend_to: false
     show:
       in_header: true
       in_chart: true
