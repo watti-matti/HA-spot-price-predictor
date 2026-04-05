@@ -22,6 +22,16 @@ from .const import (
     CONF_ENABLE_PV_SELLING,
     CONF_PV_SELL_COMMISSION,
     DEFAULT_PV_SELL_COMMISSION,
+    CONF_OPERATOR,
+    CONF_CUSTOM_DAY_RATE,
+    CONF_CUSTOM_NIGHT_RATE,
+    CONF_CUSTOM_VAT,
+    CONF_CUSTOM_ENERGY_TAX,
+    CONF_SELLER_MARGIN,
+    DEFAULT_VAT_MULTIPLIER,
+    DEFAULT_ENERGY_TAX,
+    DEFAULT_SELLER_MARGIN,
+    OPERATORS,
 )
 from .coordinator import SpotPriceCoordinator
 
@@ -240,6 +250,32 @@ class WeekStatsSensor(CoordinatorEntity, SensorEntity):
         return _device_info(self._entry)
 
 
+def _get_tariff_config(entry: ConfigEntry) -> dict[str, float]:
+    """Extract tariff parameters from config entry."""
+    operator_id = entry.data.get(CONF_OPERATOR, "elenia")
+    if operator_id == "custom":
+        day_rate = entry.data.get(CONF_CUSTOM_DAY_RATE, 0.0361)
+        night_rate = entry.data.get(CONF_CUSTOM_NIGHT_RATE, 0.0220)
+    else:
+        op = OPERATORS.get(operator_id, OPERATORS["elenia"])
+        day_rate = op["day_rate"]
+        night_rate = op["night_rate"]
+    return {
+        "day_rate": day_rate,
+        "night_rate": night_rate,
+        "vat": entry.data.get(CONF_CUSTOM_VAT, DEFAULT_VAT_MULTIPLIER),
+        "energy_tax": entry.data.get(CONF_CUSTOM_ENERGY_TAX, DEFAULT_ENERGY_TAX),
+        "seller_margin": entry.data.get(CONF_SELLER_MARGIN, DEFAULT_SELLER_MARGIN),
+    }
+
+
+def _spot_to_consumer(spot_eur_kwh: float, hour: int, tariff: dict[str, float]) -> float:
+    """Convert spot price to consumer price with full overhead."""
+    is_night = hour < 7 or hour >= 22
+    transfer = tariff["night_rate"] if is_night else tariff["day_rate"]
+    return (spot_eur_kwh + tariff["seller_margin"] + transfer + tariff["energy_tax"]) * tariff["vat"]
+
+
 def _process_nordpool_data(hass: HomeAssistant, entity_id: str) -> list[dict[str, Any]]:
     """Process Nordpool sensor today+tomorrow attributes into continuous timeline."""
     state = hass.states.get(entity_id)
@@ -278,7 +314,11 @@ def _process_nordpool_data(hass: HomeAssistant, entity_id: str) -> list[dict[str
 
 
 class SpotElectricityPriceSensor(CoordinatorEntity, SensorEntity):
-    """Actual spot electricity buying price from Nordpool as continuous timeline."""
+    """Actual total consumer electricity price from Nordpool.
+
+    Applies the same overhead as the forecast consumer price:
+    (spot + seller_margin + transfer + energy_tax) x VAT
+    """
 
     _attr_has_entity_name = True
     _attr_name = "Spot Electricity Price"
@@ -300,7 +340,10 @@ class SpotElectricityPriceSensor(CoordinatorEntity, SensorEntity):
         state = self._hass.states.get(entity_id)
         if state and state.state not in ("unknown", "unavailable"):
             try:
-                return float(state.state)
+                spot = float(state.state)
+                tariff = _get_tariff_config(self._entry)
+                now_hour = datetime.now().hour
+                return round(_spot_to_consumer(spot, now_hour, tariff), 5)
             except (ValueError, TypeError):
                 pass
         return None
@@ -310,10 +353,26 @@ class SpotElectricityPriceSensor(CoordinatorEntity, SensorEntity):
         entity_id = self._entry.data.get(CONF_NORDPOOL_ENTITY, "")
         if not entity_id:
             return {}
+        tariff = _get_tariff_config(self._entry)
+        raw_timeline = _process_nordpool_data(self._hass, entity_id)
+        # Apply consumer price overhead to each hour
+        consumer_timeline = []
+        for entry_item in raw_timeline:
+            try:
+                ts = datetime.fromisoformat(entry_item["timestamp"])
+                local_hour = (ts.hour + 2) % 24  # Approximate Finnish local
+                consumer = _spot_to_consumer(entry_item["price_eur_kwh"], local_hour, tariff)
+                consumer_timeline.append({
+                    "timestamp": entry_item["timestamp"],
+                    "price_eur_kwh": round(consumer, 5),
+                })
+            except (ValueError, TypeError):
+                continue
         return {
-            "timeline": _process_nordpool_data(self._hass, entity_id),
+            "timeline": consumer_timeline,
             "source_entity": entity_id,
             "unit": "EUR/kWh",
+            "includes": "spot + margin + transfer + tax + VAT",
         }
 
     @property

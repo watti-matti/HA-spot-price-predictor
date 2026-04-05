@@ -2,8 +2,12 @@
 # ================================================
 # Requires: custom:apexcharts-card (install via HACS Frontend)
 #
-# Shows actual Nordpool prices vs forecast for ground truth comparison,
-# plus weighted wind speed as the key price driver.
+# Shows:
+#   - Actual consumer price from Nordpool (ground truth)
+#   - Forecast consumer price (prediction)
+#   - PV selling price (for solar panel owners, optional)
+#   - Weekly average reference line
+#   - Weighted wind speed (key price driver)
 #
 # Configure your Nordpool entity in the integration settings.
 # Adjust entity names if your installation uses different names.
@@ -58,9 +62,7 @@ now:
   show: true
   label: Now
 series:
-  # ── Actual Nordpool Consumer Price (ground truth) ──────────────
-  # Uses the processed timeline from spot_electricity_price sensor.
-  # Step-line shows actual hourly prices up to current time.
+  # ── Actual Consumer Price (ground truth, includes all overhead) ──
   - entity: sensor.spot_price_predictor_spot_electricity_price
     yaxis_id: price
     name: Actual Consumer Price
@@ -98,7 +100,6 @@ series:
       ]);
 
   # ── Forecast Consumer Price ────────────────────────────────────
-  # Model prediction extending into the future.
   - entity: sensor.spot_price_predictor_consumer_price
     yaxis_id: price
     name: Forecast Consumer Price
@@ -131,6 +132,31 @@ series:
         Math.max(0, f.price_eur_kwh * 100)
       ]);
 
+  # ── PV Selling Price (optional, only if sensor exists) ─────────
+  # Remove this section if you don't have solar panels.
+  - entity: sensor.spot_price_predictor_spot_electricity_selling_price
+    yaxis_id: price
+    name: PV Selling Price
+    unit: c/kWh
+    type: line
+    curve: stepline
+    stroke_width: 1
+    color: "#fbbf24"
+    opacity: 0.7
+    show:
+      legend_value: false
+      in_header: false
+      in_chart: true
+      extremas: false
+      datalabels: false
+    data_generator: |
+      const timeline = entity.attributes.timeline;
+      if (!timeline) return [];
+      return timeline.map(t => [
+        new Date(t.timestamp).getTime(),
+        Math.max(0, t.price_eur_kwh * 100)
+      ]);
+
   # ── Forecast Week Average (reference line) ─────────────────────
   - entity: sensor.spot_price_predictor_week_price_stats
     yaxis_id: price
@@ -161,7 +187,6 @@ series:
       return forecast.map(f => [new Date(f.timestamp).getTime(), avgCents]);
 
   # ── Weighted Wind Speed Forecast ───────────────────────────────
-  # Wind is the #1 driver of Finnish electricity prices.
   - entity: sensor.spot_price_predictor_spot_price_forecast
     yaxis_id: wind
     name: Wind Forecast (weighted)
