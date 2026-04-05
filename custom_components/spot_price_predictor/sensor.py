@@ -317,20 +317,10 @@ def _process_nordpool_data(hass: HomeAssistant, entity_id: str) -> list[dict[str
                             if ts_key not in entries:  # Don't overwrite
                                 entries[ts_key] = float(price)
 
-    # Resample to hourly: group by hour, take mean of sub-hourly entries
-    # This ensures consistent 1-hour resolution matching the forecast data
-    hourly: dict[str, list[float]] = {}
-    for ts_key, price in entries.items():
-        try:
-            dt = datetime.fromisoformat(ts_key)
-            hour_key = dt.replace(minute=0, second=0, microsecond=0).isoformat()
-            hourly.setdefault(hour_key, []).append(price)
-        except (ValueError, TypeError):
-            continue
-
-    # Average sub-hourly values into one hourly entry
+    # Return full resolution (15-min or hourly depending on source)
+    # sorted and deduplicated
     return sorted(
-        [{"timestamp": k, "price_eur_kwh": sum(v) / len(v)} for k, v in hourly.items()],
+        [{"timestamp": k, "price_eur_kwh": v} for k, v in entries.items()],
         key=lambda x: x["timestamp"],
     )
 
