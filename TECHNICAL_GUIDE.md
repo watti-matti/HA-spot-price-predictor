@@ -289,15 +289,82 @@ Additional context for Sweden:
 
 ---
 
-## Accuracy Targets
+## Accuracy and Retraining
 
-| Configuration | Expected MAE | Notes |
-|---------------|-------------|-------|
-| Tier 1 (28 features) | ~29-30 EUR/MWh | Matches existing v3 baseline |
-| Tier 1+2 (34 features) | ~25-28 EUR/MWh | Cross-border spreads help |
-| Tier 1+2+3 (38 features) | ~22-26 EUR/MWh | Nuclear + capacity for extremes |
+### Current performance (90-day half-life, 2-year training)
 
-Evaluation uses time-ordered 85/15 split with hourly, monthly, and segment-level (peak/off-peak, workday/weekend) breakdown.
+| Configuration | MAE (EUR/MWh) | R² |
+|---------------|:---:|:---:|
+| Tier 1 only (28 features) | 3.79 | 0.505 |
+| Tier 1+2 (34 features) | 3.40 | 0.511 |
+| Tier 1+2+3 (38 features) | **3.01** | **0.623** |
+
+Evaluation uses time-ordered 85/15 split with hourly, monthly, and segment-level breakdown.
+
+### Why retraining is needed
+
+The model uses fixed coefficients that do not update automatically. The Finnish electricity market is evolving rapidly due to:
+- Growing wind power capacity (~7 GW installed, increasing annually)
+- New interconnector projects and capacity changes
+- Shifting demand patterns from electrification of heating and transport
+
+Analysis shows that model accuracy degrades over time without retraining:
+
+| Days since training | MAE degradation |
+|:---:|:---:|
+| 0-30 | baseline |
+| 60 | +12% |
+| 90 | +24% |
+| 150 | +21% |
+
+### Recommended retraining frequency
+
+**Retrain every 3-4 months (quarterly).** Simulation of rolling retraining intervals shows:
+
+| Retrain interval | Average MAE (EUR/MWh) |
+|:---:|:---:|
+| Every 90 days | 3.29 |
+| Every 120 days | **3.27** (optimal) |
+| Every 180 days | 3.47 |
+| Every 365 days | 3.72 |
+
+### When to retrain
+
+- **Routine:** Every 3-4 months as part of regular maintenance
+- **Major market event:** New nuclear unit, new interconnector, regulatory change
+- **Performance degradation:** When observed AM/PM peak bias exceeds ±2 EUR/MWh
+
+### How to retrain
+
+```bash
+# On your PC (requires Python with numpy, pandas, scipy)
+cd HA-spot-price-predictor
+pip install -r requirements.txt
+
+# Retrain with latest data (adapts to available sources)
+export FINGRID_API_KEY=your_key_here  # optional
+python -m src.train_model --region finland --years 2
+
+# Evaluate accuracy
+python -m src.evaluate --region finland
+
+# Upload to Home Assistant
+# Option 1: copy output/model_coefs.json to HA and use the service
+# Option 2: place in custom_components/spot_price_predictor/data/
+```
+
+In Home Assistant, use the `spot_price_predictor.upload_coefficients` service to load new coefficients, or `spot_price_predictor.model_info` to check the current model version and training metrics.
+
+### Half-life parameter
+
+The `half_life_days` setting (default: 90) controls how quickly the model forgets old training data. It does **not** determine retraining frequency — it determines how the model weights historical data when you retrain:
+
+- **90 days (current):** Data from 90 days ago has 50% weight, 180 days ago has 25%. Adapts well to Finland's rapidly changing wind capacity.
+- **365 days (previous):** Too slow — caused +4 EUR/MWh systematic bias at morning peaks because the model learned peak strength from periods when peaks were stronger.
+
+### Future: automated retraining
+
+A potential enhancement would be a GitHub Actions workflow that retrains quarterly and publishes updated coefficients as a HACS release. Users would receive updated model coefficients automatically through HACS updates without manual retraining.
 
 ---
 

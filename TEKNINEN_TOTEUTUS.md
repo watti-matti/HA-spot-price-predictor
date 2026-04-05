@@ -230,15 +230,68 @@ Katso englanninkielisestä dokumentaatiosta ([TECHNICAL_GUIDE.md](TECHNICAL_GUID
 
 ---
 
-## Tarkkuustavoitteet
+## Tarkkuus ja uudelleenkoulutus
 
-| Konfiguraatio | Odotettu MAE | Huomautukset |
-|---------------|-------------|--------------|
-| Taso 1 (28 piirrettä) | ~29-30 EUR/MWh | Vastaa v3-perustasoa |
-| Taso 1+2 (34 piirrettä) | ~25-28 EUR/MWh | Rajat ylittävät hintaerot auttavat |
-| Taso 1+2+3 (38 piirrettä) | ~22-26 EUR/MWh | Ydinvoima + kapasiteetti ääriarvoille |
+### Nykyinen suorituskyky (90 päivän puoliintumisaika, 2 vuoden koulutusdata)
 
-Arvioinnissa käytetään aikajärjestettyä 85/15 jakoa tunti-, kuukausi- ja segmenttitason (huippu/ei-huippu, arkipäivä/viikonloppu) erittelyllä.
+| Konfiguraatio | MAE (EUR/MWh) | R² |
+|---------------|:---:|:---:|
+| Vain Taso 1 (28 piirrettä) | 3,79 | 0,505 |
+| Taso 1+2 (34 piirrettä) | 3,40 | 0,511 |
+| Taso 1+2+3 (38 piirrettä) | **3,01** | **0,623** |
+
+### Miksi uudelleenkoulutus on tarpeen
+
+Malli käyttää kiinteitä kertoimia, jotka eivät päivity automaattisesti. Suomen sähkömarkkina kehittyy nopeasti:
+- Tuulivoimakapasiteetti kasvaa (~7 GW asennettu, kasvaa vuosittain)
+- Uudet siirtoyhteysprojektit ja kapasiteettimuutokset
+- Muuttuvat kysyntämallit sähkölämmityksen ja sähköautojen yleistyessä
+
+### Suositeltu uudelleenkoulutustaajuus
+
+**Kouluta uudelleen 3-4 kuukauden välein (neljännesvuosittain).**
+
+| Koulutusväli | Keskimääräinen MAE (EUR/MWh) |
+|:---:|:---:|
+| 90 päivää | 3,29 |
+| 120 päivää | **3,27** (optimaalinen) |
+| 180 päivää | 3,47 |
+| 365 päivää | 3,72 |
+
+### Milloin kouluttaa uudelleen
+
+- **Rutiini:** 3-4 kuukauden välein osana säännöllistä ylläpitoa
+- **Merkittävä markkinamuutos:** uusi ydinvoimayksikkö, uusi siirtoyhteys, sääntelymuutos
+- **Suorituskyvyn heikkeneminen:** kun havaittu aamuhuipun/iltahuipun ennustepoikkeama ylittää ±2 EUR/MWh
+
+### Uudelleenkoulutuksen suorittaminen
+
+```bash
+# PC:llä (vaatii Pythonin numpy, pandas, scipy -kirjastoilla)
+cd HA-spot-price-predictor
+pip install -r requirements.txt
+
+# Kouluta uusimmalla datalla
+export FINGRID_API_KEY=avaimesi  # valinnainen
+python -m src.train_model --region finland --years 2
+
+# Arvioi tarkkuus
+python -m src.evaluate --region finland
+
+# Lataa Home Assistantiin palvelukutsulla:
+# spot_price_predictor.upload_coefficients
+```
+
+### Puoliintumisaika-parametri
+
+`half_life_days` (oletus: 90) määrittää kuinka nopeasti malli unohtaa vanhan koulutusdatan. Se **ei** määritä uudelleenkoulutustaajuutta — se määrittää miten malli painottaa historiallista dataa koulutettaessa:
+
+- **90 päivää (nykyinen):** 90 päivää vanha data painolla 50%, 180 päivää vanha 25%. Sopeutuu hyvin Suomen nopeasti kasvavaan tuulivoimakapasiteettiin.
+- **365 päivää (aiempi):** Liian hidas — aiheutti +4 EUR/MWh systemaattisen poikkeaman aamuhuipuissa.
+
+### Tulevaisuus: automaattinen uudelleenkoulutus
+
+Mahdollinen jatkokehitys olisi GitHub Actions -työnkulku, joka kouluttaa mallin neljännesvuosittain ja julkaisee päivitetyt kertoimet HACS-julkaisuna. Käyttäjät saisivat päivitetyn mallin automaattisesti HACS-päivityksenä.
 
 ---
 
