@@ -156,7 +156,53 @@ Adding Fingrid demand data as a direct feature does not improve predictions beca
 3. Demand data would not be available at forecast time without a separate demand prediction model
 4. Cross-border price spreads (Tier 2) already capture the market coupling effect
 
-**Recommendation:** Keep the current Gaussian demand model. For further improvement, focus on:
-- Cross-border price spread dynamics (Tier 2) — this is where the demand signal enters Finnish prices
-- Nuclear outage prediction (Tier 3) — these are the largest supply-side events
-- Weather forecast accuracy — drives both Finnish demand and Nordic wind/hydro supply
+### 9. Why Finland is Structurally Different
+
+Finland is a **net exporter** with excess generation capacity:
+- Nuclear: 4,372 MW baseload (OL3 commissioned 2023)
+- Wind: ~7,000 MW installed and growing fast
+- Average price: 4.5 EUR/MWh (vs SE1: 23, SE3: 45, EE: 88)
+- Finland is cheaper than SE1 in **86%** of hours, cheaper than EE in **97%**
+
+Even when Finnish prices spike (top 5%, >16 EUR/MWh), Finland is still cheaper than SE1 in 74% of those hours and cheaper than SE3 in 95%.
+
+### 10. Coupling Sensitivity
+
+The coupling is relatively uniform across hours:
+
+| Hour | SE1 +10 EUR/MWh effect on FI |
+|:---:|:---:|
+| 03 (night) | +1.05 EUR/MWh |
+| 09 (AM peak) | +1.09 EUR/MWh |
+| 14 (afternoon) | +1.20 EUR/MWh |
+| 19 (PM peak) | +0.98 EUR/MWh |
+
+A 10 EUR/MWh increase in SE1 prices consistently raises Finnish prices by about 1 EUR/MWh, regardless of time of day. The coupling ratio is ~10:1.
+
+### 11. Tested Coupling Features: No Improvement
+
+| Feature | MAE | Delta | Description |
+|---------|:---:|:---:|:---|
+| Baseline (38) | 3.465 | — | Current model |
+| + SE1 daily amplitude | 3.563 | -0.098 (worse) | Yesterday's SE1 max-min |
+| + SE1+SE3 amplitude | 3.554 | -0.089 (worse) | Both Swedish amplitudes |
+| + amplitude + peak×coupling | 3.559 | -0.094 (worse) | Interaction features |
+
+The existing Tier 2 (7-day rolling spreads) and Tier 3 (actual flows) already capture the available coupling signal. Adding Swedish price amplitude or coupling interaction terms doesn't provide new information.
+
+## Conclusion
+
+**The current model's demand representation is adequate.** The Gaussian peaks at 9h/19h correctly capture price-relevant demand transitions that are imported from the European market through Nord Pool price coupling, rather than the flat Finnish demand plateau.
+
+Finnish prices are structurally low due to excess nuclear + wind generation. The double-peak pattern is a damped echo of Continental European demand transmitted through interconnectors with a coupling ratio of approximately 10:1.
+
+Adding Fingrid demand data or Swedish coupling features does not improve predictions because:
+1. The price-relevant signal originates from European demand, not Finnish demand
+2. Weather features already proxy for demand (temperature → heating → demand)
+3. The Tier 2 (rolling price spreads) and Tier 3 (actual flows) already capture the coupling
+4. The coupling is relatively uniform across hours, so time-of-day features suffice
+
+**Recommendation:** Keep the current model. For further improvement, focus on:
+- Nuclear outage prediction (Tier 3) — OL3 outage can add 20-50 EUR/MWh
+- Extreme weather events — cold snaps when wind is also low (Dunkelflaute)
+- Long-term structural changes — as Finnish wind capacity grows, price dynamics will shift further
