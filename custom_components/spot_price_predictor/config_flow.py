@@ -111,34 +111,34 @@ class SpotPricePredictorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_SELLER_MARGIN,
                 default=DEFAULT_SELLER_MARGIN,
                 description={"suggested_value": DEFAULT_SELLER_MARGIN},
-            ): vol.Coerce(float),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=0.10)),
             vol.Optional(
                 CONF_CUSTOM_DAY_RATE,
                 default=0.0361,
                 description={"suggested_value": 0.0361},
-            ): vol.Coerce(float),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=0.50)),
             vol.Optional(
                 CONF_CUSTOM_NIGHT_RATE,
                 default=0.0220,
                 description={"suggested_value": 0.0220},
-            ): vol.Coerce(float),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=0.50)),
             vol.Optional(
                 CONF_CUSTOM_VAT,
                 default=DEFAULT_VAT_MULTIPLIER,
                 description={"suggested_value": DEFAULT_VAT_MULTIPLIER},
-            ): vol.Coerce(float),
+            ): vol.All(vol.Coerce(float), vol.Range(min=1.0, max=2.0)),
             vol.Optional(
                 CONF_CUSTOM_ENERGY_TAX,
                 default=DEFAULT_ENERGY_TAX,
                 description={"suggested_value": DEFAULT_ENERGY_TAX},
-            ): vol.Coerce(float),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=0.20)),
             vol.Optional(CONF_NORDPOOL_ENTITY, default=""): str,
             vol.Optional(CONF_ENABLE_PV_SELLING, default=False): bool,
             vol.Optional(
                 CONF_PV_SELL_COMMISSION,
                 default=DEFAULT_PV_SELL_COMMISSION,
                 description={"suggested_value": DEFAULT_PV_SELL_COMMISSION},
-            ): vol.Coerce(float),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=0.10)),
         })
         return self.async_show_form(step_id="operator", data_schema=schema)
 
@@ -286,27 +286,27 @@ class SpotPriceOptionsFlow(config_entries.OptionsFlow):
                 CONF_SELLER_MARGIN,
                 default=current.get(CONF_SELLER_MARGIN, DEFAULT_SELLER_MARGIN),
                 description={"suggested_value": current.get(CONF_SELLER_MARGIN, DEFAULT_SELLER_MARGIN)},
-            ): vol.Coerce(float),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=0.10)),
             vol.Optional(
                 CONF_CUSTOM_DAY_RATE,
                 default=current.get(CONF_CUSTOM_DAY_RATE, 0.0361),
                 description={"suggested_value": current.get(CONF_CUSTOM_DAY_RATE, 0.0361)},
-            ): vol.Coerce(float),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=0.50)),
             vol.Optional(
                 CONF_CUSTOM_NIGHT_RATE,
                 default=current.get(CONF_CUSTOM_NIGHT_RATE, 0.0220),
                 description={"suggested_value": current.get(CONF_CUSTOM_NIGHT_RATE, 0.0220)},
-            ): vol.Coerce(float),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=0.50)),
             vol.Optional(
                 CONF_CUSTOM_VAT,
                 default=current.get(CONF_CUSTOM_VAT, DEFAULT_VAT_MULTIPLIER),
                 description={"suggested_value": current.get(CONF_CUSTOM_VAT, DEFAULT_VAT_MULTIPLIER)},
-            ): vol.Coerce(float),
+            ): vol.All(vol.Coerce(float), vol.Range(min=1.0, max=2.0)),
             vol.Optional(
                 CONF_CUSTOM_ENERGY_TAX,
                 default=current.get(CONF_CUSTOM_ENERGY_TAX, DEFAULT_ENERGY_TAX),
                 description={"suggested_value": current.get(CONF_CUSTOM_ENERGY_TAX, DEFAULT_ENERGY_TAX)},
-            ): vol.Coerce(float),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=0.20)),
             vol.Optional(
                 CONF_ENABLE_TIER2,
                 default=current.get(CONF_ENABLE_TIER2, True),
@@ -337,7 +337,7 @@ class SpotPriceOptionsFlow(config_entries.OptionsFlow):
                 CONF_PV_SELL_COMMISSION,
                 default=current.get(CONF_PV_SELL_COMMISSION, DEFAULT_PV_SELL_COMMISSION),
                 description={"suggested_value": current.get(CONF_PV_SELL_COMMISSION, DEFAULT_PV_SELL_COMMISSION)},
-            ): vol.Coerce(float),
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=0.10)),
         })
         return self.async_show_form(
             step_id="init", data_schema=schema, errors=errors
