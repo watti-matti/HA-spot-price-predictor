@@ -33,6 +33,7 @@ from .const import (
     DEMAND_DEFAULTS,
     UPDATE_INTERVAL_WEATHER,
     FORECAST_HOURS,
+    DEFAULT_TIMEZONE,
 )
 from .features import build_forecast_features
 from .holidays import build_holiday_set
@@ -153,7 +154,11 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
             consumer_forecast = []
             for entry_item in forecast:
                 ts = datetime.fromisoformat(entry_item["timestamp"])
-                local_hour = (ts + timedelta(hours=2)).hour  # Finland approx
+                try:
+                    from zoneinfo import ZoneInfo
+                    local_hour = ts.replace(tzinfo=ZoneInfo("UTC")).astimezone(ZoneInfo(DEFAULT_TIMEZONE)).hour
+                except Exception:
+                    local_hour = (ts + timedelta(hours=3)).hour
                 is_night = local_hour < 7 or local_hour >= 22
                 transfer = self.night_rate if is_night else self.day_rate
                 spot_kwh = entry_item["price_eur_mwh"] / 1000.0

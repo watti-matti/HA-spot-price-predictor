@@ -74,6 +74,9 @@ OPERATORS = {
     },
 }
 
+# Region timezone (from region config, handles DST automatically)
+DEFAULT_TIMEZONE = "Europe/Helsinki"
+
 # Finnish consumer pricing defaults
 DEFAULT_VAT_MULTIPLIER = 1.255       # 25.5%
 DEFAULT_ENERGY_TAX = 0.02325         # EUR/kWh, class I 2026

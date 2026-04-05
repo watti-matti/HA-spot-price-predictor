@@ -232,13 +232,13 @@ Katso englanninkielisestä dokumentaatiosta ([TECHNICAL_GUIDE.md](TECHNICAL_GUID
 
 ## Tarkkuus ja uudelleenkoulutus
 
-### Nykyinen suorituskyky (90 päivän puoliintumisaika, 2 vuoden koulutusdata)
+### Nykyinen suorituskyky (90 päivän puoliintumisaika, 2 vuoden koulutusdata, aikavyöhykekorjattu)
 
 | Konfiguraatio | MAE (EUR/MWh) | R² |
 |---------------|:---:|:---:|
-| Vain Taso 1 (28 piirrettä) | 3,79 | 0,505 |
-| Taso 1+2 (34 piirrettä) | 3,40 | 0,511 |
-| Taso 1+2+3 (38 piirrettä) | **3,01** | **0,623** |
+| Taso 1+2+3 (38 piirrettä) | **3,02** | **0,621** |
+
+Huipputuntien poikkeama aikavyöhykekorjauksen jälkeen: aamuhuippu (klo 9) -0,6 EUR/MWh, iltahuippu (klo 19) -0,6 EUR/MWh. Aiemmissa versioissa aamuhuipun poikkeama oli +4,0 EUR/MWh kovakoodatun UTC+2-siirtymän vuoksi, joka ei huomioinut kesäaikaa (EEST=UTC+3).
 
 ### Miksi uudelleenkoulutus on tarpeen
 
@@ -286,8 +286,8 @@ python -m src.evaluate --region finland
 
 `half_life_days` (oletus: 90) määrittää kuinka nopeasti malli unohtaa vanhan koulutusdatan. Se **ei** määritä uudelleenkoulutustaajuutta — se määrittää miten malli painottaa historiallista dataa koulutettaessa:
 
-- **90 päivää (nykyinen):** 90 päivää vanha data painolla 50%, 180 päivää vanha 25%. Sopeutuu hyvin Suomen nopeasti kasvavaan tuulivoimakapasiteettiin.
-- **365 päivää (aiempi):** Liian hidas — aiheutti +4 EUR/MWh systemaattisen poikkeaman aamuhuipuissa.
+- **90 päivää (nykyinen):** 90 päivää vanha data painolla 50%, 180 päivää vanha 25%. Sopeutuu hyvin Suomen nopeasti kasvavaan tuulivoimakapasiteettiin. Vahvistettu optimaaliseksi aikavyöhykekorjauksen jälkeen (MAE=3,19, aamuhuipun poikkeama -0,6).
+- **365 päivää (aiempi):** Liian hidas — yhdistettynä UTC+2 aikavyöhykevirheeseen aiheutti +4 EUR/MWh systemaattisen poikkeaman aamuhuipuissa.
 
 ### Tulevaisuus: automaattinen uudelleenkoulutus
 

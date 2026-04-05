@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .holidays import build_holiday_set
-from .const import DEMAND_DEFAULTS, FINGRID_MAX_VALUES
+from .const import DEMAND_DEFAULTS, DEFAULT_TIMEZONE, FINGRID_MAX_VALUES
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -54,8 +54,11 @@ def compute_features_for_hour(
         Feature dict ready for model.predict_single().
     """
     d = demand or DEMAND_DEFAULTS
-    tz_offset = 2  # Finland UTC+2 (approximate)
-    local_dt = utc_dt + timedelta(hours=tz_offset)
+    try:
+        from zoneinfo import ZoneInfo
+        local_dt = utc_dt.replace(tzinfo=ZoneInfo("UTC")).astimezone(ZoneInfo(DEFAULT_TIMEZONE))
+    except Exception:
+        local_dt = utc_dt + timedelta(hours=3)  # Fallback EEST
     local_h = local_dt.hour
     dow = local_dt.weekday()  # 0=Mon
     mo = local_dt.month

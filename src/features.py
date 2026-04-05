@@ -73,9 +73,14 @@ def _build_tier1(
     pi = math.pi
     idx = df.index  # UTC DatetimeIndex
 
-    # Local time approximation (Finland = UTC+2, ignoring DST for features)
-    tz_offset = 2
-    local_dt = idx + pd.Timedelta(hours=tz_offset)
+    # Convert UTC to local time using region timezone (handles DST)
+    region = config.get("region", {})
+    tz_name = region.get("timezone", "Europe/Helsinki")
+    try:
+        from zoneinfo import ZoneInfo
+        local_dt = idx.tz_convert(ZoneInfo(tz_name))
+    except Exception:
+        local_dt = idx + pd.Timedelta(hours=3)  # Fallback EEST
     local_h = local_dt.hour.to_numpy()
     dow = local_dt.dayofweek.to_numpy()  # 0=Mon
     mo = local_dt.month.to_numpy()

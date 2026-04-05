@@ -32,6 +32,7 @@ from .const import (
     DEFAULT_ENERGY_TAX,
     DEFAULT_SELLER_MARGIN,
     OPERATORS,
+    DEFAULT_TIMEZONE,
 )
 from .coordinator import SpotPriceCoordinator
 
@@ -372,7 +373,11 @@ class SpotElectricityPriceSensor(CoordinatorEntity, SensorEntity):
         for entry_item in raw_timeline:
             try:
                 ts = datetime.fromisoformat(entry_item["timestamp"])
-                local_hour = (ts.hour + 2) % 24  # Approximate Finnish local
+                try:
+                    from zoneinfo import ZoneInfo
+                    local_hour = ts.astimezone(ZoneInfo(DEFAULT_TIMEZONE)).hour
+                except Exception:
+                    local_hour = (ts.hour + 3) % 24
                 consumer = _spot_to_consumer(entry_item["price_eur_kwh"], local_hour, tariff)
                 consumer_timeline.append({
                     "timestamp": entry_item["timestamp"],

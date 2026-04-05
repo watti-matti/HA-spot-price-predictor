@@ -291,13 +291,13 @@ Additional context for Sweden:
 
 ## Accuracy and Retraining
 
-### Current performance (90-day half-life, 2-year training)
+### Current performance (90-day half-life, 2-year training, timezone-corrected)
 
 | Configuration | MAE (EUR/MWh) | R² |
 |---------------|:---:|:---:|
-| Tier 1 only (28 features) | 3.79 | 0.505 |
-| Tier 1+2 (34 features) | 3.40 | 0.511 |
-| Tier 1+2+3 (38 features) | **3.01** | **0.623** |
+| Tier 1+2+3 (38 features) | **3.02** | **0.621** |
+
+Peak hour bias after timezone correction: AM peak (9h) -0.6 EUR/MWh, PM peak (19h) -0.6 EUR/MWh. Previous versions had +4.0 EUR/MWh AM bias due to hardcoded UTC+2 offset ignoring summer time (EEST=UTC+3).
 
 Evaluation uses time-ordered 85/15 split with hourly, monthly, and segment-level breakdown.
 
@@ -359,8 +359,8 @@ In Home Assistant, use the `spot_price_predictor.upload_coefficients` service to
 
 The `half_life_days` setting (default: 90) controls how quickly the model forgets old training data. It does **not** determine retraining frequency — it determines how the model weights historical data when you retrain:
 
-- **90 days (current):** Data from 90 days ago has 50% weight, 180 days ago has 25%. Adapts well to Finland's rapidly changing wind capacity.
-- **365 days (previous):** Too slow — caused +4 EUR/MWh systematic bias at morning peaks because the model learned peak strength from periods when peaks were stronger.
+- **90 days (current):** Data from 90 days ago has 50% weight, 180 days ago has 25%. Adapts well to Finland's rapidly changing wind capacity. Confirmed optimal after timezone correction (MAE=3.19, AM peak bias -0.6).
+- **365 days (previous):** Too slow — combined with the UTC+2 timezone error, caused +4 EUR/MWh systematic bias at morning peaks.
 
 ### Future: automated retraining
 
