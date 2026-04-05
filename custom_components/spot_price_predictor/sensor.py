@@ -415,11 +415,36 @@ class SpotElectricitySellingPriceSensor(CoordinatorEntity, SensorEntity):
         commission = self._entry.data.get(CONF_PV_SELL_COMMISSION, DEFAULT_PV_SELL_COMMISSION)
         if not entity_id:
             return {}
-        timeline = _process_nordpool_data(self._hass, entity_id)
+
+        # Actual selling prices from Nordpool (today + tomorrow)
+        raw_timeline = _process_nordpool_data(self._hass, entity_id)
+        actual_selling = {
+            e["timestamp"]: round(max(0.0, e["price_eur_kwh"] - commission), 5)
+            for e in raw_timeline
+        }
+
+        # Forecasted selling prices from spot forecast (extends to 170h)
+        forecast_selling = {}
+        if self.coordinator.data:
+            spot_forecast = self.coordinator.data.get("spot_forecast", [])
+            for f in spot_forecast:
+                ts = f["timestamp"]
+                if ts not in actual_selling:  # Don't overwrite actuals
+                    spot_kwh = f["price_eur_mwh"] / 1000.0
+                    forecast_selling[ts] = round(max(0.0, spot_kwh - commission), 5)
+
+        # Merge: actuals first, then forecasted for future hours
+        combined = {}
+        combined.update(forecast_selling)
+        combined.update(actual_selling)  # Actuals overwrite forecasts
+
+        timeline = sorted(
+            [{"timestamp": k, "price_eur_kwh": v} for k, v in combined.items()],
+            key=lambda x: x["timestamp"],
+        )
+
         return {
-            "timeline": [{"timestamp": e["timestamp"],
-                          "price_eur_kwh": round(max(0.0, e["price_eur_kwh"] - commission), 5)}
-                         for e in timeline],
+            "timeline": timeline,
             "commission_eur_kwh": commission,
             "source_entity": entity_id,
             "unit": "EUR/kWh",

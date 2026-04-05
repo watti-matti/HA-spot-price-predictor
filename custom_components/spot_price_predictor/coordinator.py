@@ -87,6 +87,12 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
         now = datetime.now(timezone.utc)
         self.holidays = build_holiday_set(now.year - 1, now.year + 2)
 
+        # Rolling forecast history: keeps past predictions so charts
+        # can show data from the beginning of the day, not just from
+        # the last refresh time. Key = ISO timestamp, value = forecast entry.
+        self._forecast_history: dict[str, dict] = {}
+        self._consumer_history: dict[str, dict] = {}
+
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from APIs and run model inference."""
         try:
@@ -164,6 +170,30 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                 duration_hours=self.search_duration_hours,
             )
 
+            # Merge into rolling history (keeps past predictions for charts)
+            # New predictions overwrite older ones for the same timestamp
+            for f in forecast:
+                self._forecast_history[f["timestamp"]] = f
+            for c in consumer_forecast:
+                self._consumer_history[c["timestamp"]] = c
+
+            # Prune history older than 7 days
+            cutoff = (now - timedelta(days=7)).isoformat()
+            self._forecast_history = {
+                k: v for k, v in self._forecast_history.items() if k >= cutoff
+            }
+            self._consumer_history = {
+                k: v for k, v in self._consumer_history.items() if k >= cutoff
+            }
+
+            # Build combined forecast from history (sorted by timestamp)
+            combined_forecast = sorted(
+                self._forecast_history.values(), key=lambda x: x["timestamp"]
+            )
+            combined_consumer = sorted(
+                self._consumer_history.values(), key=lambda x: x["timestamp"]
+            )
+
             # Current hour values
             current_spot = forecast[0]["price_eur_mwh"] if forecast else 0.0
             current_consumer = consumer_forecast[0]["price_eur_kwh"] if consumer_forecast else 0.0
@@ -177,9 +207,9 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
 
             return {
                 "spot_price": current_spot,
-                "spot_forecast": forecast,
+                "spot_forecast": combined_forecast,
                 "consumer_price": current_consumer,
-                "consumer_forecast": consumer_forecast,
+                "consumer_forecast": combined_consumer,
                 "cheapest_hours": cheapest_hours,
                 "tiers_active": " + ".join(tiers),
                 "last_update": now.isoformat(),
