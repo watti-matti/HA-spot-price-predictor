@@ -98,6 +98,21 @@ Johdettu 7 päivän liukuvasta hintaerosta:
 | `import_capacity_se3` | Fingrid #27 | 0-1 (0-1200 MW) |
 | `import_capacity_ee` | Fingrid #115 | 0-1 (0-1016 MW) |
 
+#### Tunnettu rajoite: ydinvoimalaitosten huoltoseisokit
+
+`nuclear_mw`-piirre käyttää Fingridin **reaaliaikaista** ydinvoimatuotannon mittausta (tietojoukko #188), ei ennustetta. Malli reagoi ydinvoimakapasiteetin muutoksiin yhden päivitysjakson aikana (6 tuntia), mutta ei ennusta niitä etukäteen.
+
+Suomen ydinvoimakapasiteetti (yhteensä 4 394 MW):
+- Olkiluoto 1: 890 MWe
+- Olkiluoto 2: 890 MWe
+- Olkiluoto 3: 1 600 MWe
+- Loviisa 1: 507 MWe
+- Loviisa 2: 507 MWe
+
+Suunnitellut huoltoseisokit (tyypillisesti keväällä/syksyllä) nostavat hintoja merkittävästi. Kun reaktori pysähtyy, mallin `nuclear_mw`-piirre laskee ja seuraavat ennusteet heijastavat korkeampia hintoja. Alas-ajon ensimmäisten tuntien aikana ennusteet voivat kuitenkin olla epätarkkoja kunnes piirteen arvo päivittyy.
+
+Fingrid ei tarjoa ydinvoimakohtaista tuotantoennustetta rajapinnassaan. Suunnitellut huoltoaikataulut julkaistaan [Fingridin verkkosivuilla](https://www.fingrid.fi/sahkomarkkinat/) ja ENTSO-E REMIT -viesteissä. Ennustetarkkuus voi tilapäisesti heiketä suunniteltujen ydinvoimahuoltoseisokkien siirtymävaiheen aikana.
+
 ### Piirteiden lukumäärä konfiguraation mukaan
 
 | Konfiguraatio | Piirteet | API-avaimet |

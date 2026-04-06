@@ -98,6 +98,21 @@ Derived from 7-day rolling average price spreads:
 | `import_capacity_se3` | Fingrid #27 | 0-1 (0-1200 MW) |
 | `import_capacity_ee` | Fingrid #115 | 0-1 (0-1016 MW) |
 
+#### Known limitation: nuclear service breaks
+
+The `nuclear_mw` feature uses Fingrid's **real-time** nuclear production measurement (dataset #188), not a forecast. This means the model reacts to nuclear capacity changes within one refresh cycle (6 hours) but does not predict them ahead of time.
+
+Finnish nuclear capacity (4,394 MW total):
+- Olkiluoto 1: 890 MWe
+- Olkiluoto 2: 890 MWe
+- Olkiluoto 3: 1,600 MWe
+- Loviisa 1: 507 MWe
+- Loviisa 2: 507 MWe
+
+Planned service breaks (typically spring/autumn) cause significant price increases. When a reactor goes offline, the model's `nuclear_mw` feature will drop and subsequent forecasts will reflect higher prices. However, the first hours of a ramp-down may produce inaccurate forecasts until the feature value updates.
+
+Fingrid does not provide a nuclear-specific production forecast via their API. Planned outage schedules are published on [Fingrid's website](https://www.fingrid.fi/en/electricity-market-information/) and through ENTSO-E REMIT messages. Users should be aware that forecast accuracy may temporarily decrease during the transition period of planned nuclear service breaks.
+
 ### Feature count by configuration
 
 | Configuration | Features | API keys |
