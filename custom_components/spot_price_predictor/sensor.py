@@ -75,6 +75,18 @@ def _device_info(entry: ConfigEntry) -> dict[str, Any]:
     }
 
 
+def _status_attributes(data: dict[str, Any] | None) -> dict[str, Any]:
+    """Shared status attributes for all sensors."""
+    if not data:
+        return {}
+    return {
+        "last_update": data.get("last_update"),
+        "tiers_active": data.get("tiers_active", ""),
+        "stale": data.get("stale", False),
+        "data_age_minutes": data.get("data_age_minutes", 0),
+    }
+
+
 class SpotPriceForecastSensor(CoordinatorEntity, SensorEntity):
     """Predicted spot price for current hour (EUR/MWh)."""
 
@@ -103,8 +115,7 @@ class SpotPriceForecastSensor(CoordinatorEntity, SensorEntity):
             "forecast": self.coordinator.data.get("spot_forecast", []),
             "unit": "EUR/MWh",
             "forecast_hours": len(self.coordinator.data.get("spot_forecast", [])),
-            "last_update": self.coordinator.data.get("last_update"),
-            "tiers_active": self.coordinator.data.get("tiers_active", ""),
+            **_status_attributes(self.coordinator.data),
         }
 
     @property
@@ -140,6 +151,7 @@ class ConsumerPriceSensor(CoordinatorEntity, SensorEntity):
             "forecast": self.coordinator.data.get("consumer_forecast", []),
             "operator": self._entry.data.get("operator", ""),
             "unit": "EUR/kWh",
+            **_status_attributes(self.coordinator.data),
         }
 
     @property
@@ -198,6 +210,7 @@ class CheapestHoursSensor(CoordinatorEntity, SensorEntity):
             "hours_below_avg": ch.get("hours_below_avg", []),
             "window_hours": ch.get("window_hours", 24),
             "avg_price_in_window": ch.get("avg_price_in_window"),
+            **_status_attributes(self.coordinator.data),
         }
 
     @property
@@ -244,6 +257,7 @@ class WeekStatsSensor(CoordinatorEntity, SensorEntity):
             "unit": "EUR/kWh",
             "forecast_hours": len(prices),
             "operator": self._entry.data.get("operator", ""),
+            **_status_attributes(self.coordinator.data),
         }
 
     @property

@@ -36,3 +36,10 @@ model_info:
     Display current model information as a persistent notification,
     including version, feature count, accuracy metrics, and
     retraining instructions.
+
+force_refresh:
+  name: Force Refresh
+  description: >
+    Trigger an immediate data refresh outside the normal 6-hour cycle.
+    Fetches fresh weather, spot prices, and cross-border data, then
+    reruns model inference. Useful for debugging or after network recovery.

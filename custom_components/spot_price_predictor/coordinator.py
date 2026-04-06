@@ -35,11 +35,14 @@ from .const import (
     FORECAST_HOURS,
     DEFAULT_TIMEZONE,
 )
+
 from .features import build_forecast_features
 from .holidays import build_holiday_set
 from .model import SpotPriceModel
 
 _LOGGER = logging.getLogger(__name__)
+
+RETRY_INTERVAL_SECONDS = 900  # 15 minutes after failure
 
 
 class SpotPriceCoordinator(DataUpdateCoordinator):
@@ -88,14 +91,39 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
         now = datetime.now(timezone.utc)
         self.holidays = build_holiday_set(now.year - 1, now.year + 2)
 
+        # Cache last successful result so sensors stay available during API failures
+        self._last_successful_data: dict[str, Any] | None = None
+        self._last_successful_time: datetime | None = None
+
         # Rolling forecast history: keeps past predictions so charts
         # can show data from the beginning of the day, not just from
         # the last refresh time. Key = ISO timestamp, value = forecast entry.
         self._forecast_history: dict[str, dict] = {}
         self._consumer_history: dict[str, dict] = {}
 
+    def _return_cached_or_fail(self, err: Exception) -> dict[str, Any]:
+        """Return cached data on failure, or raise UpdateFailed if no cache."""
+        if self._last_successful_data is not None:
+            now = datetime.now(timezone.utc)
+            age_minutes = int(
+                (now - self._last_successful_time).total_seconds() / 60
+            ) if self._last_successful_time else 0
+            _LOGGER.warning(
+                "Update failed (%s), serving cached data (%d min old). "
+                "Retrying in %d minutes",
+                err, age_minutes, RETRY_INTERVAL_SECONDS // 60,
+            )
+            self.update_interval = timedelta(seconds=RETRY_INTERVAL_SECONDS)
+            cached = dict(self._last_successful_data)
+            cached["stale"] = True
+            cached["data_age_minutes"] = age_minutes
+            return cached
+
+        raise UpdateFailed(f"API error (no cached data available): {err}") from err
+
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from APIs and run model inference."""
+        _LOGGER.info("Update started")
         try:
             # Fetch weather (always)
             weather = await self.api.fetch_weather()
@@ -210,7 +238,7 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
             if tier3_data:
                 tiers.append("Tier 3 (Fingrid)")
 
-            return {
+            result = {
                 "spot_price": current_spot,
                 "spot_forecast": combined_forecast,
                 "consumer_price": current_consumer,
@@ -218,13 +246,25 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                 "cheapest_hours": cheapest_hours,
                 "tiers_active": " + ".join(tiers),
                 "last_update": now.isoformat(),
+                "stale": False,
+                "data_age_minutes": 0,
             }
 
+            # Cache successful result and restore normal interval
+            self._last_successful_data = result
+            self._last_successful_time = now
+            self.update_interval = timedelta(seconds=UPDATE_INTERVAL_WEATHER)
+            _LOGGER.info(
+                "Update completed: %d forecast hours, tiers: %s",
+                len(forecast), " + ".join(tiers),
+            )
+            return result
+
         except ApiClientError as err:
-            raise UpdateFailed(f"API error: {err}") from err
+            return self._return_cached_or_fail(err)
         except Exception as err:
             _LOGGER.exception("Unexpected error during update")
-            raise UpdateFailed(f"Unexpected error: {err}") from err
+            return self._return_cached_or_fail(err)
 
     @staticmethod
     def _format_offset(hours: int) -> str:

@@ -25,6 +25,7 @@ USER_COEFS_PATH = USER_COEFS_DIR / "model_coefs_user.json"
 SERVICE_UPLOAD_COEFFICIENTS = "upload_coefficients"
 SERVICE_RESET_COEFFICIENTS = "reset_coefficients"
 SERVICE_MODEL_INFO = "model_info"
+SERVICE_FORCE_REFRESH = "force_refresh"
 
 UPLOAD_SCHEMA = vol.Schema({
     vol.Optional("file_path"): cv.string,
@@ -64,6 +65,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.services.async_remove(DOMAIN, SERVICE_UPLOAD_COEFFICIENTS)
         hass.services.async_remove(DOMAIN, SERVICE_RESET_COEFFICIENTS)
         hass.services.async_remove(DOMAIN, SERVICE_MODEL_INFO)
+        hass.services.async_remove(DOMAIN, SERVICE_FORCE_REFRESH)
 
     return unload_ok
 
@@ -194,6 +196,14 @@ def _register_services(hass: HomeAssistant) -> None:
         except Exception as err:
             _LOGGER.error("Failed to read model info: %s", err)
 
+    async def handle_force_refresh(call: ServiceCall) -> None:
+        """Force an immediate data refresh on all coordinators."""
+        _LOGGER.info("Manual refresh triggered via service call")
+        for entry_id, coordinator in hass.data.get(DOMAIN, {}).items():
+            if isinstance(coordinator, SpotPriceCoordinator):
+                await coordinator.async_request_refresh()
+        _LOGGER.info("Manual refresh completed")
+
     hass.services.async_register(
         DOMAIN, SERVICE_UPLOAD_COEFFICIENTS, handle_upload_coefficients,
         schema=UPLOAD_SCHEMA,
@@ -203,4 +213,7 @@ def _register_services(hass: HomeAssistant) -> None:
     )
     hass.services.async_register(
         DOMAIN, SERVICE_MODEL_INFO, handle_model_info,
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_FORCE_REFRESH, handle_force_refresh,
     )
