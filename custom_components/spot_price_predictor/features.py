@@ -97,9 +97,14 @@ def compute_features_for_hour(
     sauna_days = d.get("sauna_days", [4, 5])
     sauna_hour = 1.0 if (dow in sauna_days and local_h in sauna_hours) else 0.0
 
-    # Monday ramp
+    # First-workday ramp: fires on the first workday after any non-work day
+    # (captures post-holiday cold-starts, not just Mondays)
     ramp_hours = d.get("monday_ramp_hours", [6, 7, 8, 9])
-    monday_ramp = 1.0 if (dow == 0 and local_h in ramp_hours) else 0.0
+    yesterday = local_dt - timedelta(days=1)
+    yesterday_str = yesterday.strftime("%Y-%m-%d")
+    yesterday_dow = yesterday.weekday()
+    yesterday_was_nonwork = (yesterday_dow >= 5) or (yesterday_str in holidays)
+    monday_ramp = 1.0 if (is_workday == 1.0 and yesterday_was_nonwork and local_h in ramp_hours) else 0.0
 
     # Thermal demand
     hdd_threshold = d.get("hdd_threshold", 17.0)

@@ -129,10 +129,25 @@ def _build_tier1(
         np.isin(dow, sauna_dow) & np.isin(local_h, sauna_hours)
     ).astype(float)
 
-    # Monday ramp
+    # First-workday ramp: fires on the first workday after any non-work day
+    # (replaces Monday-only ramp to capture post-holiday cold-starts)
     ramp_hours = demand.get("monday_ramp_hours", [6, 7, 8, 9])
+    dates_unique = pd.Series(local_dt.date).values
+    is_workday_daily = {}
+    for d_val in np.unique(dates_unique):
+        d_str = str(d_val)
+        d_dow = d_val.weekday()
+        is_workday_daily[d_val] = (d_dow < 5) and (d_str not in holidays)
+
+    first_workday = np.zeros(len(df), dtype=float)
+    for i, d_val in enumerate(dates_unique):
+        if is_workday_daily.get(d_val, False):
+            prev_day = d_val - pd.Timedelta(days=1).to_pytimedelta()
+            if not is_workday_daily.get(prev_day, True):
+                first_workday[i] = 1.0
+
     df["monday_ramp"] = (
-        (dow == 0) & np.isin(local_h, ramp_hours)
+        (first_workday == 1.0) & np.isin(local_h, ramp_hours)
     ).astype(float)
 
     # Thermal demand
