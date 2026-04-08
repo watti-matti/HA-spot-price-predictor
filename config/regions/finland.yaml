@@ -32,7 +32,7 @@ price_source:
 weather_source:
   name: "open-meteo"
   forecast_url: "https://api.open-meteo.com/v1/forecast"
-  archive_url: "https://archive-api.open-meteo.com/v1/archive"
+  archive_url: "https://historical-forecast-api.open-meteo.com/v1/forecast"
   wind_height_m: 120                 # Hub height for wind speed
   solar_tilt_deg: 45                 # Panel tilt angle (south-facing)
   variables:
@@ -149,39 +149,15 @@ spread_window_days: 7                # Rolling average window for spread calcula
 # Register for free at https://data.fingrid.fi
 
 grid_sources:
+  # Nuclear production is used to derive the nuclear_x_scarcity interaction
+  # feature (nuclear deficit x weather scarcity). Raw nuclear_mw and flow
+  # features were removed due to sign instability in Ridge regression.
   - name: "fingrid_nuclear"
     env_key: "FINGRID_API_KEY"
     url: "https://data.fingrid.fi/api/datasets/188/data"
     feature_name: "nuclear_mw"
     max_value: 4372                  # Total Finnish nuclear capacity (MW)
     resolution: "3min"               # Needs hourly aggregation
-    update_interval_hours: 1
-
-  # Commercial flows: negative = import to FI, positive = export from FI
-  # These reflect actual market-driven power exchange (better than capacity)
-  # Day-ahead capacity datasets (24/25/27) returned empty as of Apr 2025
-  - name: "fingrid_flow_se1"
-    env_key: "FINGRID_API_KEY"
-    url: "https://data.fingrid.fi/api/datasets/31/data"
-    feature_name: "flow_fi_se1"      # Negative = import to FI from SE1
-    max_value: 5500                  # Peak flows can exceed line capacity (MW)
-    resolution: "15min"
-    update_interval_hours: 1
-
-  - name: "fingrid_flow_se3"
-    env_key: "FINGRID_API_KEY"
-    url: "https://data.fingrid.fi/api/datasets/32/data"
-    feature_name: "flow_fi_se3"
-    max_value: 1200
-    resolution: "15min"
-    update_interval_hours: 1
-
-  - name: "fingrid_flow_ee"
-    env_key: "FINGRID_API_KEY"
-    url: "https://data.fingrid.fi/api/datasets/140/data"
-    feature_name: "flow_fi_ee"
-    max_value: 1016                  # EstLink 1+2 combined
-    resolution: "15min"
     update_interval_hours: 1
 
 # ============================================================================

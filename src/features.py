@@ -2,11 +2,12 @@
 Dynamic feature engineering driven by region config.
 
 Builds features in three tiers based on available data:
-  Tier 1 (28 features): Weather + demand patterns (always available)
-  Tier 2 (+6 features): Cross-border import/export potential
-  Tier 3 (+4 features): Grid infrastructure (nuclear, capacity)
+  Tier 1 (10 features): Weather + demand patterns (always available)
+  Tier 2 (+2 features): Cross-border export potential (SE3, EE)
+  Tier 3 (+2 features): Nuclear outage interaction (scarcity)
 
-The feature set adapts automatically to whatever data sources are present.
+Features are selected via greedy forward selection with sign constraints:
+only features with economically correct coefficient signs are included.
 """
 
 import logging
@@ -40,23 +41,19 @@ def _gauss_bump(hour: float, centre: float, sigma: float) -> float:
 # ---------------------------------------------------------------------------
 
 TIER1_FEATURES = [
-    # Supply
-    "wind_speed_weighted", "solar_irradiance_weighted", "temperature_weighted",
+    # Supply (sign-validated: more supply -> lower price)
+    "wind_speed_weighted", "solar_irradiance_weighted",
     # Time cycles
     "hour_sin", "hour_cos", "month_sin", "month_cos",
-    # Demand patterns
+    # Demand patterns (sign-validated: more demand -> higher price)
     "double_peak_am", "double_peak_pm",
-    "peak_am_weekend", "peak_pm_weekend",
-    "sauna_hour", "monday_ramp",
-    "is_holiday", "is_weekend",
-    # Thermal demand
-    "hdd", "hdd_sq", "daylight_deficit",
-    "wind_x_hdd", "solar_x_deficit", "temp_x_hdd",
-    # Physics supply
-    "wind_power_density", "solar_power_temp", "renewable_surplus",
-    # Scarcity
-    "scarcity_indicator", "wind_drought_penalty",
-    "cold_morning_stress", "cold_calm_dark",
+    "is_holiday",
+    # Thermal demand (sign-validated)
+    "hdd_sq",
+    # Scarcity (sign-validated: more scarcity -> higher price)
+    "wind_drought_penalty",
+    # Interaction
+    "solar_x_deficit",
 ]
 
 
@@ -65,7 +62,11 @@ def _build_tier1(
     config: dict[str, Any],
     holidays: set[str],
 ) -> pd.DataFrame:
-    """Build Tier 1 features from weather + price data."""
+    """Build Tier 1 features from weather + price data.
+
+    Only features validated via greedy forward selection with sign constraints
+    are included. Each feature has an economically correct coefficient sign.
+    """
     demand = config.get("demand", {})
     region = config.get("region", {})
     latitude = region.get("latitude", 62.0)
@@ -74,7 +75,6 @@ def _build_tier1(
     idx = df.index  # UTC DatetimeIndex
 
     # Convert UTC to local time using region timezone (handles DST)
-    region = config.get("region", {})
     tz_name = region.get("timezone", "Europe/Helsinki")
     try:
         from zoneinfo import ZoneInfo
@@ -92,7 +92,6 @@ def _build_tier1(
     df["hour_cos"] = np.cos(2 * pi * local_h / 24)
     df["month_sin"] = np.sin(2 * pi * mo / 12)
     df["month_cos"] = np.cos(2 * pi * mo / 12)
-    df["is_weekend"] = (dow >= 5).astype(float)
 
     # Holiday detection
     is_hol_arr = np.array([1.0 if d in holidays else 0.0 for d in date_str])
@@ -100,7 +99,6 @@ def _build_tier1(
 
     # Workday flag (weekday AND not holiday)
     is_workday = (dow < 5).astype(float) * (1.0 - is_hol_arr)
-    is_nonwork = 1.0 - is_workday
 
     # Demand peak profiles
     am_center = demand.get("peak_am_center", 9)
@@ -113,100 +111,42 @@ def _build_tier1(
 
     df["double_peak_am"] = raw_am * is_workday
     df["double_peak_pm"] = raw_pm * is_workday
-    df["peak_am_weekend"] = raw_am * is_nonwork
-    df["peak_pm_weekend"] = raw_pm * is_nonwork
-
-    # Sauna hour
-    sauna_hours = demand.get("sauna_hours", [20, 21])
-    sauna_days_str = demand.get("sauna_days", ["friday", "saturday"])
-    sauna_dow = []
-    day_map = {"monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
-               "friday": 4, "saturday": 5, "sunday": 6}
-    for d in sauna_days_str:
-        if d.lower() in day_map:
-            sauna_dow.append(day_map[d.lower()])
-    df["sauna_hour"] = (
-        np.isin(dow, sauna_dow) & np.isin(local_h, sauna_hours)
-    ).astype(float)
-
-    # First-workday ramp: fires on the first workday after any non-work day
-    # (replaces Monday-only ramp to capture post-holiday cold-starts)
-    ramp_hours = demand.get("monday_ramp_hours", [6, 7, 8, 9])
-    dates_unique = pd.Series(local_dt.date).values
-    is_workday_daily = {}
-    for d_val in np.unique(dates_unique):
-        d_str = str(d_val)
-        d_dow = d_val.weekday()
-        is_workday_daily[d_val] = (d_dow < 5) and (d_str not in holidays)
-
-    first_workday = np.zeros(len(df), dtype=float)
-    for i, d_val in enumerate(dates_unique):
-        if is_workday_daily.get(d_val, False):
-            prev_day = d_val - pd.Timedelta(days=1).to_pytimedelta()
-            if not is_workday_daily.get(prev_day, True):
-                first_workday[i] = 1.0
-
-    df["monday_ramp"] = (
-        (first_workday == 1.0) & np.isin(local_h, ramp_hours)
-    ).astype(float)
 
     # Thermal demand
     hdd_threshold = demand.get("hdd_threshold", 17.0)
     t = df["temperature_weighted"].to_numpy()
     hdd = np.maximum(0.0, hdd_threshold - t)
-    df["hdd"] = hdd
     df["hdd_sq"] = hdd ** 2
 
-    # Daylight deficit
+    # Daylight deficit (intermediate for solar_x_deficit interaction)
     dl = np.array([daylight_hours(int(d), latitude) for d in doy])
     deficit = np.maximum(0.0, 12.0 - dl)
-    df["daylight_deficit"] = deficit
 
-    # Cross-terms
-    w = df["wind_speed_weighted"].to_numpy()
+    # Solar x deficit interaction
     s = df["solar_irradiance_weighted"].to_numpy()
-    df["wind_x_hdd"] = w * hdd
     df["solar_x_deficit"] = s * deficit
-    df["temp_x_hdd"] = t * hdd
 
-    # Physics-corrected supply
-    rated_speed = demand.get("wind_rated_speed", 14)
-    rho_rel = 288.15 / (273.15 + t)
-    w_capped = np.minimum(w, float(rated_speed))
-    df["wind_power_density"] = rho_rel * (w_capped / rated_speed) ** 3
-
-    t_cell = t + 0.03 * s
-    pv_efficiency = 1.0 - 0.004 * (t_cell - 25.0)
-    df["solar_power_temp"] = s * pv_efficiency
-
-    df["renewable_surplus"] = (
-        np.maximum(0.0, w - 6.0) * np.maximum(0.0, s - 100.0) / 100.0
-    )
-
-    # Scarcity indicators
-    low_wind = np.maximum(0.0, 5.0 - w)
-    peak_demand_full = np.maximum(raw_am, raw_pm)
-    df["scarcity_indicator"] = low_wind * hdd * peak_demand_full
-
+    # Wind drought penalty: low wind on workdays
+    w = df["wind_speed_weighted"].to_numpy()
     wind_drought = np.maximum(0.0, 4.0 - w) ** 2
     df["wind_drought_penalty"] = wind_drought * is_workday
 
-    df["cold_morning_stress"] = np.maximum(0.0, hdd - 20.0) * raw_am * is_workday
-
-    df["cold_calm_dark"] = (
-        np.maximum(0.0, hdd - 15.0)
-        * np.maximum(0.0, 6.0 - w)
-        * np.maximum(0.0, deficit - 4.0) / 10.0
-    )
+    # Scarcity indicator (intermediate for nuclear_x_scarcity in Tier 3)
+    low_wind = np.maximum(0.0, 5.0 - w)
+    peak_demand_full = np.maximum(raw_am, raw_pm)
+    df["_scarcity_indicator"] = low_wind * hdd * peak_demand_full
 
     return df
 
 
 # ---------------------------------------------------------------------------
-# Tier 2: Cross-border trade features (+6)
+# Tier 2: Cross-border export potential features (+2)
 # ---------------------------------------------------------------------------
 
-TIER2_PREFIXES = ["se1", "se3", "ee"]
+# Only export potential features survived sign-constrained selection.
+# Import potential features had wrong signs (high import potential is a symptom
+# of high FI prices, not a cause of lower prices in the model's timeframe).
+TIER2_EXPORT_PREFIXES = ["se3", "ee"]
 
 
 def _build_tier2(
@@ -215,7 +155,7 @@ def _build_tier2(
     neighbor_prices: dict[str, pd.Series],
     window_days: int = 7,
 ) -> tuple[pd.DataFrame, list[str]]:
-    """Build import/export potential features from price spreads.
+    """Build export potential features from price spreads.
 
     Returns:
         Updated DataFrame and list of new feature column names.
@@ -226,9 +166,10 @@ def _build_tier2(
     for prefix, series in neighbor_prices.items():
         if series is None or len(series) == 0:
             continue
+        if prefix not in TIER2_EXPORT_PREFIXES:
+            continue
 
         # Align on common index
-        spread_name = f"spread_7d_fi_{prefix}"
         aligned_fi = fi_prices.reindex(series.index)
         spread = aligned_fi - series
         spread_rolling = spread.rolling(window=window_hours, min_periods=24).mean()
@@ -236,46 +177,49 @@ def _build_tier2(
         # Map back to main DataFrame index
         spread_aligned = spread_rolling.reindex(df.index).ffill()
 
-        import_name = f"import_potential_{prefix}"
         export_name = f"export_potential_{prefix}"
-
-        df[import_name] = np.maximum(0.0, spread_aligned.values)
         df[export_name] = np.maximum(0.0, -spread_aligned.values)
-
-        # Fill any remaining NaN with 0
-        df[import_name] = df[import_name].fillna(0.0)
         df[export_name] = df[export_name].fillna(0.0)
 
-        new_features.extend([import_name, export_name])
-        logger.info("  Tier 2: added %s, %s", import_name, export_name)
+        new_features.append(export_name)
+        logger.info("  Tier 2: added %s", export_name)
 
     return df, new_features
 
 
 # ---------------------------------------------------------------------------
-# Tier 3: Grid infrastructure features (+0-4)
+# Tier 3: Nuclear x scarcity interaction (+0-1)
 # ---------------------------------------------------------------------------
 
 def _build_tier3(
     df: pd.DataFrame,
     grid_data: dict[str, pd.Series],
 ) -> tuple[pd.DataFrame, list[str]]:
-    """Add grid infrastructure features (nuclear, capacity) to DataFrame.
+    """Add nuclear x scarcity interaction feature.
+
+    Only nuclear_x_scarcity survived sign-constrained feature selection.
+    Raw nuclear_mw and nuclear_deficit had sign instability due to
+    collinearity, but their interaction with scarcity is robust.
 
     Returns:
         Updated DataFrame and list of new feature column names.
     """
     new_features: list[str] = []
 
-    for feature_name, series in grid_data.items():
-        if series is None or len(series) == 0:
-            continue
+    # Load nuclear production data (needed for interaction)
+    nuc_series = grid_data.get("nuclear_mw")
+    if nuc_series is not None and len(nuc_series) > 0:
+        aligned = nuc_series.reindex(df.index).ffill().bfill()
+        nuclear_mw = aligned.fillna(0.0)
+        nuclear_deficit = np.maximum(0.0, 1.0 - nuclear_mw)
 
-        # Align to main DataFrame index
-        aligned = series.reindex(df.index).ffill().bfill()
-        df[feature_name] = aligned.fillna(0.0)
-        new_features.append(feature_name)
-        logger.info("  Tier 3: added %s (%d non-null)", feature_name, aligned.notna().sum())
+        # Nuclear deficit x scarcity: fires when nuclear is down AND
+        # weather conditions are stressed (low wind + cold + peak demand)
+        if "_scarcity_indicator" in df.columns:
+            df["nuclear_x_scarcity"] = nuclear_deficit * df["_scarcity_indicator"]
+            new_features.append("nuclear_x_scarcity")
+            logger.info("  Tier 3: added nuclear_x_scarcity (max=%.3f)",
+                        df["nuclear_x_scarcity"].max())
 
     return df, new_features
 
@@ -337,6 +281,11 @@ def build_features(
         logger.info("Tier 3: +%d features (total: %d)", len(tier3_features), len(feature_cols))
     else:
         logger.info("Tier 3: skipped (no grid data)")
+
+    # Remove internal intermediate columns
+    for col in list(df.columns):
+        if col.startswith("_"):
+            df = df.drop(columns=[col])
 
     # Clipped price for training target
     df["price_clipped"] = df["price_eur_mwh"].clip(upper=price_clip)

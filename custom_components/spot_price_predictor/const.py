@@ -120,16 +120,16 @@ API_ELERING = "https://dashboard.elering.ee/api/nps/price"
 API_ELPRISET = "https://www.elprisetjustnu.se/api/v1/prices"
 API_FINGRID = "https://data.fingrid.fi/api/datasets"
 
-# Fingrid dataset IDs
+# Fingrid dataset IDs (only nuclear used for nuclear_x_scarcity interaction)
 FINGRID_NUCLEAR = 188
-FINGRID_FLOW_SE1 = 31
-FINGRID_FLOW_SE3 = 32
-FINGRID_FLOW_EE = 140
 
 # Normalization values for Fingrid data
 FINGRID_MAX_VALUES = {
     "nuclear_mw": 4372,
-    "flow_fi_se1": 5500,
-    "flow_fi_se3": 1200,
-    "flow_fi_ee": 1016,
 }
+
+# Nord Pool UMM (Urgent Market Messages) — public API, no key required
+API_NORDPOOL_UMM = "https://ummapi.nordpoolgroup.com/messages"
+UMM_FUEL_TYPE_NUCLEAR = 14
+UMM_AREA_FINLAND = "FI"
+FINNISH_NUCLEAR_CAPACITY_MW = 4394

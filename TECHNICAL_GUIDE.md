@@ -57,69 +57,56 @@ Used to compute 7-day rolling price spreads and derive `import_potential_xx` / `
 
 | Source | Purpose |
 |--------|---------|
-| [Fingrid Open Data](https://data.fingrid.fi) | Nuclear production (#188), transmission capacity SE1-FI (#24), SE3-FI (#27), EE-FI (#115) |
+| [Fingrid Open Data](https://data.fingrid.fi) | Nuclear production (#188) for nuclear_x_scarcity interaction feature |
 
-Register for free at data.fingrid.fi. Without this key, the model trains on Tier 1+2 features only.
+Register for free at data.fingrid.fi. Without this key, the model trains on Tier 1+2 features only (12 features).
 
 ---
 
 ## Feature Engineering
 
-### Tier 1: Base features (28) -- no API keys needed
+Features are selected via greedy forward selection with sign constraints: only features whose learned coefficients match economic theory are included. This prevents overfitting through collinear features with counter-intuitive signs.
 
-| Category | Count | Features |
-|----------|-------|----------|
-| Supply-side | 3 | `wind_speed_weighted`, `solar_irradiance_weighted`, `temperature_weighted` |
-| Time cycles | 4 | `hour_sin/cos`, `month_sin/cos` |
-| Demand patterns | 8 | `double_peak_am/pm` (Gaussian, center 9h/19h), weekend variants, `sauna_hour`, `monday_ramp`, `is_holiday`, `is_weekend` |
-| Thermal demand | 6 | `hdd`, `hdd_sq`, `daylight_deficit`, cross-terms (`wind_x_hdd`, `solar_x_deficit`, `temp_x_hdd`) |
-| Physics supply | 3 | `wind_power_density` (density-corrected), `solar_power_temp` (NOCT model), `renewable_surplus` |
-| Scarcity | 4 | `scarcity_indicator`, `wind_drought_penalty`, `cold_morning_stress`, `cold_calm_dark` (Dunkelflaute) |
+### Tier 1: Base features (12) -- no API keys needed
 
-### Tier 2: Cross-border trade features (6) -- no API keys needed
+| Category | Features | Coefficient sign |
+|----------|----------|:---:|
+| Supply | `wind_speed_weighted`, `solar_irradiance_weighted` | negative (more supply = lower price) |
+| Time cycles | `hour_sin`, `hour_cos`, `month_sin`, `month_cos` | cyclic |
+| Demand peaks | `double_peak_am`, `double_peak_pm` (Gaussian, 9h/19h workdays) | positive |
+| Calendar | `is_holiday` | negative (lower demand) |
+| Thermal demand | `hdd_sq` (squared heating degree days) | positive |
+| Scarcity | `wind_drought_penalty` (low wind on workdays) | positive |
+| Interaction | `solar_x_deficit` (solar x daylight deficit) | context-dependent |
 
-Derived from 7-day rolling average price spreads:
+### Tier 2: Cross-border export potential (+2) -- no API keys needed
 
 | Feature | Formula | Meaning |
 |---------|---------|---------|
-| `import_potential_se1` | max(0, spread_7d_fi_se1) | Price incentive to import from SE1 |
-| `import_potential_se3` | max(0, spread_7d_fi_se3) | Price incentive to import from SE3 |
-| `import_potential_ee` | max(0, spread_7d_fi_ee) | Price incentive to import from EE |
-| `export_potential_se1` | max(0, -spread_7d_fi_se1) | Price incentive to export to SE1 |
-| `export_potential_se3` | max(0, -spread_7d_fi_se3) | Price incentive to export to SE3 |
-| `export_potential_ee` | max(0, -spread_7d_fi_ee) | Price incentive to export to EE |
+| `export_potential_se3` | max(0, -spread_7d_fi_se3) | FI cheaper than SE3 (export incentive) |
+| `export_potential_ee` | max(0, -spread_7d_fi_ee) | FI cheaper than EE (export incentive) |
 
-### Tier 3: Grid infrastructure features (0-4) -- requires Fingrid API key
+Import potential features were removed: they had counter-intuitive positive coefficients because high import potential is a *symptom* of high FI prices, not a cause of lower prices.
 
-| Feature | Source | Normalization |
-|---------|--------|---------------|
-| `nuclear_mw` | Fingrid #188 | 0-1 (0-4372 MW) |
-| `import_capacity_se1` | Fingrid #24 | 0-1 (0-1500 MW) |
-| `import_capacity_se3` | Fingrid #27 | 0-1 (0-1200 MW) |
-| `import_capacity_ee` | Fingrid #115 | 0-1 (0-1016 MW) |
+### Tier 3: Nuclear x scarcity interaction (+0-1) -- requires Fingrid API key
 
-#### Known limitation: nuclear service breaks
+| Feature | Formula | Meaning |
+|---------|---------|---------|
+| `nuclear_x_scarcity` | nuclear_deficit x scarcity_indicator | Nuclear outage amplifies weather-driven scarcity |
 
-The `nuclear_mw` feature uses Fingrid's **real-time** nuclear production measurement (dataset #188), not a forecast. This means the model reacts to nuclear capacity changes within one refresh cycle (6 hours) but does not predict them ahead of time.
+Where `nuclear_deficit = max(0, 1 - nuclear_mw/4372)` and `scarcity_indicator = low_wind x HDD x peak_demand`.
 
-Finnish nuclear capacity (4,394 MW total):
-- Olkiluoto 1: 890 MWe
-- Olkiluoto 2: 890 MWe
-- Olkiluoto 3: 1,600 MWe
-- Loviisa 1: 507 MWe
-- Loviisa 2: 507 MWe
+Raw `nuclear_mw` and cross-border flow features were removed: they had sign instability due to multicollinearity with each other and with the cross-border price spreads.
 
-Planned service breaks (typically spring/autumn) cause significant price increases. When a reactor goes offline, the model's `nuclear_mw` feature will drop and subsequent forecasts will reflect higher prices. However, the first hours of a ramp-down may produce inaccurate forecasts until the feature value updates.
-
-Fingrid does not provide a nuclear-specific production forecast via their API. Planned outage schedules are published on [Fingrid's website](https://www.fingrid.fi/en/electricity-market-information/) and through ENTSO-E REMIT messages. Users should be aware that forecast accuracy may temporarily decrease during the transition period of planned nuclear service breaks.
+**Forward-looking outage data:** Planned outage schedules are fetched from the [Nord Pool UMM platform](https://umm.nordpoolgroup.com/) (public API, no key required). When a nuclear outage is published, the forecast window uses per-hour nuclear availability instead of forward-filling the last known value.
 
 ### Feature count by configuration
 
 | Configuration | Features | API keys |
 |---------------|----------|----------|
-| Tier 1 only | 28 | None |
-| Tier 1 + 2 | 34 | None |
-| Tier 1 + 2 + 3 | 38 | 1 (Fingrid, free) |
+| Tier 1 only | 12 | None |
+| Tier 1 + 2 | 14 | None |
+| Tier 1 + 2 + 3 | 15 | 1 (Fingrid, free) |
 
 ---
 
@@ -128,7 +115,7 @@ Fingrid does not provide a nuclear-specific production forecast via their API. P
 ### Two-stage Ridge regression with piecewise calibration
 
 **Stage 1 (base model):**
-- Linear polynomial (degree 1) on 28-38 features
+- Linear polynomial (degree 1) on 12-15 features
 - Weighted normal equations: beta = (X'WX + alpha*I)^(-1) X'Wy
 - Time-decay weighting: w(t) = exp(-ln2 * age_hours / (365 * 24))
 - Ridge alpha = 1.0

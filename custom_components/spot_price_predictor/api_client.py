@@ -14,11 +14,12 @@ from .const import (
     API_ELERING,
     API_ELPRISET,
     API_FINGRID,
+    API_NORDPOOL_UMM,
+    UMM_FUEL_TYPE_NUCLEAR,
+    UMM_AREA_FINLAND,
     FINGRID_NUCLEAR,
-    FINGRID_FLOW_SE1,
-    FINGRID_FLOW_SE3,
-    FINGRID_FLOW_EE,
     FINGRID_MAX_VALUES,
+    FINNISH_NUCLEAR_CAPACITY_MW,
     FINLAND_LOCATIONS,
     FORECAST_HOURS,
 )
@@ -204,9 +205,9 @@ class SpotPriceApiClient:
     # ------------------------------------------------------------------
 
     async def fetch_fingrid_data(self) -> dict[str, float]:
-        """Fetch latest Fingrid grid data (nuclear, cross-border flows).
+        """Fetch latest Fingrid nuclear production data.
 
-        Returns normalized values (0-1) for use as features.
+        Returns normalized nuclear_mw (0-1) for nuclear_x_scarcity feature.
         """
         if not self._fingrid_api_key:
             return {}
@@ -216,33 +217,26 @@ class SpotPriceApiClient:
         start = (now - timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
         end = now.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-        datasets = {
-            "nuclear_mw": FINGRID_NUCLEAR,
-            "flow_fi_se1": FINGRID_FLOW_SE1,
-            "flow_fi_se3": FINGRID_FLOW_SE3,
-            "flow_fi_ee": FINGRID_FLOW_EE,
-        }
-
         result: dict[str, float] = {}
-        for name, dataset_id in datasets.items():
-            try:
-                url = f"{API_FINGRID}/{dataset_id}/data"
-                params = {"startTime": start, "endTime": end, "format": "json", "pageSize": 1, "sortOrder": "desc"}
-                async with self._session.get(url, headers=headers, params=params) as resp:
-                    resp.raise_for_status()
-                    data = await resp.json()
-                    entries = data.get("data", [])
-                    if entries:
-                        raw_val = float(entries[0].get("value", 0.0))
-                        max_val = FINGRID_MAX_VALUES.get(name, 1.0)
-                        result[name] = raw_val / max_val if max_val else 0.0
-                    else:
-                        result[name] = 0.0
-            except Exception as err:
-                _LOGGER.warning("Fingrid fetch failed for %s: %s", name, err)
-                result[name] = 0.0
+        try:
+            url = f"{API_FINGRID}/{FINGRID_NUCLEAR}/data"
+            params = {"startTime": start, "endTime": end, "format": "json",
+                      "pageSize": 1, "sortOrder": "desc"}
+            async with self._session.get(url, headers=headers, params=params) as resp:
+                resp.raise_for_status()
+                data = await resp.json()
+                entries = data.get("data", [])
+                if entries:
+                    raw_val = float(entries[0].get("value", 0.0))
+                    max_val = FINGRID_MAX_VALUES.get("nuclear_mw", 4372)
+                    result["nuclear_mw"] = raw_val / max_val if max_val else 0.0
+                else:
+                    result["nuclear_mw"] = 0.0
+        except Exception as err:
+            _LOGGER.warning("Fingrid nuclear fetch failed: %s", err)
+            result["nuclear_mw"] = 0.0
 
-        _LOGGER.info("Fingrid data: %s", result)
+        _LOGGER.info("Fingrid nuclear_mw: %.3f", result.get("nuclear_mw", 0.0))
         return result
 
     async def validate_fingrid_key(self) -> bool:
@@ -293,5 +287,120 @@ class SpotPriceApiClient:
                 result[zone] = sum(spreads) / len(spreads)
             else:
                 result[zone] = 0.0
+
+        return result
+
+    # ------------------------------------------------------------------
+    # Nord Pool UMM: nuclear outage schedule (public, no key required)
+    # ------------------------------------------------------------------
+
+    async def fetch_nuclear_outage_schedule(self) -> list[dict[str, Any]]:
+        """Fetch planned nuclear outages from Nord Pool UMM (public API).
+
+        Returns list of outage dicts with keys:
+            plant: str (unit name, e.g. "Olkiluoto 2")
+            installed_mw: float (nominal capacity)
+            periods: list of {start: str, end: str, unavailable_mw: float,
+                              available_mw: float}
+        """
+        try:
+            async with self._session.get(
+                API_NORDPOOL_UMM,
+                headers={"Accept": "application/json"},
+                timeout=30,
+            ) as resp:
+                if resp.status != 200:
+                    _LOGGER.warning("Nord Pool UMM HTTP %d", resp.status)
+                    return []
+                data = await resp.json()
+        except Exception as err:
+            _LOGGER.warning("Nord Pool UMM fetch error: %s", err)
+            return []
+
+        outages: list[dict[str, Any]] = []
+        for item in data.get("items", []):
+            # Only active messages (eventStatus 1)
+            if item.get("eventStatus") != 1:
+                continue
+            for pu in item.get("productionUnits", []):
+                if (pu.get("areaName") != UMM_AREA_FINLAND
+                        or pu.get("fuelType") != UMM_FUEL_TYPE_NUCLEAR):
+                    continue
+                periods = []
+                for tp in pu.get("timePeriods", []):
+                    periods.append({
+                        "start": tp.get("eventStart", ""),
+                        "end": tp.get("eventStop", ""),
+                        "unavailable_mw": tp.get("unavailableCapacity", 0),
+                        "available_mw": tp.get("availableCapacity", 0),
+                    })
+                if periods:
+                    outages.append({
+                        "plant": pu.get("name", ""),
+                        "installed_mw": pu.get("installedCapacity", 0),
+                        "periods": periods,
+                    })
+
+        _LOGGER.info("Nord Pool UMM: %d Finnish nuclear outage entries", len(outages))
+        return outages
+
+    @staticmethod
+    def compute_hourly_nuclear_mw(
+        current_nuclear_mw: float,
+        outage_schedule: list[dict[str, Any]],
+        start_utc: datetime,
+        hours: int,
+    ) -> list[float]:
+        """Compute per-hour normalized nuclear_mw from outage schedule.
+
+        Args:
+            current_nuclear_mw: Latest nuclear_mw from Fingrid (normalized 0-1).
+            outage_schedule: Outage entries from fetch_nuclear_outage_schedule().
+            start_utc: Forecast start time (UTC).
+            hours: Number of forecast hours.
+
+        Returns:
+            List of normalized nuclear_mw values (0-1), one per hour.
+        """
+        max_mw = FINGRID_MAX_VALUES["nuclear_mw"]
+
+        # Pre-parse outage periods into (start_dt, end_dt, unavailable_mw) tuples
+        parsed_periods: list[tuple[datetime, datetime, float]] = []
+        for entry in outage_schedule:
+            for period in entry.get("periods", []):
+                try:
+                    start = datetime.fromisoformat(
+                        period["start"].replace("Z", "+00:00"))
+                    end = datetime.fromisoformat(
+                        period["end"].replace("Z", "+00:00"))
+                    parsed_periods.append((start, end, period["unavailable_mw"]))
+                except (ValueError, KeyError):
+                    continue
+
+        if not parsed_periods:
+            # No outages → use constant current value
+            return [current_nuclear_mw] * hours
+
+        # Current production in MW
+        current_mw = current_nuclear_mw * max_mw
+
+        result: list[float] = []
+        for i in range(hours):
+            hour_dt = start_utc + timedelta(hours=i)
+            # Sum unavailable capacity for all active outage periods at this hour
+            total_unavail = 0.0
+            for p_start, p_end, unavail_mw in parsed_periods:
+                if p_start <= hour_dt < p_end:
+                    total_unavail += unavail_mw
+
+            if total_unavail > 0:
+                # Estimate available = total capacity - unavailable
+                avail_mw = FINNISH_NUCLEAR_CAPACITY_MW - total_unavail
+                normalized = max(0.0, min(1.0, avail_mw / max_mw))
+            else:
+                # No outage at this hour, use current production
+                normalized = current_nuclear_mw
+
+            result.append(normalized)
 
         return result

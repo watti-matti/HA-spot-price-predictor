@@ -148,6 +148,32 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                 except Exception as err:
                     _LOGGER.warning("Tier 3 data fetch failed: %s", err)
 
+            # Nuclear outage schedule (Nord Pool UMM, public, no key required)
+            tier3_hourly: dict[str, list[float]] | None = None
+            if tier3_data and "nuclear_mw" in tier3_data:
+                try:
+                    outage_schedule = await self.api.fetch_nuclear_outage_schedule()
+                    if outage_schedule:
+                        now_utc = datetime.now(timezone.utc).replace(
+                            minute=0, second=0, microsecond=0)
+                        nuclear_hourly = self.api.compute_hourly_nuclear_mw(
+                            current_nuclear_mw=tier3_data["nuclear_mw"],
+                            outage_schedule=outage_schedule,
+                            start_utc=now_utc,
+                            hours=min(FORECAST_HOURS, len(weather)),
+                        )
+                        tier3_hourly = {"nuclear_mw": nuclear_hourly}
+                        _LOGGER.info(
+                            "Nuclear outage schedule: %d entries, "
+                            "nuclear_mw range [%.3f, %.3f]",
+                            len(outage_schedule),
+                            min(nuclear_hourly),
+                            max(nuclear_hourly),
+                        )
+                except Exception as err:
+                    _LOGGER.warning(
+                        "UMM outage fetch failed, using constant nuclear_mw: %s", err)
+
             # Build features for forecast window
             now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
             feature_rows = build_forecast_features(
@@ -158,6 +184,7 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                 demand=DEMAND_DEFAULTS,
                 tier2_spreads=tier2_spreads,
                 tier3_data=tier3_data,
+                tier3_hourly=tier3_hourly,
             )
 
             # Run model inference

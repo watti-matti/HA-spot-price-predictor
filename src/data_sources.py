@@ -475,22 +475,38 @@ def _fetch_fingrid_dataset(
 
     all_rows: list[dict] = []
     page = 1
+    total_expected = None
+    max_conn_retries = 3
 
     while True:
         params["page"] = page
-        try:
-            r = requests.get(url, headers=headers, params=params, timeout=30)
-            if r.status_code == 429:
-                # Rate limited, wait and retry
-                retry_after = int(r.headers.get("Retry-After", 60))
-                logger.info("  Rate limited, waiting %ds...", retry_after)
-                time.sleep(retry_after)
-                continue
-            if r.status_code != 200:
-                logger.warning("  Fingrid HTTP %d", r.status_code)
-                break
-        except requests.RequestException as e:
-            logger.warning("  Fingrid request error: %s", e)
+        conn_retries = 0
+        r = None
+        while True:
+            try:
+                r = requests.get(url, headers=headers, params=params, timeout=60)
+                if r.status_code == 429:
+                    # Rate limited — always wait and retry (don't count toward max)
+                    retry_after = max(int(r.headers.get("Retry-After", 10)), 6)
+                    logger.info("  Rate limited on page %d, waiting %ds...",
+                                page, retry_after)
+                    time.sleep(retry_after)
+                    continue
+                break  # Got a non-429 response
+            except requests.RequestException as e:
+                conn_retries += 1
+                if conn_retries < max_conn_retries:
+                    logger.info("  Fingrid request error (retry %d/%d): %s",
+                                conn_retries, max_conn_retries, e)
+                    time.sleep(10)
+                else:
+                    logger.warning("  Fingrid request failed after %d retries: %s",
+                                   max_conn_retries, e)
+                    break
+
+        if r is None or r.status_code != 200:
+            if r is not None:
+                logger.warning("  Fingrid HTTP %d (page %d)", r.status_code, page)
             break
 
         data = r.json()
@@ -499,16 +515,24 @@ def _fetch_fingrid_dataset(
             break
 
         all_rows.extend(rows)
-        # Check pagination
+        # Check pagination (total/lastPage only present on page 1)
         pagination = data.get("pagination", {})
-        total = pagination.get("total", len(all_rows))
-        if len(all_rows) >= total:
+        if total_expected is None:
+            total_expected = pagination.get("total", len(all_rows))
+        last_page = pagination.get("lastPage", page)
+        if len(all_rows) >= total_expected:
             break
+        logger.info("    Page %d/%d: %d/%d rows fetched",
+                    page, last_page, len(all_rows), total_expected)
         page += 1
-        time.sleep(1)  # Rate limit: 10 requests/min
+        # Fingrid rate limit: 10 requests/min → 6s between requests
+        time.sleep(6)
 
     if not all_rows:
         return None
+
+    if total_expected and len(all_rows) < total_expected:
+        logger.warning("  Incomplete fetch: got %d/%d rows", len(all_rows), total_expected)
 
     df = pd.DataFrame(all_rows)
     df["date"] = pd.to_datetime(df["startTime"], utc=True)
@@ -516,4 +540,5 @@ def _fetch_fingrid_dataset(
 
     # Resample to hourly (mean of sub-hourly intervals)
     hourly = df.resample("h").mean().dropna()
+    logger.info("  Resampled to %d hourly rows", len(hourly))
     return hourly["value"]

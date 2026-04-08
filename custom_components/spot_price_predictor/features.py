@@ -1,4 +1,9 @@
-"""Pure Python feature engineering for inference. No numpy/pandas."""
+"""Pure Python feature engineering for inference. No numpy/pandas.
+
+Only the 14 features validated via greedy forward selection with sign
+constraints are computed. Each feature has an economically correct
+coefficient sign in the trained model.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .holidays import build_holiday_set
-from .const import DEMAND_DEFAULTS, DEFAULT_TIMEZONE, FINGRID_MAX_VALUES
+from .const import DEMAND_DEFAULTS, DEFAULT_TIMEZONE
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -38,7 +43,7 @@ def compute_features_for_hour(
     tier2_spreads: dict[str, float] | None = None,
     tier3_data: dict[str, float] | None = None,
 ) -> dict[str, float]:
-    """Compute all features for a single forecast hour.
+    """Compute all 14 features for a single forecast hour.
 
     Args:
         utc_dt: UTC datetime for this hour.
@@ -47,8 +52,8 @@ def compute_features_for_hour(
         temp_weighted: Capacity-weighted temperature (C).
         holidays: Set of ISO date strings for holidays.
         demand: Demand config overrides.
-        tier2_spreads: Dict of rolling spread values per neighbor (se1, se3, ee).
-        tier3_data: Dict with nuclear_mw, flow_fi_se1, etc. (normalized 0-1).
+        tier2_spreads: Dict of rolling spread values per neighbor (se3, ee).
+        tier3_data: Dict with nuclear_mw (normalized 0-1).
 
     Returns:
         Feature dict ready for model.predict_single().
@@ -73,10 +78,8 @@ def compute_features_for_hour(
     month_sin = math.sin(PI2 * mo / 12.0)
     month_cos = math.cos(PI2 * mo / 12.0)
 
-    is_weekend = 1.0 if dow >= 5 else 0.0
     is_hol = 1.0 if date_str in holidays else 0.0
     is_workday = 1.0 if (dow < 5 and is_hol == 0.0) else 0.0
-    is_nonwork = 1.0 - is_workday
 
     # Demand peaks
     am_center = d.get("peak_am_center", 9)
@@ -89,22 +92,6 @@ def compute_features_for_hour(
 
     double_peak_am = raw_am * is_workday
     double_peak_pm = raw_pm * is_workday
-    peak_am_weekend = raw_am * is_nonwork
-    peak_pm_weekend = raw_pm * is_nonwork
-
-    # Sauna hour
-    sauna_hours = d.get("sauna_hours", [20, 21])
-    sauna_days = d.get("sauna_days", [4, 5])
-    sauna_hour = 1.0 if (dow in sauna_days and local_h in sauna_hours) else 0.0
-
-    # First-workday ramp: fires on the first workday after any non-work day
-    # (captures post-holiday cold-starts, not just Mondays)
-    ramp_hours = d.get("monday_ramp_hours", [6, 7, 8, 9])
-    yesterday = local_dt - timedelta(days=1)
-    yesterday_str = yesterday.strftime("%Y-%m-%d")
-    yesterday_dow = yesterday.weekday()
-    yesterday_was_nonwork = (yesterday_dow >= 5) or (yesterday_str in holidays)
-    monday_ramp = 1.0 if (is_workday == 1.0 and yesterday_was_nonwork and local_h in ramp_hours) else 0.0
 
     # Thermal demand
     hdd_threshold = d.get("hdd_threshold", 17.0)
@@ -114,92 +101,50 @@ def compute_features_for_hour(
     hdd = max(0.0, hdd_threshold - t)
     hdd_sq = hdd ** 2
 
-    # Daylight deficit
+    # Daylight deficit (for solar_x_deficit interaction)
     dl = daylight_hours(doy, latitude)
     deficit = max(0.0, 12.0 - dl)
-
-    # Cross-terms
-    wind_x_hdd = w * hdd
     solar_x_deficit = s * deficit
-    temp_x_hdd = t * hdd
 
-    # Physics supply
-    rated_speed = d.get("wind_rated_speed", 14)
-    rho_rel = 288.15 / (273.15 + t) if (273.15 + t) != 0 else 1.0
-    w_capped = min(w, float(rated_speed))
-    wind_power_density = rho_rel * (w_capped / rated_speed) ** 3
+    # Wind drought penalty: low wind on workdays
+    wind_drought = max(0.0, 4.0 - w) ** 2
+    wind_drought_penalty = wind_drought * is_workday
 
-    t_cell = t + 0.03 * s
-    pv_efficiency = 1.0 - 0.004 * (t_cell - 25.0)
-    solar_power_temp = s * pv_efficiency
-
-    renewable_surplus = max(0.0, w - 6.0) * max(0.0, s - 100.0) / 100.0
-
-    # Scarcity
+    # Scarcity indicator (intermediate for nuclear_x_scarcity)
     low_wind = max(0.0, 5.0 - w)
     peak_demand_full = max(raw_am, raw_pm)
     scarcity_indicator = low_wind * hdd * peak_demand_full
 
-    wind_drought = max(0.0, 4.0 - w) ** 2
-    wind_drought_penalty = wind_drought * is_workday
-
-    cold_morning_stress = max(0.0, hdd - 20.0) * raw_am * is_workday
-
-    cold_calm_dark = (
-        max(0.0, hdd - 15.0)
-        * max(0.0, 6.0 - w)
-        * max(0.0, deficit - 4.0) / 10.0
-    )
-
     feat: dict[str, float] = {
         "wind_speed_weighted": w,
         "solar_irradiance_weighted": s,
-        "temperature_weighted": t,
         "hour_sin": hour_sin,
         "hour_cos": hour_cos,
         "month_sin": month_sin,
         "month_cos": month_cos,
         "double_peak_am": double_peak_am,
         "double_peak_pm": double_peak_pm,
-        "peak_am_weekend": peak_am_weekend,
-        "peak_pm_weekend": peak_pm_weekend,
-        "sauna_hour": sauna_hour,
-        "monday_ramp": monday_ramp,
         "is_holiday": is_hol,
-        "is_weekend": is_weekend,
-        "hdd": hdd,
         "hdd_sq": hdd_sq,
-        "daylight_deficit": deficit,
-        "wind_x_hdd": wind_x_hdd,
-        "solar_x_deficit": solar_x_deficit,
-        "temp_x_hdd": temp_x_hdd,
-        "wind_power_density": wind_power_density,
-        "solar_power_temp": solar_power_temp,
-        "renewable_surplus": renewable_surplus,
-        "scarcity_indicator": scarcity_indicator,
         "wind_drought_penalty": wind_drought_penalty,
-        "cold_morning_stress": cold_morning_stress,
-        "cold_calm_dark": cold_calm_dark,
+        "solar_x_deficit": solar_x_deficit,
     }
 
-    # Tier 2: cross-border spreads
+    # Tier 2: export potential (SE3, EE only)
     if tier2_spreads:
-        for prefix in ("se1", "se3", "ee"):
+        for prefix in ("se3", "ee"):
             spread = tier2_spreads.get(prefix, 0.0)
-            feat[f"import_potential_{prefix}"] = max(0.0, spread)
             feat[f"export_potential_{prefix}"] = max(0.0, -spread)
     else:
-        for prefix in ("se1", "se3", "ee"):
-            feat[f"import_potential_{prefix}"] = 0.0
+        for prefix in ("se3", "ee"):
             feat[f"export_potential_{prefix}"] = 0.0
 
-    # Tier 3: grid data (already normalized)
+    # Tier 3: nuclear x scarcity interaction
+    nuc = 0.0
     if tier3_data:
-        for key in ("nuclear_mw", "flow_fi_se1", "flow_fi_se3", "flow_fi_ee"):
-            feat[key] = tier3_data.get(key, 0.0)
-    else:
-        for key in ("nuclear_mw", "flow_fi_se1", "flow_fi_se3", "flow_fi_ee"):
-            feat[key] = 0.0
+        nuc = tier3_data.get("nuclear_mw", 0.0)
+    nuclear_deficit = max(0.0, 1.0 - nuc)
+    feat["nuclear_x_scarcity"] = nuclear_deficit * scarcity_indicator
 
     return feat
 
@@ -212,6 +157,7 @@ def build_forecast_features(
     demand: dict[str, Any] | None = None,
     tier2_spreads: dict[str, float] | None = None,
     tier3_data: dict[str, float] | None = None,
+    tier3_hourly: dict[str, list[float]] | None = None,
 ) -> list[dict[str, float]]:
     """Build feature dicts for each hour of the forecast window.
 
@@ -224,6 +170,8 @@ def build_forecast_features(
         demand: Demand config overrides.
         tier2_spreads: Constant spread values per neighbor (simplified for forecast).
         tier3_data: Constant grid data values (simplified for forecast).
+        tier3_hourly: Per-hour overrides for tier3 features (e.g. nuclear_mw
+                      from outage schedule). Keys map to lists of per-hour values.
 
     Returns:
         List of feature dicts, one per hour.
@@ -232,6 +180,14 @@ def build_forecast_features(
     for i in range(min(hours, len(weather_data))):
         utc_dt = start_utc + timedelta(hours=i)
         wd = weather_data[i]
+
+        # Build per-hour tier3 data: start from constant, override with hourly
+        hour_tier3 = dict(tier3_data) if tier3_data else None
+        if tier3_hourly and hour_tier3 is not None:
+            for key, values in tier3_hourly.items():
+                if i < len(values):
+                    hour_tier3[key] = values[i]
+
         feat = compute_features_for_hour(
             utc_dt=utc_dt,
             wind_weighted=wd.get("wind_weighted", 0.0),
@@ -240,7 +196,7 @@ def build_forecast_features(
             holidays=holidays,
             demand=demand,
             tier2_spreads=tier2_spreads,
-            tier3_data=tier3_data,
+            tier3_data=hour_tier3,
         )
         rows.append(feat)
     return rows
