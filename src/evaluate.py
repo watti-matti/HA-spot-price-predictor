@@ -36,29 +36,37 @@ from src.train_model import _make_time_weights, _batched_stats, _solve_normal_eq
 logger = logging.getLogger(__name__)
 
 
-def _predict_two_stage(
+def _predict_model(
     X: np.ndarray,
     coefs: dict,
 ) -> np.ndarray:
-    """Predict using saved two-stage model coefficients."""
-    pw_breaks = coefs["piecewise_breakpoints"]
+    """Predict using saved model coefficients (log-linear or legacy two-stage)."""
+    model_type = coefs.get("model_type", "linear")
 
-    # Stage 1
-    s1 = coefs["stage1"]
-    s1_coefs = np.array([f["coef"] for f in s1["features"]], dtype=np.float64)
-    s1_intercept = s1["intercept"]
-    s1_pred = X @ s1_coefs + s1_intercept
+    if model_type == "log-linear":
+        # Log-linear: exp(X @ coefs + intercept) - offset
+        feature_coefs = np.array([f["coef"] for f in coefs["features"]], dtype=np.float64)
+        intercept = coefs["intercept"]
+        log_offset = coefs.get("log_offset", 55)
+        log_pred = X @ feature_coefs + intercept
+        return np.exp(log_pred) - log_offset
 
-    # Stage 2: augment
-    pw_feats = np.column_stack(
-        [s1_pred] + [np.maximum(0.0, s1_pred - bp) for bp in pw_breaks]
-    )
-    X_aug = np.hstack([X, pw_feats])
+    # Legacy: two-stage piecewise model
+    pw_breaks = coefs.get("piecewise_breakpoints", [])
+    if "stage1" in coefs and pw_breaks:
+        s1 = coefs["stage1"]
+        s1_coefs = np.array([f["coef"] for f in s1["features"]], dtype=np.float64)
+        s1_pred = X @ s1_coefs + s1["intercept"]
+        pw_feats = np.column_stack(
+            [s1_pred] + [np.maximum(0.0, s1_pred - bp) for bp in pw_breaks]
+        )
+        X_aug = np.hstack([X, pw_feats])
+        s2_coefs = np.array([f["coef"] for f in coefs["features"]], dtype=np.float64)
+        return X_aug @ s2_coefs + coefs["intercept"]
 
-    s2_coefs = np.array([f["coef"] for f in coefs["features"]], dtype=np.float64)
-    s2_intercept = coefs["intercept"]
-
-    return X_aug @ s2_coefs + s2_intercept
+    # Simple linear
+    feature_coefs = np.array([f["coef"] for f in coefs["features"]], dtype=np.float64)
+    return X @ feature_coefs + coefs["intercept"]
 
 
 def _train_tier_variant(
@@ -178,10 +186,10 @@ def run_evaluation(config: dict, out_dir: Path) -> None:
     y_te = y_actual[split:]
     y_te_clip = y_clipped[split:]
     ts_te = timestamps[split:]
-    preds = _predict_two_stage(X_te, coefs)
+    preds = _predict_model(X_te, coefs)
 
     # Also predict full dataset
-    preds_all = _predict_two_stage(X, coefs)
+    preds_all = _predict_model(X, coefs)
 
     # Overall test metrics
     mae = mean_absolute_error(y_te_clip, preds)
