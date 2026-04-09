@@ -37,7 +37,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Spot Price Predictor from a config entry."""
     hass.data.setdefault(DOMAIN, {})
 
-    coordinator = SpotPriceCoordinator(hass, entry)
+    model = await SpotPriceModel.async_load()
+    coordinator = SpotPriceCoordinator(hass, entry, model=model)
     await coordinator.async_config_entry_first_refresh()
 
     hass.data[DOMAIN][entry.entry_id] = coordinator

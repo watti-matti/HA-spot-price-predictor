@@ -24,15 +24,16 @@ class SpotPriceModel:
         self.feature_names: list[str] = coefs["feature_names"]
 
     @classmethod
-    def load(cls, path: Path | None = None) -> "SpotPriceModel":
-        """Load model from JSON coefficients file.
+    async def async_load(cls, path: Path | None = None) -> "SpotPriceModel":
+        """Load model from JSON coefficients file (async-safe).
 
         Priority: explicit path > user-uploaded > bundled default.
         """
+        import asyncio
+
         if path is not None:
             p = path
         else:
-            # Check for user-uploaded coefficients first
             user_path = DEFAULT_COEFS_PATH.parent / "model_coefs_user.json"
             if user_path.exists():
                 p = user_path
@@ -40,6 +41,31 @@ class SpotPriceModel:
             else:
                 p = DEFAULT_COEFS_PATH
                 _LOGGER.info("Using bundled default coefficients: %s", p)
+
+        def _read():
+            with open(p, "r", encoding="utf-8") as f:
+                return json.load(f)
+
+        coefs = await asyncio.get_event_loop().run_in_executor(None, _read)
+        _LOGGER.info(
+            "Loaded model %s with %d features (tiers: %s)",
+            coefs.get("model_version"),
+            coefs.get("feature_count"),
+            coefs.get("tier_info", {}),
+        )
+        return cls(coefs)
+
+    @classmethod
+    def load(cls, path: Path | None = None) -> "SpotPriceModel":
+        """Load model (sync fallback for non-async contexts like training)."""
+        if path is not None:
+            p = path
+        else:
+            user_path = DEFAULT_COEFS_PATH.parent / "model_coefs_user.json"
+            if user_path.exists():
+                p = user_path
+            else:
+                p = DEFAULT_COEFS_PATH
 
         with open(p, "r", encoding="utf-8") as f:
             coefs = json.load(f)

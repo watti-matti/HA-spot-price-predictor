@@ -48,7 +48,8 @@ RETRY_INTERVAL_SECONDS = 900  # 15 minutes after failure
 class SpotPriceCoordinator(DataUpdateCoordinator):
     """Coordinator that fetches data and runs model inference."""
 
-    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry,
+                 model: SpotPriceModel | None = None) -> None:
         super().__init__(
             hass,
             _LOGGER,
@@ -60,7 +61,7 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
         session = async_get_clientsession(hass)
         fingrid_key = entry.data.get(CONF_FINGRID_API_KEY)
         self.api = SpotPriceApiClient(session, fingrid_key)
-        self.model = SpotPriceModel.load()
+        self.model = model or SpotPriceModel.load()
 
         # Operator tariff config
         operator_id = entry.data.get(CONF_OPERATOR, "elenia")
