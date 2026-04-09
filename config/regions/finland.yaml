@@ -263,6 +263,6 @@ training:
   ridge_alpha: 1.0                   # Ridge regularization strength
   batch_size: 512                    # Batch size for memory-efficient training
   price_clip_max: 500                # Max price (EUR/MWh) to reduce outlier influence
-  piecewise_breakpoints: auto        # "auto" = derived from training data percentiles
-                                     # or explicit list like [5, 15, 50] (EUR/MWh)
+  piecewise_breakpoints: [1.0]       # Single knee: dampens near-zero noise, no high-price ceiling
+                                     # (validated via comparison of 7 strategies + 2 polynomial models)
   forecast_hours: 170                # Forecast window (7.08 days)

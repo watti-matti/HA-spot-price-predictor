@@ -1,12 +1,10 @@
 {
   "model_version": "v5.0",
-  "intercept": 4.029413606171978,
+  "intercept": 1.7163549503073132,
   "piecewise_breakpoints": [
-    4.0,
-    10.1,
-    26.2
+    1.0
   ],
-  "feature_count": 19,
+  "feature_count": 17,
   "feature_names": [
     "wind_speed_weighted",
     "solar_irradiance_weighted",
@@ -24,9 +22,7 @@
     "export_potential_ee",
     "nuclear_x_scarcity",
     "stage1_pred",
-    "pw_relu_4.0",
-    "pw_relu_10.1",
-    "pw_relu_26.2"
+    "pw_relu_1.0"
   ],
   "tier_info": {
     "tier1": true,
@@ -34,154 +30,146 @@
     "tier3": true
   },
   "metrics": {
-    "stage1_mae": 2.6296471784972986,
-    "stage1_r2": 0.6814876697545628,
-    "stage2_mae": 2.5461624462885766,
-    "stage2_r2": 0.7021141209464037,
+    "stage1_mae": 2.742119913579551,
+    "stage1_r2": 0.6675581591028206,
+    "stage2_mae": 2.5895055076382794,
+    "stage2_r2": 0.691044019227729,
     "train_samples": 29784,
     "test_samples": 5256
   },
   "stage1": {
-    "intercept": 4.602578937722264,
+    "intercept": 4.629646821754373,
     "features": [
       {
         "name": "wind_speed_weighted",
-        "coef": -1.1103412477490548
+        "coef": -1.1187652761299358
       },
       {
         "name": "solar_irradiance_weighted",
-        "coef": -0.0035559839162722087
+        "coef": -0.0036124014699832814
       },
       {
         "name": "hour_sin",
-        "coef": -1.3329834379997225
+        "coef": -1.3144510449432414
       },
       {
         "name": "hour_cos",
-        "coef": -0.3967133649198121
+        "coef": -0.40015754092920797
       },
       {
         "name": "month_sin",
-        "coef": -2.0677122072052216
+        "coef": -2.0720840017192814
       },
       {
         "name": "month_cos",
-        "coef": -0.09397343317430562
+        "coef": -0.06746523505648518
       },
       {
         "name": "double_peak_am",
-        "coef": 4.2849116513400265
+        "coef": 4.339602806229715
       },
       {
         "name": "double_peak_pm",
-        "coef": 2.4981010424747763
+        "coef": 2.612328972108902
       },
       {
         "name": "is_holiday",
-        "coef": -0.24016116449812347
+        "coef": -0.21423691828691316
       },
       {
         "name": "hdd_sq",
-        "coef": 0.011574717781209385
+        "coef": 0.011381546898412103
       },
       {
         "name": "wind_drought_penalty",
-        "coef": 0.6180524654591751
+        "coef": 0.5999733842015124
       },
       {
         "name": "solar_x_deficit",
-        "coef": 0.0009381145771888583
+        "coef": 0.0009515493579512399
       },
       {
         "name": "export_potential_se3",
-        "coef": 0.01040802512760752
+        "coef": 0.011469969117430038
       },
       {
         "name": "export_potential_ee",
-        "coef": 0.022246369519790542
+        "coef": 0.02230401853910128
       },
       {
         "name": "nuclear_x_scarcity",
-        "coef": 0.8878543945602783
+        "coef": 0.8914494369989876
       }
     ]
   },
   "features": [
     {
       "name": "wind_speed_weighted",
-      "coef": -0.5477323363047673
+      "coef": -0.1386720952857789
     },
     {
       "name": "solar_irradiance_weighted",
-      "coef": -0.001187633159229304
+      "coef": -0.00015001644386971168
     },
     {
       "name": "hour_sin",
-      "coef": -0.44464321575764026
+      "coef": 0.16327839546429285
     },
     {
       "name": "hour_cos",
-      "coef": -0.03643114135584965
+      "coef": 0.009583586005486101
     },
     {
       "name": "month_sin",
-      "coef": -0.3765359838664885
+      "coef": 0.46384346889039874
     },
     {
       "name": "month_cos",
-      "coef": 0.4044503895351226
+      "coef": 0.2742950306472023
     },
     {
       "name": "double_peak_am",
-      "coef": 1.2451605960484873
+      "coef": -0.6757494329156087
     },
     {
       "name": "double_peak_pm",
-      "coef": 0.4404938372045203
+      "coef": -0.5613879403256429
     },
     {
       "name": "is_holiday",
-      "coef": -0.3828563268561253
+      "coef": -0.23855225045446357
     },
     {
       "name": "hdd_sq",
-      "coef": -0.00015099106920226006
+      "coef": -0.003915352798429321
     },
     {
       "name": "wind_drought_penalty",
-      "coef": -0.4029752747140286
+      "coef": -0.5807294146132306
     },
     {
       "name": "solar_x_deficit",
-      "coef": -7.19044529440654e-05
+      "coef": -0.0003744117687102485
     },
     {
       "name": "export_potential_se3",
-      "coef": 0.0016790905046205563
+      "coef": -0.0036093509755706255
     },
     {
       "name": "export_potential_ee",
-      "coef": 0.004815765253002079
+      "coef": -0.004469022619808073
     },
     {
       "name": "nuclear_x_scarcity",
-      "coef": -0.06607871017335477
+      "coef": -0.432642925902763
     },
     {
       "name": "stage1_pred",
-      "coef": 0.17956874111977172
+      "coef": -0.1851389500981916
     },
     {
-      "name": "pw_relu_4.0",
-      "coef": 1.2091918831187967
-    },
-    {
-      "name": "pw_relu_10.1",
-      "coef": -0.3654602885512848
-    },
-    {
-      "name": "pw_relu_26.2",
-      "coef": -1.5457235137124312
+      "name": "pw_relu_1.0",
+      "coef": 1.6077254921419706
     }
   ]
 }

@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 BATCH_SIZE = 512
-PW_BREAKS_DEFAULT = [20, 40, 120]
+PW_BREAKS_DEFAULT = [1.0]  # Single knee: dampens near-zero noise, no high-price ceiling
 
 
 # ---------------------------------------------------------------------------
@@ -188,37 +188,45 @@ def train(
         ],
     }
 
-    # ── Stage 2: Piecewise calibration ────────────────────────────────
-    logger.info("Stage 2: Piecewise calibration (breakpoints: %s)...", pw_breaks)
+    # ── Stage 2: Piecewise calibration (optional) ──────────────────────
+    if pw_breaks:
+        logger.info("Stage 2: Piecewise calibration (breakpoints: %s)...", pw_breaks)
 
-    # Stage 1 predictions on train and test
-    s1_tr = _predict(X_tr, coefs_orig, intercept)
-    s1_te = preds_te
+        # Stage 1 predictions on train and test
+        s1_tr = _predict(X_tr, coefs_orig, intercept)
+        s1_te = preds_te
 
-    # Augment with piecewise ReLU features
-    pw_names = ["stage1_pred"] + [f"pw_relu_{bp}" for bp in pw_breaks]
-    pw_tr = np.column_stack(
-        [s1_tr] + [np.maximum(0.0, s1_tr - bp) for bp in pw_breaks]
-    )
-    pw_te = np.column_stack(
-        [s1_te] + [np.maximum(0.0, s1_te - bp) for bp in pw_breaks]
-    )
+        # Augment with piecewise ReLU features
+        pw_names = ["stage1_pred"] + [f"pw_relu_{bp}" for bp in pw_breaks]
+        pw_tr = np.column_stack(
+            [s1_tr] + [np.maximum(0.0, s1_tr - bp) for bp in pw_breaks]
+        )
+        pw_te = np.column_stack(
+            [s1_te] + [np.maximum(0.0, s1_te - bp) for bp in pw_breaks]
+        )
 
-    X_tr_aug = np.hstack([X_tr, pw_tr.astype(np.float32)])
-    X_te_aug = np.hstack([X_te, pw_te.astype(np.float32)])
-    aug_names = feature_cols + pw_names
+        X_tr_aug = np.hstack([X_tr, pw_tr.astype(np.float32)])
+        X_te_aug = np.hstack([X_te, pw_te.astype(np.float32)])
+        aug_names = feature_cols + pw_names
 
-    feat_mean2, feat_std2 = _batched_stats(X_tr_aug, weights, batch_size)
-    coefs_std2 = _solve_normal_eq(
-        X_tr_aug, y_tr, y_mean, feat_mean2, feat_std2, weights, alpha, batch_size
-    )
-    coefs_orig2 = coefs_std2 / feat_std2
-    intercept2 = y_mean - (feat_mean2 / feat_std2) @ coefs_std2
+        feat_mean2, feat_std2 = _batched_stats(X_tr_aug, weights, batch_size)
+        coefs_std2 = _solve_normal_eq(
+            X_tr_aug, y_tr, y_mean, feat_mean2, feat_std2, weights, alpha, batch_size
+        )
+        coefs_orig2 = coefs_std2 / feat_std2
+        intercept2 = y_mean - (feat_mean2 / feat_std2) @ coefs_std2
 
-    preds2_te = _predict(X_te_aug, coefs_orig2, intercept2)
-    mae2 = mean_absolute_error(y_te, preds2_te)
-    r2_2 = r2_score(y_te, preds2_te)
-    logger.info("  Stage 2: MAE=%.2f EUR/MWh, R2=%.4f", mae2, r2_2)
+        preds2_te = _predict(X_te_aug, coefs_orig2, intercept2)
+        mae2 = mean_absolute_error(y_te, preds2_te)
+        r2_2 = r2_score(y_te, preds2_te)
+        logger.info("  Stage 2: MAE=%.2f EUR/MWh, R2=%.4f", mae2, r2_2)
+    else:
+        logger.info("Stage 2: Skipped (no piecewise breakpoints)")
+        aug_names = feature_cols
+        coefs_orig2 = coefs_orig
+        intercept2 = intercept
+        mae2 = mae1
+        r2_2 = r2_1
 
     # ── Build output dict ─────────────────────────────────────────────
     # Determine active tiers
@@ -252,7 +260,7 @@ def train(
     }
 
     # Cleanup
-    del X_tr, X_te, X_tr_aug, X_te_aug, pw_tr, pw_te
+    del X_tr, X_te
     gc.collect()
 
     return coefs_dict
@@ -276,6 +284,10 @@ def main():
                         help="Skip Tier 2 (cross-border prices)")
     parser.add_argument("--skip-tier3", action="store_true",
                         help="Skip Tier 3 (grid data)")
+    parser.add_argument("--no-piecewise", action="store_true",
+                        help="Skip Stage 2 piecewise calibration (Stage 1 only)")
+    parser.add_argument("--use-cache", action="store_true",
+                        help="Load data from cached parquet files instead of fetching")
     args = parser.parse_args()
 
     # Setup logging
@@ -316,38 +328,59 @@ def main():
                 region_name, start_dt.date(), end_dt.date(), years)
     logger.info("=" * 60)
 
-    # ── Fetch data ────────────────────────────────────────────────────
-    prices = fetch_prices(config, start_dt, end_dt)
-    weather = fetch_weather(
-        config,
-        start_dt.strftime("%Y-%m-%d"),
-        end_dt.strftime("%Y-%m-%d"),
-    )
+    # ── Fetch or load data ──────────────────────────────────────────────
+    if args.use_cache:
+        logger.info("Loading cached data from %s", out_dir)
+        prices = pd.read_parquet(out_dir / "fi_prices.parquet")["price_eur_mwh"]
+        weather = pd.read_parquet(out_dir / "fi_weather.parquet")
+        logger.info("  Prices: %d rows, Weather: %d rows", len(prices), len(weather))
 
-    # Save data artifacts
-    prices.to_frame().to_parquet(out_dir / "fi_prices.parquet")
-    weather.to_parquet(out_dir / "fi_weather.parquet")
+        neighbor_prices = None
+        if not args.skip_tier2:
+            np_path = out_dir / "fi_neighbor_prices.parquet"
+            if np_path.exists():
+                np_df = pd.read_parquet(np_path)
+                neighbor_prices = {col: np_df[col] for col in np_df.columns}
+                logger.info("  Neighbor prices: %d columns", len(neighbor_prices))
 
-    # Tier 2: Cross-border prices
-    neighbor_prices = None
-    if not args.skip_tier2:
-        neighbor_prices = fetch_neighbor_prices(config, start_dt, end_dt)
-        if not neighbor_prices:
-            logger.info("No neighbor prices available, Tier 2 disabled")
-            neighbor_prices = None
-        else:
-            # Cache for evaluation
-            pd.DataFrame(neighbor_prices).to_parquet(out_dir / "fi_neighbor_prices.parquet")
+        grid_data = None
+        if not args.skip_tier3:
+            gd_path = out_dir / "fi_grid_data.parquet"
+            if gd_path.exists():
+                gd_df = pd.read_parquet(gd_path)
+                grid_data = {col: gd_df[col] for col in gd_df.columns}
+                logger.info("  Grid data: %d columns", len(grid_data))
+    else:
+        prices = fetch_prices(config, start_dt, end_dt)
+        weather = fetch_weather(
+            config,
+            start_dt.strftime("%Y-%m-%d"),
+            end_dt.strftime("%Y-%m-%d"),
+        )
 
-    # Tier 3: Grid data
-    grid_data = None
-    if not args.skip_tier3:
-        grid_data = fetch_grid_data(config, start_dt, end_dt)
-        if not grid_data:
-            logger.info("No grid data available, Tier 3 disabled")
-            grid_data = None
-        else:
-            pd.DataFrame(grid_data).to_parquet(out_dir / "fi_grid_data.parquet")
+        # Save data artifacts
+        prices.to_frame().to_parquet(out_dir / "fi_prices.parquet")
+        weather.to_parquet(out_dir / "fi_weather.parquet")
+
+        # Tier 2: Cross-border prices
+        neighbor_prices = None
+        if not args.skip_tier2:
+            neighbor_prices = fetch_neighbor_prices(config, start_dt, end_dt)
+            if not neighbor_prices:
+                logger.info("No neighbor prices available, Tier 2 disabled")
+                neighbor_prices = None
+            else:
+                pd.DataFrame(neighbor_prices).to_parquet(out_dir / "fi_neighbor_prices.parquet")
+
+        # Tier 3: Grid data
+        grid_data = None
+        if not args.skip_tier3:
+            grid_data = fetch_grid_data(config, start_dt, end_dt)
+            if not grid_data:
+                logger.info("No grid data available, Tier 3 disabled")
+                grid_data = None
+            else:
+                pd.DataFrame(grid_data).to_parquet(out_dir / "fi_grid_data.parquet")
 
     # ── Build features ────────────────────────────────────────────────
     df, feature_cols = build_features(
@@ -359,6 +392,8 @@ def main():
     gc.collect()
 
     # ── Train model ───────────────────────────────────────────────────
+    if args.no_piecewise:
+        training["piecewise_breakpoints"] = []
     coefs = train(df, feature_cols, config)
     del df
     gc.collect()
