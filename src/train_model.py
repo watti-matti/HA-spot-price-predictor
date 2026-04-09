@@ -121,12 +121,15 @@ def train(
     feature_cols: list[str],
     config: dict[str, Any],
 ) -> dict:
-    """Train log-linear Ridge regression model.
+    """Train log-linear Ridge with adaptive power-stretch calibration.
 
-    Fits Ridge regression on log(price + offset), producing predictions
-    via exp(linear_combination) - offset. This naturally handles the
-    nonlinear price-scarcity relationship: nearly linear at low prices,
-    exponential amplification at high prices.
+    1. Fit Ridge on log(price + offset) target
+    2. Fit power stretch scale * max(0, raw)^power via Nelder-Mead
+    3. Final prediction: scale * max(0, exp(linear) - offset) ^ power
+
+    The power stretch extends the prediction range to 65+ EUR/MWh
+    while maintaining rank concordance. Parameters are fitted on
+    training data and stored for inference.
 
     Returns:
         Dict of model coefficients suitable for JSON serialization.
@@ -141,9 +144,9 @@ def train(
     X_raw = df[feature_cols].values.astype(np.float32)
     y_raw = df["price_eur_mwh"].values.astype(np.float64)
 
-    # Log-transform target: linearizes exponential price-scarcity relationship
+    # Log-transform target
     y = np.log(y_raw + log_offset)
-    logger.info("Log-transform: offset=%d, log(price) range [%.2f, %.2f]",
+    logger.info("Log-transform: offset=%d, target range [%.2f, %.2f]",
                 log_offset, y.min(), y.max())
 
     # Time-ordered split
@@ -173,27 +176,52 @@ def train(
     coefs_orig = coefs_std / feat_std
     intercept = y_mean - (feat_mean / feat_std) @ coefs_std
 
-    # Evaluate: predict in log-space, back-transform to EUR/MWh
+    # Evaluate: log-linear back-transform + power stretch
     from sklearn.metrics import mean_absolute_error, r2_score
+    from scipy.optimize import minimize as sp_minimize
+
     preds_log_te = _predict(X_te, coefs_orig, intercept)
-    preds_te = np.exp(preds_log_te) - log_offset
+    preds_raw_te = np.maximum(0, np.exp(preds_log_te) - log_offset)
+
+    # Fit power stretch on training predictions
+    preds_log_tr = _predict(X_tr, coefs_orig, intercept)
+    preds_raw_tr = np.maximum(0, np.exp(preds_log_tr) - log_offset)
+    train_actual = np.maximum(y_raw[:split], 0)
+
+    def _obj_power(params):
+        scale, power = params
+        if scale <= 0 or power < 0.5 or power > 3:
+            return 1e6
+        pred = scale * np.power(preds_raw_tr + 1e-10, power)
+        return float(np.average(np.abs(train_actual - pred), weights=weights))
+
+    opt = sp_minimize(_obj_power, [1.0, 1.0], method="Nelder-Mead",
+                      options={"maxiter": 1000, "xatol": 0.001})
+    power_scale = float(opt.x[0])
+    power_exp = float(opt.x[1])
+    logger.info("  Power stretch: scale=%.4f, power=%.4f (Nelder-Mead)", power_scale, power_exp)
+
+    # Apply power stretch to test predictions
+    preds_te = power_scale * np.power(preds_raw_te + 1e-10, power_exp)
     mae1 = mean_absolute_error(y_raw_te, preds_te)
     r2_1 = r2_score(y_raw_te, preds_te)
-    logger.info("  MAE=%.2f EUR/MWh, R2=%.4f, max_pred=%.1f",
-                mae1, r2_1, preds_te.max())
+    logger.info("  MAE=%.2f EUR/MWh, R2=%.4f, max_pred=%.1f, min_pred=%.2f",
+                mae1, r2_1, preds_te.max(), preds_te.min())
 
     # ── Build output dict ─────────────────────────────────────────────
     tier_info = {"tier1": True, "tier2": False, "tier3": False}
     for name in feature_cols:
-        if name.startswith(("import_potential_", "export_potential_")):
+        if name.startswith(("import_potential_", "export_potential_", "ar_")):
             tier_info["tier2"] = True
         if name.startswith(("nuclear_",)):
             tier_info["tier3"] = True
 
     coefs_dict = {
-        "model_version": "v6.0",
+        "model_version": "v6.1",
         "model_type": "log-linear",
         "log_offset": log_offset,
+        "power_scale": power_scale,
+        "power_exp": power_exp,
         "intercept": float(intercept),
         "feature_count": len(feature_cols),
         "feature_names": feature_cols,

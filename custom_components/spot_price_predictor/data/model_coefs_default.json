@@ -1,7 +1,9 @@
 {
-  "model_version": "v6.0",
+  "model_version": "v6.1",
   "model_type": "log-linear",
   "log_offset": 55,
+  "power_scale": 0.5804521739948554,
+  "power_exp": 1.216321189561858,
   "intercept": 3.96478971179627,
   "feature_count": 17,
   "feature_names": [
@@ -29,9 +31,9 @@
     "tier3": true
   },
   "metrics": {
-    "mae": 2.3424092892173887,
-    "r2": 0.7515749343570388,
-    "max_prediction": 48.536488956075644,
+    "mae": 2.1759794649621,
+    "r2": 0.7372233218184876,
+    "max_prediction": 65.24798613800476,
     "train_samples": 29784,
     "test_samples": 5256
   },

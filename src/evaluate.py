@@ -44,12 +44,15 @@ def _predict_model(
     model_type = coefs.get("model_type", "linear")
 
     if model_type == "log-linear":
-        # Log-linear: exp(X @ coefs + intercept) - offset
+        # Log-linear + power stretch
         feature_coefs = np.array([f["coef"] for f in coefs["features"]], dtype=np.float64)
         intercept = coefs["intercept"]
         log_offset = coefs.get("log_offset", 55)
+        power_scale = coefs.get("power_scale", 1.0)
+        power_exp = coefs.get("power_exp", 1.0)
         log_pred = X @ feature_coefs + intercept
-        return np.exp(log_pred) - log_offset
+        raw = np.maximum(0, np.exp(np.minimum(log_pred, 20.0)) - log_offset)
+        return power_scale * np.power(raw + 1e-10, power_exp)
 
     # Legacy: two-stage piecewise model
     pw_breaks = coefs.get("piecewise_breakpoints", [])

@@ -27,6 +27,8 @@ class SpotPriceModel:
         self.features: list[dict] = coefs["features"]
         self.feature_names: list[str] = coefs["feature_names"]
         self.log_offset: float = coefs.get("log_offset", 55)
+        self.power_scale: float = coefs.get("power_scale", 1.0)
+        self.power_exp: float = coefs.get("power_exp", 1.0)
         self.model_type: str = coefs.get("model_type", "linear")
         self.ar_models: dict | None = coefs.get("ar_models")
 
@@ -78,15 +80,20 @@ class SpotPriceModel:
     def predict_single(self, features: dict[str, float]) -> float:
         """Predict spot price for a single hour.
 
-        For log-linear model: exp(sum(coef * feature) + intercept) - offset
-        For linear model (backward compat): sum(coef * feature) + intercept
+        Softplus: a * log(1 + exp(x / a)) — floor at 0, no ceiling
+        Log-linear (legacy): exp(x) - offset
+        Linear (legacy): x
         """
         linear = self.intercept
         for feat in self.features:
             linear += features.get(feat["name"], 0.0) * feat["coef"]
 
         if self.model_type == "log-linear":
-            return math.exp(linear) - self.log_offset
+            raw = math.exp(min(linear, 20.0)) - self.log_offset
+            raw = max(0.0, raw)
+            if raw > 0:
+                return self.power_scale * raw ** self.power_exp
+            return 0.0
         return linear
 
     def predict_batch(self, feature_rows: list[dict[str, float]]) -> list[float]:
