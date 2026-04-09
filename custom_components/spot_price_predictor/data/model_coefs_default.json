@@ -1,8 +1,9 @@
 {
-  "model_version": "v5.0",
-  "intercept": 6.729787618779485,
-  "piecewise_breakpoints": [],
-  "feature_count": 15,
+  "model_version": "v6.0",
+  "model_type": "log-linear",
+  "log_offset": 55,
+  "intercept": 4.0023764772169415,
+  "feature_count": 18,
   "feature_names": [
     "wind_speed_weighted",
     "solar_irradiance_weighted",
@@ -16,6 +17,9 @@
     "hdd_sq",
     "wind_drought_penalty",
     "solar_x_deficit",
+    "wind_log_scarcity",
+    "wind_calm_x_peak_am",
+    "wind_calm_x_peak_pm",
     "export_potential_se3",
     "export_potential_ee",
     "nuclear_x_scarcity"
@@ -26,138 +30,84 @@
     "tier3": true
   },
   "metrics": {
-    "stage1_mae": 2.686964027893656,
-    "stage1_r2": 0.6658183107605067,
-    "stage2_mae": 2.686964027893656,
-    "stage2_r2": 0.6658183107605067,
+    "mae": 2.4783751964866343,
+    "r2": 0.7053271956719891,
+    "max_prediction": 29.810015295975646,
     "train_samples": 29784,
     "test_samples": 5256
-  },
-  "stage1": {
-    "intercept": 6.729787618779485,
-    "features": [
-      {
-        "name": "wind_speed_weighted",
-        "coef": -1.0703325666854682
-      },
-      {
-        "name": "solar_irradiance_weighted",
-        "coef": -0.003999854765564337
-      },
-      {
-        "name": "hour_sin",
-        "coef": -1.270270215695483
-      },
-      {
-        "name": "hour_cos",
-        "coef": -0.5221583865708685
-      },
-      {
-        "name": "month_sin",
-        "coef": -1.1878335875645858
-      },
-      {
-        "name": "month_cos",
-        "coef": 0.4886791251195644
-      },
-      {
-        "name": "double_peak_am",
-        "coef": 5.101776072023744
-      },
-      {
-        "name": "double_peak_pm",
-        "coef": 2.8343990395155685
-      },
-      {
-        "name": "is_holiday",
-        "coef": -0.022273725024821323
-      },
-      {
-        "name": "hdd_sq",
-        "coef": 0.006259730068522642
-      },
-      {
-        "name": "wind_drought_penalty",
-        "coef": 0.4310557170275739
-      },
-      {
-        "name": "solar_x_deficit",
-        "coef": 0.0009158822152238994
-      },
-      {
-        "name": "export_potential_se3",
-        "coef": 0.024151398217406594
-      },
-      {
-        "name": "export_potential_ee",
-        "coef": 0.019018981046030607
-      },
-      {
-        "name": "nuclear_x_scarcity",
-        "coef": 1.0156774870651784
-      }
-    ]
   },
   "features": [
     {
       "name": "wind_speed_weighted",
-      "coef": -1.0703325666854682
+      "coef": -0.0049888929869682935
     },
     {
       "name": "solar_irradiance_weighted",
-      "coef": -0.003999854765564337
+      "coef": -6.879237872820323e-05
     },
     {
       "name": "hour_sin",
-      "coef": -1.270270215695483
+      "coef": -0.021547953715486137
     },
     {
       "name": "hour_cos",
-      "coef": -0.5221583865708685
+      "coef": -0.010403688937932525
     },
     {
       "name": "month_sin",
-      "coef": -1.1878335875645858
+      "coef": -0.017968073374135956
     },
     {
       "name": "month_cos",
-      "coef": 0.4886791251195644
+      "coef": 0.00651926395404874
     },
     {
       "name": "double_peak_am",
-      "coef": 5.101776072023744
+      "coef": 0.07454954312335298
     },
     {
       "name": "double_peak_pm",
-      "coef": 2.8343990395155685
+      "coef": 0.022924252618876498
     },
     {
       "name": "is_holiday",
-      "coef": -0.022273725024821323
+      "coef": -0.002380882506121422
     },
     {
       "name": "hdd_sq",
-      "coef": 0.006259730068522642
+      "coef": 0.00010976431067050691
     },
     {
       "name": "wind_drought_penalty",
-      "coef": 0.4310557170275739
+      "coef": 0.0024847091065311484
     },
     {
       "name": "solar_x_deficit",
-      "coef": 0.0009158822152238994
+      "coef": 1.2948242705077117e-05
+    },
+    {
+      "name": "wind_log_scarcity",
+      "coef": 0.043012624770104445
+    },
+    {
+      "name": "wind_calm_x_peak_am",
+      "coef": 0.006857535404265471
+    },
+    {
+      "name": "wind_calm_x_peak_pm",
+      "coef": 0.023949439907922802
     },
     {
       "name": "export_potential_se3",
-      "coef": 0.024151398217406594
+      "coef": 0.0003316432622594735
     },
     {
       "name": "export_potential_ee",
-      "coef": 0.019018981046030607
+      "coef": 0.00031288465126568
     },
     {
       "name": "nuclear_x_scarcity",
-      "coef": 1.0156774870651784
+      "coef": 0.01342653157510633
     }
   ]
 }

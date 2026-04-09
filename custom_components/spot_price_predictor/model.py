@@ -1,8 +1,9 @@
-"""Pure Python two-stage Ridge regression inference. No numpy/sklearn."""
+"""Pure Python log-linear Ridge regression inference. No numpy/sklearn."""
 
 from __future__ import annotations
 
 import json
+import math
 import logging
 from pathlib import Path
 from typing import Any
@@ -13,22 +14,24 @@ DEFAULT_COEFS_PATH = Path(__file__).parent / "data" / "model_coefs_default.json"
 
 
 class SpotPriceModel:
-    """Two-stage piecewise-linear Ridge regression model."""
+    """Log-linear Ridge regression model.
+
+    Prediction: exp(sum(coef_i * feature_i) + intercept) - log_offset
+
+    The log transform naturally handles the nonlinear price-scarcity
+    relationship: nearly linear at low prices, exponential at high prices.
+    """
 
     def __init__(self, coefs: dict[str, Any]) -> None:
-        self.stage1_intercept: float = coefs["stage1"]["intercept"]
-        self.stage1_features: list[dict] = coefs["stage1"]["features"]
-        self.stage2_intercept: float = coefs["intercept"]
-        self.stage2_features: list[dict] = coefs["features"]
-        self.breakpoints: list[float] = coefs["piecewise_breakpoints"]
+        self.intercept: float = coefs["intercept"]
+        self.features: list[dict] = coefs["features"]
         self.feature_names: list[str] = coefs["feature_names"]
+        self.log_offset: float = coefs.get("log_offset", 55)
+        self.model_type: str = coefs.get("model_type", "linear")
 
     @classmethod
     async def async_load(cls, path: Path | None = None) -> "SpotPriceModel":
-        """Load model from JSON coefficients file (async-safe).
-
-        Priority: explicit path > user-uploaded > bundled default.
-        """
+        """Load model from JSON coefficients file (async-safe)."""
         import asyncio
 
         if path is not None:
@@ -48,16 +51,16 @@ class SpotPriceModel:
 
         coefs = await asyncio.get_event_loop().run_in_executor(None, _read)
         _LOGGER.info(
-            "Loaded model %s with %d features (tiers: %s)",
+            "Loaded model %s (%s) with %d features",
             coefs.get("model_version"),
+            coefs.get("model_type", "linear"),
             coefs.get("feature_count"),
-            coefs.get("tier_info", {}),
         )
         return cls(coefs)
 
     @classmethod
     def load(cls, path: Path | None = None) -> "SpotPriceModel":
-        """Load model (sync fallback for non-async contexts like training)."""
+        """Load model (sync fallback for non-async contexts)."""
         if path is not None:
             p = path
         else:
@@ -69,41 +72,21 @@ class SpotPriceModel:
 
         with open(p, "r", encoding="utf-8") as f:
             coefs = json.load(f)
-        _LOGGER.info(
-            "Loaded model %s with %d features (tiers: %s)",
-            coefs.get("model_version"),
-            coefs.get("feature_count"),
-            coefs.get("tier_info", {}),
-        )
         return cls(coefs)
 
     def predict_single(self, features: dict[str, float]) -> float:
-        """Predict for a single hour given a feature dict.
+        """Predict spot price for a single hour.
 
-        Steps:
-        1. stage1_pred = sum(value * coef) + stage1_intercept
-        2. Augment with stage1_pred and piecewise ReLU terms
-        3. final = sum(augmented * coef) + stage2_intercept
+        For log-linear model: exp(sum(coef * feature) + intercept) - offset
+        For linear model (backward compat): sum(coef * feature) + intercept
         """
-        # Stage 1
-        stage1_pred = self.stage1_intercept
-        for feat in self.stage1_features:
-            val = features.get(feat["name"], 0.0)
-            stage1_pred += val * feat["coef"]
+        linear = self.intercept
+        for feat in self.features:
+            linear += features.get(feat["name"], 0.0) * feat["coef"]
 
-        # Augmented features
-        augmented = dict(features)
-        augmented["stage1_pred"] = stage1_pred
-        for bp in self.breakpoints:
-            augmented[f"pw_relu_{bp}"] = max(0.0, stage1_pred - bp)
-
-        # Stage 2
-        final = self.stage2_intercept
-        for feat in self.stage2_features:
-            val = augmented.get(feat["name"], 0.0)
-            final += val * feat["coef"]
-
-        return final
+        if self.model_type == "log-linear":
+            return math.exp(linear) - self.log_offset
+        return linear
 
     def predict_batch(self, feature_rows: list[dict[str, float]]) -> list[float]:
         """Predict for multiple hours."""

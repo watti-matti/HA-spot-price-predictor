@@ -110,6 +110,12 @@ def compute_features_for_hour(
     wind_drought = max(0.0, 4.0 - w) ** 2
     wind_drought_penalty = wind_drought * is_workday
 
+    # Nonlinear wind features
+    wind_log_scarcity = math.log1p(max(0.0, 8.0 - w))
+    wind_calm = max(0.0, 6.0 - w)
+    wind_calm_x_peak_am = wind_calm * double_peak_am
+    wind_calm_x_peak_pm = wind_calm * double_peak_pm
+
     # Scarcity indicator (intermediate for nuclear_x_scarcity)
     low_wind = max(0.0, 5.0 - w)
     peak_demand_full = max(raw_am, raw_pm)
@@ -128,6 +134,9 @@ def compute_features_for_hour(
         "hdd_sq": hdd_sq,
         "wind_drought_penalty": wind_drought_penalty,
         "solar_x_deficit": solar_x_deficit,
+        "wind_log_scarcity": wind_log_scarcity,
+        "wind_calm_x_peak_am": wind_calm_x_peak_am,
+        "wind_calm_x_peak_pm": wind_calm_x_peak_pm,
     }
 
     # Tier 2: export potential (SE3, EE only)

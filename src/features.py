@@ -54,6 +54,10 @@ TIER1_FEATURES = [
     "wind_drought_penalty",
     # Interaction
     "solar_x_deficit",
+    # Nonlinear wind (log-scarcity + calm×peak interactions)
+    "wind_log_scarcity",
+    "wind_calm_x_peak_am",
+    "wind_calm_x_peak_pm",
 ]
 
 
@@ -130,6 +134,12 @@ def _build_tier1(
     w = df["wind_speed_weighted"].to_numpy()
     wind_drought = np.maximum(0.0, 4.0 - w) ** 2
     df["wind_drought_penalty"] = wind_drought * is_workday
+
+    # Nonlinear wind features
+    df["wind_log_scarcity"] = np.log1p(np.maximum(0.0, 8.0 - w))
+    wind_calm = np.maximum(0.0, 6.0 - w)
+    df["wind_calm_x_peak_am"] = wind_calm * df["double_peak_am"].to_numpy()
+    df["wind_calm_x_peak_pm"] = wind_calm * df["double_peak_pm"].to_numpy()
 
     # Scarcity indicator (intermediate for nuclear_x_scarcity in Tier 3)
     low_wind = np.maximum(0.0, 5.0 - w)

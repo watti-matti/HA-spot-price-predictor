@@ -121,7 +121,12 @@ def train(
     feature_cols: list[str],
     config: dict[str, Any],
 ) -> dict:
-    """Train the two-stage Ridge regression model.
+    """Train log-linear Ridge regression model.
+
+    Fits Ridge regression on log(price + offset), producing predictions
+    via exp(linear_combination) - offset. This naturally handles the
+    nonlinear price-scarcity relationship: nearly linear at low prices,
+    exponential amplification at high prices.
 
     Returns:
         Dict of model coefficients suitable for JSON serialization.
@@ -131,25 +136,21 @@ def train(
     alpha = training.get("ridge_alpha", 1.0)
     test_split = training.get("test_split", 0.15)
     batch_size = training.get("batch_size", BATCH_SIZE)
-    pw_breaks_cfg = training.get("piecewise_breakpoints", PW_BREAKS_DEFAULT)
+    log_offset = training.get("log_offset", 55)
 
     X_raw = df[feature_cols].values.astype(np.float32)
-    y = df["price_clipped"].values.astype(np.float64)
+    y_raw = df["price_eur_mwh"].values.astype(np.float64)
 
-    # Auto breakpoints: use percentiles of training price distribution
-    if pw_breaks_cfg == "auto":
-        p50 = float(np.percentile(y, 50))
-        p75 = float(np.percentile(y, 75))
-        p95 = float(np.percentile(y, 95))
-        pw_breaks = [round(p50, 1), round(p75, 1), round(p95, 1)]
-        logger.info("Auto breakpoints from percentiles (p50/p75/p95): %s EUR/MWh", pw_breaks)
-    else:
-        pw_breaks = list(pw_breaks_cfg)
+    # Log-transform target: linearizes exponential price-scarcity relationship
+    y = np.log(y_raw + log_offset)
+    logger.info("Log-transform: offset=%d, log(price) range [%.2f, %.2f]",
+                log_offset, y.min(), y.max())
 
     # Time-ordered split
     split = int(len(X_raw) * (1.0 - test_split))
     X_tr, X_te = X_raw[:split], X_raw[split:]
     y_tr, y_te = y[:split], y[split:]
+    y_raw_te = y_raw[split:]
 
     logger.info("Training: %d train, %d test, %d features",
                 len(X_tr), len(X_te), len(feature_cols))
@@ -158,8 +159,8 @@ def train(
     weights = _make_time_weights(len(X_tr), half_life)
     logger.info("Time-decay: half-life=%dd, oldest_weight=%.4f", half_life, weights[0])
 
-    # ── Stage 1: Base model ──────────────────────────────────────────
-    logger.info("Stage 1: Ridge regression on %d features...", X_tr.shape[1])
+    # ── Ridge regression in log-space ────────────────────────────────
+    logger.info("Log-linear Ridge on %d features...", X_tr.shape[1])
 
     feat_mean, feat_std = _batched_stats(X_tr, weights, batch_size)
     y_mean = float(np.average(y_tr, weights=weights))
@@ -172,90 +173,41 @@ def train(
     coefs_orig = coefs_std / feat_std
     intercept = y_mean - (feat_mean / feat_std) @ coefs_std
 
-    # Evaluate stage 1
+    # Evaluate: predict in log-space, back-transform to EUR/MWh
     from sklearn.metrics import mean_absolute_error, r2_score
-    preds_te = _predict(X_te, coefs_orig, intercept)
-    mae1 = mean_absolute_error(y_te, preds_te)
-    r2_1 = r2_score(y_te, preds_te)
-    logger.info("  Stage 1: MAE=%.2f EUR/MWh, R2=%.4f", mae1, r2_1)
-
-    # Store stage 1 coefficients
-    stage1_coefs = {
-        "intercept": float(intercept),
-        "features": [
-            {"name": name, "coef": float(c)}
-            for name, c in zip(feature_cols, coefs_orig)
-        ],
-    }
-
-    # ── Stage 2: Piecewise calibration (optional) ──────────────────────
-    if pw_breaks:
-        logger.info("Stage 2: Piecewise calibration (breakpoints: %s)...", pw_breaks)
-
-        # Stage 1 predictions on train and test
-        s1_tr = _predict(X_tr, coefs_orig, intercept)
-        s1_te = preds_te
-
-        # Augment with piecewise ReLU features
-        pw_names = ["stage1_pred"] + [f"pw_relu_{bp}" for bp in pw_breaks]
-        pw_tr = np.column_stack(
-            [s1_tr] + [np.maximum(0.0, s1_tr - bp) for bp in pw_breaks]
-        )
-        pw_te = np.column_stack(
-            [s1_te] + [np.maximum(0.0, s1_te - bp) for bp in pw_breaks]
-        )
-
-        X_tr_aug = np.hstack([X_tr, pw_tr.astype(np.float32)])
-        X_te_aug = np.hstack([X_te, pw_te.astype(np.float32)])
-        aug_names = feature_cols + pw_names
-
-        feat_mean2, feat_std2 = _batched_stats(X_tr_aug, weights, batch_size)
-        coefs_std2 = _solve_normal_eq(
-            X_tr_aug, y_tr, y_mean, feat_mean2, feat_std2, weights, alpha, batch_size
-        )
-        coefs_orig2 = coefs_std2 / feat_std2
-        intercept2 = y_mean - (feat_mean2 / feat_std2) @ coefs_std2
-
-        preds2_te = _predict(X_te_aug, coefs_orig2, intercept2)
-        mae2 = mean_absolute_error(y_te, preds2_te)
-        r2_2 = r2_score(y_te, preds2_te)
-        logger.info("  Stage 2: MAE=%.2f EUR/MWh, R2=%.4f", mae2, r2_2)
-    else:
-        logger.info("Stage 2: Skipped (no piecewise breakpoints)")
-        aug_names = feature_cols
-        coefs_orig2 = coefs_orig
-        intercept2 = intercept
-        mae2 = mae1
-        r2_2 = r2_1
+    preds_log_te = _predict(X_te, coefs_orig, intercept)
+    preds_te = np.exp(preds_log_te) - log_offset
+    mae1 = mean_absolute_error(y_raw_te, preds_te)
+    r2_1 = r2_score(y_raw_te, preds_te)
+    logger.info("  MAE=%.2f EUR/MWh, R2=%.4f, max_pred=%.1f",
+                mae1, r2_1, preds_te.max())
 
     # ── Build output dict ─────────────────────────────────────────────
-    # Determine active tiers
     tier_info = {"tier1": True, "tier2": False, "tier3": False}
     for name in feature_cols:
         if name.startswith(("import_potential_", "export_potential_")):
             tier_info["tier2"] = True
-        if name.startswith(("nuclear_", "flow_fi_", "import_capacity_")):
+        if name.startswith(("nuclear_",)):
             tier_info["tier3"] = True
 
     coefs_dict = {
-        "model_version": "v5.0",
-        "intercept": float(intercept2),
-        "piecewise_breakpoints": pw_breaks,
-        "feature_count": len(aug_names),
-        "feature_names": aug_names,
+        "model_version": "v6.0",
+        "model_type": "log-linear",
+        "log_offset": log_offset,
+        "intercept": float(intercept),
+        "feature_count": len(feature_cols),
+        "feature_names": feature_cols,
         "tier_info": tier_info,
         "metrics": {
-            "stage1_mae": float(mae1),
-            "stage1_r2": float(r2_1),
-            "stage2_mae": float(mae2),
-            "stage2_r2": float(r2_2),
+            "mae": float(mae1),
+            "r2": float(r2_1),
+            "max_prediction": float(preds_te.max()),
             "train_samples": int(len(X_tr)),
             "test_samples": int(len(X_te)),
         },
-        "stage1": stage1_coefs,
         "features": [
             {"name": name, "coef": float(c)}
-            for name, c in zip(aug_names, coefs_orig2)
+            for name, c in zip(feature_cols, coefs_orig)
         ],
     }
 
@@ -408,12 +360,12 @@ def main():
     logger.info("=" * 60)
     logger.info("RESULTS")
     logger.info("=" * 60)
+    logger.info("  Model:      %s", coefs.get("model_type", "linear"))
     logger.info("  Features:   %d", coefs["feature_count"])
     logger.info("  Tiers:      %s", coefs["tier_info"])
-    logger.info("  Stage 1:    MAE=%.2f, R2=%.4f",
-                coefs["metrics"]["stage1_mae"], coefs["metrics"]["stage1_r2"])
-    logger.info("  Stage 2:    MAE=%.2f, R2=%.4f",
-                coefs["metrics"]["stage2_mae"], coefs["metrics"]["stage2_r2"])
+    logger.info("  MAE:        %.2f EUR/MWh", coefs["metrics"]["mae"])
+    logger.info("  R2:         %.4f", coefs["metrics"]["r2"])
+    logger.info("  Max pred:   %.1f EUR/MWh", coefs["metrics"]["max_prediction"])
     logger.info("")
     logger.info("  Saved: %s", coefs_path)
 
