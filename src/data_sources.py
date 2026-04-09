@@ -111,6 +111,9 @@ def fetch_weather(
 
     index = None
     wind_w = solar_w = temp_w = None
+    wind_weight_sum = 0.0
+    solar_weight_sum = 0.0
+    temp_weight_sum = 0.0
 
     for loc in locations:
         name = loc["name"]
@@ -148,6 +151,10 @@ def fetch_weather(
         sw = loc.get("solar_weight", 0)
         tw = loc.get("temp_weight", 0)
 
+        wind_weight_sum += ww
+        solar_weight_sum += sw
+        temp_weight_sum += tw
+
         if index is None:
             index = idx
             wind_w = w * ww
@@ -166,13 +173,16 @@ def fetch_weather(
     if index is None:
         raise RuntimeError("No weather data fetched from any location")
 
+    # Normalize: divide by sum of available weights so result is a
+    # proper weighted average regardless of how many locations succeeded
     df = pd.DataFrame({
-        "wind_speed_weighted": wind_w,
-        "solar_irradiance_weighted": solar_w,
-        "temperature_weighted": temp_w,
+        "wind_speed_weighted": wind_w / wind_weight_sum if wind_weight_sum > 0 else wind_w,
+        "solar_irradiance_weighted": solar_w / solar_weight_sum if solar_weight_sum > 0 else solar_w,
+        "temperature_weighted": temp_w / temp_weight_sum if temp_weight_sum > 0 else temp_w,
     }, index=index)
     df.index.name = "time_utc"
-    logger.info("  Weather: %d rows", len(df))
+    logger.info("  Weather: %d rows (weights: wind=%.2f, solar=%.2f, temp=%.2f)",
+                len(df), wind_weight_sum, solar_weight_sum, temp_weight_sum)
     return df
 
 

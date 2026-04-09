@@ -78,6 +78,19 @@ class SpotPriceApiClient:
         if not location_data:
             raise ApiClientError("Failed to fetch weather data from any location")
 
+        # Compute weight sums for available locations (for normalization)
+        wind_weight_sum = sum(ld["loc"]["wind_weight"] for ld in location_data)
+        solar_weight_sum = sum(ld["loc"]["solar_weight"] for ld in location_data)
+        temp_weight_sum = sum(ld["loc"]["temp_weight"] for ld in location_data)
+
+        if len(location_data) < len(FINLAND_LOCATIONS):
+            _LOGGER.warning(
+                "Only %d/%d locations available, normalizing weights "
+                "(wind=%.2f, solar=%.2f, temp=%.2f)",
+                len(location_data), len(FINLAND_LOCATIONS),
+                wind_weight_sum, solar_weight_sum, temp_weight_sum,
+            )
+
         # Determine number of hours from shortest series
         n_hours = min(
             len(ld["wind"]) for ld in location_data
@@ -94,16 +107,27 @@ class SpotPriceApiClient:
                 wind_val = ld["wind"][i] if i < len(ld["wind"]) else 0.0
                 solar_val = ld["solar"][i] if i < len(ld["solar"]) else 0.0
                 temp_val = ld["temp"][i] if i < len(ld["temp"]) else 0.0
+                # Handle None values from API
+                if wind_val is None:
+                    wind_val = 0.0
+                if solar_val is None:
+                    solar_val = 0.0
+                if temp_val is None:
+                    temp_val = 0.0
                 wind_w += wind_val * loc["wind_weight"]
                 solar_w += solar_val * loc["solar_weight"]
                 temp_w += temp_val * loc["temp_weight"]
+
+            # Normalize: divide by available weight sum so result is a
+            # proper weighted average regardless of how many locations succeeded
             result.append({
-                "wind_weighted": wind_w,
-                "solar_weighted": solar_w,
-                "temp_weighted": temp_w,
+                "wind_weighted": wind_w / wind_weight_sum if wind_weight_sum > 0 else 0.0,
+                "solar_weighted": solar_w / solar_weight_sum if solar_weight_sum > 0 else 0.0,
+                "temp_weighted": temp_w / temp_weight_sum if temp_weight_sum > 0 else 0.0,
             })
 
-        _LOGGER.info("Weather data: %d hours from %d locations", len(result), len(location_data))
+        _LOGGER.info("Weather data: %d hours from %d/%d locations",
+                      len(result), len(location_data), len(FINLAND_LOCATIONS))
         return result
 
     # ------------------------------------------------------------------
