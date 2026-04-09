@@ -259,10 +259,10 @@ consumer_pricing:
 training:
   years: 4                           # Historical data window
   test_split: 0.15                   # 85/15 time-ordered split
-  half_life_days: 90                 # Exponential time-decay half-life (90d adapts to growing wind capacity)
+  half_life_days: 120                # Exponential time-decay half-life (optimized: 120d best MAE)
   ridge_alpha: 1.0                   # Ridge regularization strength
   batch_size: 512                    # Batch size for memory-efficient training
-  price_clip_max: 500                # Max price (EUR/MWh) to reduce outlier influence
+  price_clip_max: 50                 # Max price (EUR/MWh) to reduce outlier influence
   piecewise_breakpoints: [1.0]       # Single knee: dampens near-zero noise, no high-price ceiling
                                      # (validated via comparison of 7 strategies + 2 polynomial models)
   forecast_hours: 170                # Forecast window (7.08 days)
