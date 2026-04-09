@@ -28,6 +28,7 @@ class SpotPriceModel:
         self.feature_names: list[str] = coefs["feature_names"]
         self.log_offset: float = coefs.get("log_offset", 55)
         self.model_type: str = coefs.get("model_type", "linear")
+        self.ar_models: dict | None = coefs.get("ar_models")
 
     @classmethod
     async def async_load(cls, path: Path | None = None) -> "SpotPriceModel":

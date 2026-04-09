@@ -21,15 +21,13 @@
 
 ## How It Works
 
-The system uses a **two-stage Ridge regression** model trained on 4 years of historical data. Features are selected via greedy forward selection with sign constraints, ensuring every coefficient matches economic theory. The model combines:
+The system uses a **log-linear Ridge regression** model trained on 4 years of historical data. The log transform naturally handles the nonlinear price-scarcity relationship: nearly linear at low prices, exponential amplification at high prices. Features are selected via greedy forward selection with sign constraints and bootstrap stability analysis. The model combines:
 
-- **Wind speed at 120m** from 7 Finnish locations weighted by installed wind capacity — the dominant price driver (more wind = lower price)
-- **Solar irradiance** weighted by installed solar capacity
-- **Demand patterns** — workday AM/PM peaks (Gaussian at 09:00/19:00), holidays
+- **Wind speed at 120m** from 7 Finnish locations weighted by installed wind capacity — the dominant price driver
+- **Nonlinear wind scarcity** — logarithmic scarcity and calm-wind x demand-peak interactions
+- **AR neighbor price models** — autoregressive forecasts for Sweden (SE1, SE3) and Estonia (EE) with workday/weekend hourly profiles, capturing European market coupling
 - **Thermal demand** — squared heating degree days for nonlinear cold amplification
-- **Wind scarcity** — penalty for low wind (<4 m/s) on workdays
-- **Cross-border export potential** — 7-day rolling price spreads with Sweden (SE3) and Estonia (EE)
-- **Nuclear x scarcity interaction** (optional, Fingrid API) — amplified price impact when nuclear capacity is reduced during weather stress
+- **Nuclear deficit** (optional, Fingrid API) — standalone nuclear availability + scarcity interaction
 
 All data sources are **free**. The optional Fingrid API key is also free (email registration at [data.fingrid.fi](https://data.fingrid.fi)).
 
@@ -71,27 +69,30 @@ This allows visual comparison of how well the forecast matches reality. Requires
 
 ## Feature Tiers
 
-The model uses 14 sign-validated features selected via greedy forward selection. Only features whose learned coefficients match economic theory are included.
+The model uses 17 sign-validated features selected via greedy forward selection with bootstrap stability analysis.
 
-| Tier | Features | Data Sources | API Keys | MAE (EUR/MWh) |
-|------|:---:|-------------|:---:|:---:|
-| 1 | 12 (weather + demand) | Sahkotin + Open-Meteo | None | Baseline |
-| 1+2 | 14 (+export potential) | + elprisetjustnu.se + Elering | None | 2.66 |
-| 1+2+3 | 15 (+nuclear interaction) | + Fingrid nuclear | 1 (free) | 2.55 |
+| Tier | Features | Data Sources | API Keys |
+|------|:---:|-------------|:---:|
+| 1 | 11 (weather + wind nonlinear) | Sahkotin + Open-Meteo | None |
+| 1+2 | 15 (+AR neighbor prices) | + elprisetjustnu.se + Elering | None |
+| 1+2+3 | 17 (+nuclear features) | + Fingrid nuclear | 1 (free) |
 
-**Tier 1** includes wind speed, solar irradiance, demand peaks, heating degree days, wind scarcity, and time cycles.
+**Tier 1** includes wind speed, solar irradiance, heating degree days, time cycles, holidays, and nonlinear wind features (log-scarcity, calm-wind x demand-peak interactions).
 
-**Tier 2** adds export potential to Sweden (SE3) and Estonia (EE) from 7-day rolling price spreads.
+**Tier 2** adds AR(2) autoregressive neighbor price models for Sweden (SE1, SE3) and Estonia (EE), each with separate workday/weekend hourly profiles. The AR models capture European market coupling — when neighbor markets are expensive, Finnish prices follow. Also includes SE3 export potential from 7-day price spreads.
 
-**Tier 3** adds nuclear x scarcity interaction: amplified price impact when nuclear production is reduced and weather conditions are stressed (low wind + cold + peak demand). Nuclear production data comes from Fingrid dataset #188. Planned outage schedules are fetched from [Nord Pool UMM](https://umm.nordpoolgroup.com/) (public API, no key required) for forward-looking awareness.
+**Tier 3** adds nuclear deficit (fraction of nuclear capacity offline) and nuclear x scarcity interaction (amplified price impact during weather stress). Planned outage schedules from [Nord Pool UMM](https://umm.nordpoolgroup.com/) (public API, no key required) provide forward-looking nuclear awareness.
 
-## Model Performance (v5.0)
+## Model Performance (v6.0)
 
 | Metric | Value |
 |--------|:---:|
-| MAE | 2.55 EUR/MWh |
-| R2 | 0.70 |
-| Features | 15 (sign-validated) |
+| MAE | 2.34 EUR/MWh |
+| R2 | 0.75 |
+| Features | 17 (sign-validated, bootstrap-stable) |
+| 4h block rank concordance | 97.1% (for >5 EUR/MWh differences) |
+| 8h block rank concordance | 99.0% |
+| EV savings captured | 94.2% of optimal |
 | Training data | 4 years (2022-2026) |
 
 ## Supported Operators (Finland) (check your contract)

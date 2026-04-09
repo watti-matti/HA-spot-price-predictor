@@ -83,7 +83,10 @@ def _train_tier_variant(
     test_split = training.get("test_split", 0.15)
 
     X = df[feature_subset].values.astype(np.float32)
-    y = df["price_clipped"].values.astype(np.float64)
+    if "price_clipped" in df.columns:
+        y = df["price_clipped"].values.astype(np.float64)
+    else:
+        y = np.minimum(df["price_eur_mwh"].values, 500.0).astype(np.float64)
 
     split = int(len(X) * (1.0 - test_split))
     X_tr, X_te = X[:split], X[split:]
@@ -157,7 +160,7 @@ def run_evaluation(config: dict, out_dir: Path) -> None:
             gdf.to_parquet(grid_cache)
 
     # Build features
-    df, feature_cols = build_features(
+    df, feature_cols, _ar_models = build_features(
         prices, weather, config,
         neighbor_prices=neighbor_prices if neighbor_prices else None,
         grid_data=grid_data if grid_data else None,
@@ -176,7 +179,11 @@ def run_evaluation(config: dict, out_dir: Path) -> None:
 
     X = df[base_features].values.astype(np.float64)
     y_actual = df["price_eur_mwh"].values.astype(np.float64)
-    y_clipped = df["price_clipped"].values.astype(np.float64)
+    # Use price_clipped if available, otherwise clip at 500
+    if "price_clipped" in df.columns:
+        y_clipped = df["price_clipped"].values.astype(np.float64)
+    else:
+        y_clipped = np.minimum(y_actual, 500.0)
     timestamps = df.index
 
     split = int(len(X) * (1.0 - test_split))

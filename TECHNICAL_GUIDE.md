@@ -57,75 +57,72 @@ Used to compute 7-day rolling price spreads and derive `import_potential_xx` / `
 
 | Source | Purpose |
 |--------|---------|
-| [Fingrid Open Data](https://data.fingrid.fi) | Nuclear production (#188) for nuclear_x_scarcity interaction feature |
+| [Fingrid Open Data](https://data.fingrid.fi) | Nuclear production (#188) for nuclear deficit and scarcity features |
 
-Register for free at data.fingrid.fi. Without this key, the model trains on Tier 1+2 features only (12 features).
+Register for free at data.fingrid.fi. Without this key, the model trains on Tier 1+2 features only (15 features).
 
 ---
 
 ## Feature Engineering
 
-Features are selected via greedy forward selection with sign constraints: only features whose learned coefficients match economic theory are included. This prevents overfitting through collinear features with counter-intuitive signs.
+Features are selected via greedy forward selection with sign constraints and validated with 200-iteration bootstrap resampling. Only features with economically correct coefficient signs and stable confidence intervals are included.
 
-### Tier 1: Base features (12) -- no API keys needed
+### Tier 1: Base features (11) -- no API keys needed
 
 | Category | Features | Coefficient sign |
 |----------|----------|:---:|
 | Supply | `wind_speed_weighted`, `solar_irradiance_weighted` | negative (more supply = lower price) |
 | Time cycles | `hour_sin`, `hour_cos`, `month_sin`, `month_cos` | cyclic |
-| Demand peaks | `double_peak_am`, `double_peak_pm` (Gaussian, 9h/19h workdays) | positive |
 | Calendar | `is_holiday` | negative (lower demand) |
 | Thermal demand | `hdd_sq` (squared heating degree days) | positive |
-| Scarcity | `wind_drought_penalty` (low wind on workdays) | positive |
-| Interaction | `solar_x_deficit` (solar x daylight deficit) | context-dependent |
+| Wind nonlinear | `wind_log_scarcity` = log(1 + max(0, 8-wind)) | positive (low wind = higher price) |
+| Wind x demand | `wind_calm_x_peak_am` = max(0, 6-wind) x AM peak | positive |
+| Wind x demand | `wind_calm_x_peak_pm` = max(0, 6-wind) x PM peak | positive |
 
-### Tier 2: Cross-border export potential (+2) -- no API keys needed
+### Tier 2: AR neighbor prices + export potential (+4) -- no API keys needed
+
+AR(2) models predict cross-border neighbor prices using workday/weekend hourly profiles with damped autoregressive deviation. This captures the European market coupling signal that drives Finnish prices.
+
+| Feature | Source | Method |
+|---------|--------|--------|
+| `ar_se1` | Sweden SE1 | AR(2) on deviation from hourly daytype profile |
+| `ar_se3` | Sweden SE3 | AR(2) on deviation from hourly daytype profile |
+| `ar_ee` | Estonia | AR(2) on deviation from hourly daytype profile |
+| `export_potential_se3` | SE3 spread | max(0, -spread_7d_fi_se3) |
+
+The AR models decompose neighbor prices into deterministic daily profiles (workday vs weekend, 24 hours each) plus a stochastic deviation modeled by AR(2). The AR deviation is damped (max root < 0.95) so predictions converge to the daily profile within 24 hours, ensuring stability over the full 170-hour forecast window.
+
+### Tier 3: Nuclear features (+0-2) -- requires Fingrid API key
 
 | Feature | Formula | Meaning |
 |---------|---------|---------|
-| `export_potential_se3` | max(0, -spread_7d_fi_se3) | FI cheaper than SE3 (export incentive) |
-| `export_potential_ee` | max(0, -spread_7d_fi_ee) | FI cheaper than EE (export incentive) |
-
-Import potential features were removed: they had counter-intuitive positive coefficients because high import potential is a *symptom* of high FI prices, not a cause of lower prices.
-
-### Tier 3: Nuclear x scarcity interaction (+0-1) -- requires Fingrid API key
-
-| Feature | Formula | Meaning |
-|---------|---------|---------|
+| `nuclear_deficit` | max(0, 1 - nuclear_mw/4372) | Fraction of nuclear capacity offline |
 | `nuclear_x_scarcity` | nuclear_deficit x scarcity_indicator | Nuclear outage amplifies weather-driven scarcity |
 
-Where `nuclear_deficit = max(0, 1 - nuclear_mw/4372)` and `scarcity_indicator = low_wind x HDD x peak_demand`.
-
-Raw `nuclear_mw` and cross-border flow features were removed: they had sign instability due to multicollinearity with each other and with the cross-border price spreads.
-
-**Forward-looking outage data:** Planned outage schedules are fetched from the [Nord Pool UMM platform](https://umm.nordpoolgroup.com/) (public API, no key required). When a nuclear outage is published, the forecast window uses per-hour nuclear availability instead of forward-filling the last known value.
+**Forward-looking outage data:** Planned outage schedules are fetched from the [Nord Pool UMM platform](https://umm.nordpoolgroup.com/) (public API, no key required).
 
 ### Feature count by configuration
 
 | Configuration | Features | API keys |
 |---------------|----------|----------|
-| Tier 1 only | 12 | None |
-| Tier 1 + 2 | 14 | None |
-| Tier 1 + 2 + 3 | 15 | 1 (Fingrid, free) |
+| Tier 1 only | 11 | None |
+| Tier 1 + 2 | 15 | None |
+| Tier 1 + 2 + 3 | 17 | 1 (Fingrid, free) |
 
 ---
 
 ## Model Architecture
 
-### Two-stage Ridge regression with piecewise calibration
+### Log-linear Ridge regression
 
-**Stage 1 (base model):**
-- Linear polynomial (degree 1) on 12-15 features
-- Weighted normal equations: beta = (X'WX + alpha*I)^(-1) X'Wy
-- Time-decay weighting: w(t) = exp(-ln2 * age_hours / (365 * 24))
+**Prediction formula:** `price = exp(sum(coef_i x feature_i) + intercept) - 55`
+
+The log transform naturally handles the nonlinear price-scarcity relationship: nearly linear at low prices, exponential amplification at high prices. No piecewise calibration needed.
+
+- Ridge regression on log(price + 55) target
+- 17 sign-validated features (all bootstrap-stable)
+- Time-decay weighting: w(t) = exp(-ln2 x age_hours / (120 x 24)), half-life 120 days
 - Ridge alpha = 1.0
-
-**Stage 2 (piecewise calibration):**
-- Augmented features: stage1_prediction + 3 ReLU breakpoints
-  - pw_relu_20 = max(0, s1 - 20)
-  - pw_relu_40 = max(0, s1 - 40)
-  - pw_relu_120 = max(0, s1 - 120)
-- Corrects systematic bias at different price regimes
 
 **Training:** 4 years historical data, 85/15 time-ordered split, batch processing (512 rows).
 

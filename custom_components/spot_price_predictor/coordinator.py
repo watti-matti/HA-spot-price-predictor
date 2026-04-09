@@ -175,6 +175,53 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                     _LOGGER.warning(
                         "UMM outage fetch failed, using constant nuclear_mw: %s", err)
 
+            # AR neighbor price forecasts (uses stored AR models from training)
+            ar_neighbor_hourly: dict[str, list[float]] | None = None
+            ar_models = getattr(self.model, "ar_models", None)
+            if ar_models and self.enable_tier2:
+                try:
+                    from .features import compute_ar_forecast
+                    now_utc = datetime.now(timezone.utc).replace(
+                        minute=0, second=0, microsecond=0)
+                    n_hours = min(FORECAST_HOURS, len(weather))
+                    ar_neighbor_hourly = {}
+
+                    for prefix in ("se1", "se3", "ee"):
+                        if prefix not in ar_models:
+                            continue
+                        # Get recent actual neighbor prices
+                        recent = neighbor.get(prefix, []) if "neighbor" in dir() else []
+                        last_prices = [p.get("price_eur_mwh", 0) for p in recent[-24:]] \
+                            if recent else []
+
+                        # Build forecast hours: (local_hour, is_workday)
+                        try:
+                            from zoneinfo import ZoneInfo
+                            tz = ZoneInfo(DEFAULT_TIMEZONE)
+                        except Exception:
+                            tz = None
+                        forecast_hours = []
+                        for i in range(n_hours):
+                            h_utc = now_utc + timedelta(hours=i)
+                            if tz:
+                                h_local = h_utc.astimezone(tz)
+                            else:
+                                h_local = h_utc + timedelta(hours=3)
+                            local_h = h_local.hour
+                            local_dow = h_local.weekday()
+                            date_s = h_local.strftime("%Y-%m-%d")
+                            is_wd = (local_dow < 5) and (date_s not in self.holidays)
+                            forecast_hours.append((local_h, is_wd))
+
+                        ar_preds = compute_ar_forecast(
+                            ar_models[prefix], last_prices, forecast_hours)
+                        ar_neighbor_hourly[prefix] = ar_preds
+
+                    _LOGGER.info("AR neighbor forecasts computed for %d hours",
+                                 n_hours)
+                except Exception as err:
+                    _LOGGER.warning("AR forecast failed: %s", err)
+
             # Build features for forecast window
             now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
             feature_rows = build_forecast_features(
@@ -186,6 +233,7 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                 tier2_spreads=tier2_spreads,
                 tier3_data=tier3_data,
                 tier3_hourly=tier3_hourly,
+                ar_neighbor_hourly=ar_neighbor_hourly,
             )
 
             # Run model inference

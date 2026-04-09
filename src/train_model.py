@@ -335,7 +335,7 @@ def main():
                 pd.DataFrame(grid_data).to_parquet(out_dir / "fi_grid_data.parquet")
 
     # ── Build features ────────────────────────────────────────────────
-    df, feature_cols = build_features(
+    df, feature_cols, ar_models = build_features(
         prices, weather, config,
         neighbor_prices=neighbor_prices,
         grid_data=grid_data,
@@ -344,11 +344,13 @@ def main():
     gc.collect()
 
     # ── Train model ───────────────────────────────────────────────────
-    if args.no_piecewise:
-        training["piecewise_breakpoints"] = []
     coefs = train(df, feature_cols, config)
     del df
     gc.collect()
+
+    # Store AR model parameters for inference
+    if ar_models:
+        coefs["ar_models"] = ar_models
 
     # ── Save results ──────────────────────────────────────────────────
     coefs_path = out_dir / "model_coefs.json"
