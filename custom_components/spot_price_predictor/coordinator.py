@@ -65,19 +65,15 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
         self.api = SpotPriceApiClient(session, fingrid_key)
         self.model = model or SpotPriceModel.load()
 
-        # Operator tariff config
+        # Operator tariff config — always read from config entry data so
+        # user edits in the options flow propagate to D(k) consumer pricing.
+        # Operator defaults used only as fallback for backward compatibility.
         operator_id = entry.data.get(CONF_OPERATOR, "elenia")
-        if operator_id == "custom":
-            self.day_rate = entry.data.get(CONF_CUSTOM_DAY_RATE, 0.05)
-            self.night_rate = entry.data.get(CONF_CUSTOM_NIGHT_RATE, 0.04)
-            self.vat_multiplier = entry.data.get(CONF_CUSTOM_VAT, DEFAULT_VAT_MULTIPLIER)
-            self.energy_tax = entry.data.get(CONF_CUSTOM_ENERGY_TAX, DEFAULT_ENERGY_TAX)
-        else:
-            op = OPERATORS.get(operator_id, OPERATORS["elenia"])
-            self.day_rate = op["day_rate"]
-            self.night_rate = op["night_rate"]
-            self.vat_multiplier = DEFAULT_VAT_MULTIPLIER
-            self.energy_tax = DEFAULT_ENERGY_TAX
+        op = OPERATORS.get(operator_id, OPERATORS["elenia"])
+        self.day_rate = entry.data.get(CONF_CUSTOM_DAY_RATE, op["day_rate"])
+        self.night_rate = entry.data.get(CONF_CUSTOM_NIGHT_RATE, op["night_rate"])
+        self.vat_multiplier = entry.data.get(CONF_CUSTOM_VAT, DEFAULT_VAT_MULTIPLIER)
+        self.energy_tax = entry.data.get(CONF_CUSTOM_ENERGY_TAX, DEFAULT_ENERGY_TAX)
 
         self.seller_margin = entry.data.get(CONF_SELLER_MARGIN, DEFAULT_SELLER_MARGIN)
 

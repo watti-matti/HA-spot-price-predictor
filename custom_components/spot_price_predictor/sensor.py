@@ -227,18 +227,16 @@ class DurationForecastSensor(CoordinatorEntity, SensorEntity):
 
 
 def _get_tariff_config(entry: ConfigEntry) -> dict[str, float]:
-    """Extract tariff parameters from config entry."""
+    """Extract tariff parameters from config entry.
+
+    Always reads from config entry data so user edits in the options
+    flow take effect. Operator defaults used only as fallback.
+    """
     operator_id = entry.data.get(CONF_OPERATOR, "elenia")
-    if operator_id == "custom":
-        day_rate = entry.data.get(CONF_CUSTOM_DAY_RATE, 0.0361)
-        night_rate = entry.data.get(CONF_CUSTOM_NIGHT_RATE, 0.0220)
-    else:
-        op = OPERATORS.get(operator_id, OPERATORS["elenia"])
-        day_rate = op["day_rate"]
-        night_rate = op["night_rate"]
+    op = OPERATORS.get(operator_id, OPERATORS["elenia"])
     return {
-        "day_rate": day_rate,
-        "night_rate": night_rate,
+        "day_rate": entry.data.get(CONF_CUSTOM_DAY_RATE, op["day_rate"]),
+        "night_rate": entry.data.get(CONF_CUSTOM_NIGHT_RATE, op["night_rate"]),
         "vat": entry.data.get(CONF_CUSTOM_VAT, DEFAULT_VAT_MULTIPLIER),
         "energy_tax": entry.data.get(CONF_CUSTOM_ENERGY_TAX, DEFAULT_ENERGY_TAX),
         "seller_margin": entry.data.get(CONF_SELLER_MARGIN, DEFAULT_SELLER_MARGIN),
