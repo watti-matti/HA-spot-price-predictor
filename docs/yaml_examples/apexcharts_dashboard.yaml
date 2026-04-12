@@ -19,13 +19,13 @@
 # type: markdown
 # content: >
 #   **Last update:**
-#   {{ state_attr('sensor.spot_price_predictor_spot_price_forecast', 'last_update')
+#   {{ state_attr('sensor.spot_price_predictor_price_forecast', 'last_update')
 #      | as_datetime | relative_time }} ago
 #   | **Tiers:**
-#   {{ state_attr('sensor.spot_price_predictor_spot_price_forecast', 'tiers_active') }}
-#   {% if state_attr('sensor.spot_price_predictor_spot_price_forecast', 'stale') %}
+#   {{ state_attr('sensor.spot_price_predictor_price_forecast', 'tiers_active') }}
+#   {% if state_attr('sensor.spot_price_predictor_price_forecast', 'stale') %}
 #   | Data is stale
-#   ({{ state_attr('sensor.spot_price_predictor_spot_price_forecast', 'data_age_minutes') }} min old)
+#   ({{ state_attr('sensor.spot_price_predictor_price_forecast', 'data_age_minutes') }} min old)
 #   {% endif %}
 
 type: custom:apexcharts-card
@@ -123,7 +123,7 @@ series:
       ]).sort((a,b) => a[0]-b[0]);
 
   # ── Forecast Consumer Price ────────────────────────────────────
-  - entity: sensor.spot_price_predictor_consumer_price
+  - entity: sensor.spot_price_predictor_price_forecast
     yaxis_id: price
     name: Forecast Consumer Price
     unit: c/kWh
@@ -152,7 +152,7 @@ series:
       if (!forecast) return [];
       return forecast.map(f => [
         new Date(f.timestamp).getTime(),
-        Math.max(0, f.price_eur_kwh * 100)
+        f.consumer_ckwh
       ]);
 
   # ── PV Selling Price (optional, only if sensor exists) ─────────
@@ -189,7 +189,7 @@ series:
       ]).sort((a,b) => a[0]-b[0]);
 
   # ── Forecast Week Average (reference line) ─────────────────────
-  - entity: sensor.spot_price_predictor_week_price_stats
+  - entity: sensor.spot_price_predictor_price_forecast
     yaxis_id: price
     name: Forecast Week Average
     unit: c/kWh
@@ -204,21 +204,18 @@ series:
       extremas: false
       datalabels: false
     data_generator: >
-      const avg = entity.attributes.week_avg;
+      const avg = entity.attributes.week_avg_ckwh;
 
       if (!avg) return [];
 
-      const forecast =
-      hass.states['sensor.spot_price_predictor_consumer_price']?.attributes?.forecast;
+      const forecast = entity.attributes.forecast;
 
       if (!forecast || forecast.length === 0) return [];
 
-      const avgCents = avg * 100;
-
-      return forecast.map(f => [new Date(f.timestamp).getTime(), avgCents]);
+      return forecast.map(f => [new Date(f.timestamp).getTime(), avg]);
 
   # ── Weighted Wind Speed Forecast ───────────────────────────────
-  - entity: sensor.spot_price_predictor_spot_price_forecast
+  - entity: sensor.spot_price_predictor_price_forecast
     yaxis_id: wind
     name: Wind Forecast (weighted)
     unit: m/s
@@ -233,8 +230,8 @@ series:
       datalabels: false
     data_generator: |
       const forecast = entity.attributes.forecast;
-      if (!forecast || !forecast[0]?.wind_weighted) return [];
+      if (!forecast || !forecast[0]?.wind) return [];
       return forecast.map(f => [
         new Date(f.timestamp).getTime(),
-        f.wind_weighted || 0
+        f.wind || 0
       ]);

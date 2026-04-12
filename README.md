@@ -14,8 +14,9 @@
 - **3-tier data architecture** — starts with free weather data, optionally adds cross-border prices and Fingrid nuclear data for improved accuracy
 - **Sign-validated features** — all model coefficients match economic theory (more wind = lower price, more scarcity = higher price)
 - **Nuclear outage awareness** — planned outage schedules from Nord Pool UMM enable forward-looking nuclear impact
-- **Cheapest hours detection** — find the optimal 1-8 hour windows for EV charging, water heating, and thermal storage
+- **D(k) duration forecast** — predict daily cost by usage duration (CVaR of intra-day price distribution)
 - **Consumer price calculation** — adds your energy seller's margin, operator's transfer tariff, energy tax, and VAT automatically
+- **Clean API for optimization** — forecast-only sensor interface, ready for downstream thermal optimization
 - **Retrainable** — advanced users can retrain the model with local data for better personalization
 - **Localizable** — region configuration files allow adaptation to other Nordic/European countries
 
@@ -35,27 +36,27 @@ All data sources are **free**. The optional Fingrid API key is also free (email 
 
 ### Forecast Sensors (always created)
 
+| Sensor | State | Description |
+|--------|-------|-------------|
+| `sensor.price_forecast` | Consumer price (c/kWh) | 170h forecast array with spot EUR/MWh, consumer c/kWh, wind, solar, temperature per hour |
+| `sensor.duration_forecast` | D(4) (c/kWh) | 7-day D(k) duration curves — `dk_consumer_cent_kwh[24]` and `dk_spot_eur_mwh[24]` per day |
+
+The **Price Forecast** sensor provides the complete hourly forecast as a `forecast` attribute array. Each entry contains `{timestamp, spot_eur_mwh, consumer_ckwh, wind, solar, temp}`. Week statistics (`week_min/avg/max_ckwh`) are included as attributes. This is the primary data interface — downstream systems (thermal optimization, load scheduling) consume this forecast to make control decisions.
+
+The **Duration Forecast** sensor provides D(k) = CVaR of the intra-day price distribution at level k/24. The `daily_forecast` attribute contains 7 days, each with `dk_consumer_cent_kwh[24]` (c/kWh) and `dk_spot_eur_mwh[24]` (EUR/MWh). Access any level as `dk_consumer_cent_kwh[k-1]` for k=1..24. All vectors are guaranteed length 24 — only complete days are included.
+
+**Design principle:** This integration provides *forecasts only*. Optimization functions (cheapest hours, load scheduling, heat pump control) belong in a separate thermal optimization layer that consumes these forecasts. This clean separation means either component can be replaced independently.
+
+### Actual Price Sensors (optional, when Nordpool entity is configured)
+
+If you have a Nordpool integration installed (e.g., [custom-components/nordpool](https://github.com/custom-components/nordpool)), you can link it to get actual price sensors for comparison:
+
 | Sensor | Description |
 |--------|-------------|
-| `sensor.spot_price_forecast` | Current hour predicted price (EUR/MWh) with 170h forecast attribute |
-| `sensor.consumer_price` | Total consumer price (EUR/kWh) including VAT, seller margin, transfer tariff, energy tax |
-| `sensor.cheapest_hours` | Cheapest 1/2/3/4/6/8h blocks within configurable search window |
-| `sensor.week_price_stats` | Weekly consumer price min/avg/max (EUR/kWh) |
-
-The **Cheapest Hours** sensor is the primary automation tool — use its attributes to schedule EV charging, water heating, or heat pump operation during the cheapest N-hour windows. The search window start and duration are configurable in the integration settings (default: starting tomorrow, 48h window).
-
-### Spot Price Sensors (optional, when Nordpool entity is configured)
-
-If you have a Nordpool integration installed (e.g., [custom-components/nordpool](https://github.com/custom-components/nordpool)), you can link it in the configuration to get additional sensors:
-
-| Sensor | Description |
-|--------|-------------|
-| `sensor.spot_electricity_price` | Actual spot buying price from Nordpool with continuous timeline attribute |
+| `sensor.spot_electricity_price` | Actual consumer price from Nordpool with continuous timeline attribute |
 | `sensor.spot_electricity_selling_price` | Spot price minus PV selling commission (for solar panel owners) |
 
-**Setup:** Enter your Nordpool sensor entity ID (e.g., `sensor.nordpool_kwh_fi_eur_3_10_0`) in the operator configuration step. Optionally enable PV selling price and set the commission (EUR/kWh).
-
-These sensors provide a continuous timeline in their `timeline` attribute, combining Nordpool's today and tomorrow data into a single series. This enables side-by-side comparison of actual prices vs forecast in the dashboard.
+**Setup:** Enter your Nordpool sensor entity ID (e.g., `sensor.nordpool_kwh_fi_eur_3_10_0`) in the operator configuration step. These sensors enable side-by-side comparison of actual prices vs forecast in the dashboard.
 
 ### Dashboard
 

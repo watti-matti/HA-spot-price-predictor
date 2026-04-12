@@ -26,13 +26,6 @@ CONF_PV_SELL_COMMISSION = "pv_sell_commission"
 
 DEFAULT_PV_SELL_COMMISSION = 0.002   # EUR/kWh (0.2 c/kWh)
 
-CONF_SEARCH_START_HOURS = "search_start_hours"
-CONF_SEARCH_DURATION_HOURS = "search_duration_hours"
-
-# Defaults for cheapest hour search window
-DEFAULT_SEARCH_START_HOURS = 24    # 1d 0h = tomorrow midnight
-DEFAULT_SEARCH_DURATION_HOURS = 48 # 2d 0h = 48 hour window
-
 # Update intervals (seconds)
 UPDATE_INTERVAL_WEATHER = 21600  # 6 hours
 UPDATE_INTERVAL_FINGRID = 3600   # 1 hour

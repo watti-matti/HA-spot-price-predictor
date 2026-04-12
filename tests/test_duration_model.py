@@ -299,10 +299,12 @@ class TestProductionCoefficients:
 
     def test_production_segment_sizes(self, prod_model):
         dm = prod_model.duration_model
-        assert dm.segments["night"]["n_levels"] == 8
-        assert dm.segments["morning"]["n_levels"] == 4
+        # Tariff-aligned: night 22-06 (9h), morning 07-11 (5h),
+        # midday 12-17 (6h), evening 18-21 (4h)
+        assert dm.segments["night"]["n_levels"] == 9
+        assert dm.segments["morning"]["n_levels"] == 5
         assert dm.segments["midday"]["n_levels"] == 6
-        assert dm.segments["evening"]["n_levels"] == 6
+        assert dm.segments["evening"]["n_levels"] == 4
 
     def test_production_realistic_output(self, prod_model):
         """Production model gives prices in 0-100 EUR/MWh range."""

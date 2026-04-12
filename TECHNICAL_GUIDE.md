@@ -20,10 +20,10 @@ Fingrid API ────┘ (optional)
 
 ```
 Open-Meteo  ──┐
-Elpriset    ──┼──> Feature Builder ──> Hourly Model  ──> Consumer Price
-Elering     ──┤    (pure Python)       + Duration Model   + Cheapest Hours
-Fingrid     ──┘                        (pure Python)      + 7-day Forecast
-Nord Pool UMM ─────────────────────────┘                  + Dashboard
+Elpriset    ──┼──> Feature Builder ──> Hourly Model  ──> Price Forecast (170h)
+Elering     ──┤    (pure Python)       + Duration Model   + D(k) Duration Curves (7d)
+Fingrid     ──┘                        (pure Python)      + Dashboard
+Nord Pool UMM ─────────────────────────┘
 ```
 
 ### Dashboards
@@ -145,7 +145,7 @@ Predicts D(k) = average spot price for the cheapest k hours in a day. D(k) is ma
 **PAVA** (Pool Adjacent Violators Algorithm) is an isotonic regression method that enforces monotonicity. Since D(k) must be non-decreasing by definition — adding more hours to the average can only include equal or more expensive hours — PAVA merges any violations from independent per-level Ridge predictions by averaging adjacent violating pairs until D(1) ≤ D(2) ≤ ... ≤ D(N) holds everywhere.
 
 **Architecture:**
-- 4 day segments: night (22-05, 8h), morning (06-09, 4h), midday (10-15, 6h), evening (16-21, 6h)
+- 4 day segments aligned with day/night tariff: night (22-06, 9h), morning (07-11, 5h), midday (12-17, 6h), evening (18-21, 4h)
 - Per (segment, duration level): independent Ridge model with 10 features
 - Log-linear target: log(D(k) + 55)
 - Forgetting factor λ = 0.960 (half-life 17 days, optimized via sweep)
@@ -188,34 +188,33 @@ All tunable parameters are centralized in `config/regions/finland.yaml`. The con
 
 ---
 
-## Consumer Price & Control Signals
+## Consumer Price Calculation
 
 **Formula:** `(max(0, spot_EUR_MWh) / 1000 + seller_margin + transfer_rate + energy_tax) × VAT × 100` [c/kWh]
 
 Configurable per operator in `finland.yaml`. Default: Elenia (day 3.61, night 2.20 c/kWh), VAT 25.5%, energy tax 2.325 c/kWh, seller margin 0.00 c/kWh (set from your electricity contract).
 
-**Sensors:**
+### Forecast sensors (always created)
 
-**Forecast sensors (always created):**
+| Sensor | State | Attributes |
+|--------|-------|------------|
+| Price Forecast | Consumer c/kWh | `forecast` (170h array: spot_eur_mwh, consumer_ckwh, wind, solar, temp), `week_min/avg/max_ckwh` |
+| Duration Forecast | D(4) c/kWh | `daily_forecast` (7-day array: dk_consumer_cent_kwh[24], dk_spot_eur_mwh[24] per day) |
 
-| Sensor | Unit | Description |
-|--------|------|-------------|
-| Spot Price Forecast | EUR/MWh | Current predicted price + 170h forecast attribute |
-| Consumer Price | EUR/kWh | Total price including seller margin, transfer tariff, VAT, energy tax |
-| Duration Forecast | c/kWh | D(k) duration curves: daily cost by usage duration (7-day forecast) |
-| Cheapest Hours | timestamp | Cheapest 1h/2h/3h/4h/6h/8h blocks in configurable search window |
-| Week Price Stats | EUR/kWh | Min/avg/max consumer price over forecast window |
-
-**Spot price sensors (optional, when Nordpool entity is configured):**
+### Actual price sensors (optional, Nordpool)
 
 | Sensor | Unit | Description |
 |--------|------|-------------|
-| Spot Electricity Price | EUR/kWh | Actual buying price from Nordpool with continuous timeline |
+| Spot Electricity Price | EUR/kWh | Actual consumer price from Nordpool with continuous timeline |
 | Spot Electricity Selling Price | EUR/kWh | Spot minus PV selling commission (for solar panel owners) |
 
-The **Duration Forecast** sensor is the primary cost planning tool. Its state is today's D(4) consumer price in c/kWh. Attributes include `today_d1`, `today_d4`, `today_d8`, `today_d24` for key duration levels, and `daily_forecast` containing full 7-day D(k) curves (24 levels per day, both consumer c/kWh and spot EUR/MWh). All consumer prices use the configured tariffs — no hardcoded rates.
+### Design principle
 
-The **Cheapest Hours** sensor provides start times and average prices for the cheapest consecutive N-hour blocks within a configurable search window, plus a list of all hours with below-average price.
+This integration provides **forecasts only**. Optimization functions (cheapest hours, load scheduling, heat pump control) belong in a separate thermal optimization layer that consumes the forecast data. This clean separation allows either component to be replaced independently.
+
+The **Price Forecast** sensor provides a unified 170-hour forecast array in its `forecast` attribute. Each entry contains `{timestamp, spot_eur_mwh, consumer_ckwh, wind, solar, temp}`. Week statistics (`week_min/avg/max_ckwh`) are included as convenience attributes. The state is the current hour's consumer price in c/kWh.
+
+The **Duration Forecast** sensor provides D(k) = CVaR of the intra-day price distribution. The `daily_forecast` attribute contains 7 days, each with `dk_consumer_cent_kwh[24]` (c/kWh) and `dk_spot_eur_mwh[24]` (EUR/MWh). Access any level as `dk_consumer_cent_kwh[k-1]` for k=1..24. All vectors are guaranteed length 24 — only complete days are included. All consumer prices use the configured tariffs — no hardcoded rates.
 
 ---
 

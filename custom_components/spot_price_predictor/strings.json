@@ -28,9 +28,7 @@
         "description": "Cross-border prices (Tier 2) improve predictions using Swedish and Estonian price data — no API key needed. Fingrid data (Tier 3) adds nuclear production and cross-border power flow data — requires a free API key from data.fingrid.fi.\n\nApexCharts dashboard example: https://github.com/watti-matti/HA-spot-price-predictor/blob/main/docs/yaml_examples/apexcharts_dashboard.yaml",
         "data": {
           "fingrid_api_key": "Fingrid API key (optional, free at data.fingrid.fi)",
-          "enable_tier2": "Enable cross-border price data (Sweden SE1/SE3, Estonia)",
-          "search_start_hours": "Cheapest hours search: start offset (hours from now, e.g. 24 = tomorrow)",
-          "search_duration_hours": "Cheapest hours search: window duration (hours, e.g. 48 = 2 days)"
+          "enable_tier2": "Enable cross-border price data (Sweden SE1/SE3, Estonia)"
         }
       }
     },
@@ -55,9 +53,7 @@
           "custom_vat": "VAT multiplier (e.g. 1.255 = 25.5%)",
           "custom_energy_tax": "Energy tax (EUR/kWh)",
           "enable_tier2": "Enable cross-border price data",
-          "fingrid_api_key": "Fingrid API key",
-          "search_start_hours": "Cheapest hours: start offset (hours, e.g. 24 = tomorrow)",
-          "search_duration_hours": "Cheapest hours: window duration (hours, e.g. 48 = 2 days)"
+          "fingrid_api_key": "Fingrid API key"
         }
       }
     }

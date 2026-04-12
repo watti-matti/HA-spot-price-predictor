@@ -28,9 +28,7 @@
         "description": "Rajat ylittävät hintatiedot (Taso 2) parantavat ennusteita Ruotsin ja Viron hintadatalla — ei API-avainta tarvita. Fingrid-data (Taso 3) lisää ydinvoimatuotannon ja rajasiirtojen tiedot — vaatii ilmaisen API-avaimen osoitteesta data.fingrid.fi.\n\nApexCharts-kojelauta: https://github.com/watti-matti/HA-spot-price-predictor/blob/main/docs/yaml_examples/apexcharts_dashboard.yaml",
         "data": {
           "fingrid_api_key": "Fingrid API-avain (valinnainen, ilmainen osoitteessa data.fingrid.fi)",
-          "enable_tier2": "Ota käyttöön rajat ylittävät hintatiedot (Ruotsi SE1/SE3, Viro)",
-          "search_start_hours": "Halvimmat tunnit: haun alkukohta (tuntia nyt, esim. 24 = huomenna)",
-          "search_duration_hours": "Halvimmat tunnit: hakuikkunan kesto (tuntia, esim. 48 = 2 päivää)"
+          "enable_tier2": "Ota käyttöön rajat ylittävät hintatiedot (Ruotsi SE1/SE3, Viro)"
         }
       }
     },
@@ -55,9 +53,7 @@
           "custom_vat": "ALV-kerroin (esim. 1.255 = 25,5%)",
           "custom_energy_tax": "Sähkövero (EUR/kWh)",
           "enable_tier2": "Rajat ylittävät hintatiedot",
-          "fingrid_api_key": "Fingrid API-avain",
-          "search_start_hours": "Halvimmat tunnit: alkukohta (tuntia, esim. 24 = huomenna)",
-          "search_duration_hours": "Halvimmat tunnit: kesto (tuntia, esim. 48 = 2 päivää)"
+          "fingrid_api_key": "Fingrid API-avain"
         }
       }
     }

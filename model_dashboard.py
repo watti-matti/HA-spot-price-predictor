@@ -243,8 +243,8 @@ for k in [1, 4, 6, 8, 12, 24]:
     rho = spearmanr(pv, av).statistic
     mae_c = np.mean([abs(to_cons(p) - to_cons(a)) for p, a in zip(pv, av)])
     bias_c = np.mean([to_cons(p) - to_cons(a) for p, a in zip(pv, av)])
-    use = {1: "cheapest 1h", 4: "EV charge 4h", 6: "water heater", 8: "heat pump 8h",
-           12: "half-day", 24: "daily avg"}
+    use = {1: "cheapest 1h", 4: "cheapest 4h", 6: "cheapest 6h", 8: "cheapest 8h",
+           12: "cheapest 12h", 24: "daily avg"}
     print("  D(%2d) %-14s: rho=%.4f  MAE=%.3f c/kWh  Bias=%+.3f" %
           (k, use.get(k, ""), rho, mae_c, bias_c))
 
@@ -623,8 +623,8 @@ Scrolls with slider.</p>
 <h2>Scatter: Predicted vs Actual per Duration Level</h2>
 <div class="grid-4">
   <div class="box"><div style="font-size:12px;color:#e2e8f0;font-weight:600;margin-bottom:4px">D(1) Cheapest 1h</div><canvas id="sc1" height="200"></canvas></div>
-  <div class="box"><div style="font-size:12px;color:#e2e8f0;font-weight:600;margin-bottom:4px">D(4) EV Charge 4h</div><canvas id="sc4" height="200"></canvas></div>
-  <div class="box"><div style="font-size:12px;color:#e2e8f0;font-weight:600;margin-bottom:4px">D(8) Heat Pump 8h</div><canvas id="sc8" height="200"></canvas></div>
+  <div class="box"><div style="font-size:12px;color:#e2e8f0;font-weight:600;margin-bottom:4px">D(4) Cheapest 4h</div><canvas id="sc4" height="200"></canvas></div>
+  <div class="box"><div style="font-size:12px;color:#e2e8f0;font-weight:600;margin-bottom:4px">D(8) Cheapest 8h</div><canvas id="sc8" height="200"></canvas></div>
   <div class="box"><div style="font-size:12px;color:#e2e8f0;font-weight:600;margin-bottom:4px">D(24) Daily Avg</div><canvas id="sc24" height="200"></canvas></div>
 </div>
 
@@ -1110,8 +1110,8 @@ function scPlot(id,kI,color){
   new Chart(document.getElementById('sweepChart').getContext('2d'),{type:'line',
     data:{labels,datasets:[
       {label:'D(1) Cheapest',data:sw.map(s=>s.d1_rho),borderColor:'#22d3ee',borderWidth:2,pointRadius:4,fill:false},
-      {label:'D(4) EV',data:sw.map(s=>s.d4_rho),borderColor:'#facc15',borderWidth:2,pointRadius:4,fill:false},
-      {label:'D(8) Heat pump',data:sw.map(s=>s.d8_rho),borderColor:'#f97316',borderWidth:2,pointRadius:4,fill:false},
+      {label:'D(4) 4h',data:sw.map(s=>s.d4_rho),borderColor:'#facc15',borderWidth:2,pointRadius:4,fill:false},
+      {label:'D(8) 8h',data:sw.map(s=>s.d8_rho),borderColor:'#f97316',borderWidth:2,pointRadius:4,fill:false},
       {label:'D(24) Daily',data:sw.map(s=>s.d24_rho),borderColor:'#ef4444',borderWidth:2,pointRadius:4,fill:false},
       {label:'Composite',data:sw.map(s=>s.composite),borderColor:'#a78bfa',borderWidth:3,pointRadius:5,
        fill:false,borderDash:[6,3]}]},
@@ -1130,8 +1130,8 @@ function scPlot(id,kI,color){
     return '\\u03BB='+s.lambda.toFixed(3)+'\\n('+s.halflife+')';});
   new Chart(document.getElementById('prodSweep').getContext('2d'),{type:'line',
     data:{labels:plabels,datasets:[
-      {label:'D(4) EV',data:ps.map(s=>s.d4_rho),borderColor:'#facc15',borderWidth:2,pointRadius:4,fill:false},
-      {label:'D(8) Heat',data:ps.map(s=>s.d8_rho),borderColor:'#f97316',borderWidth:2,pointRadius:4,fill:false},
+      {label:'D(4) 4h',data:ps.map(s=>s.d4_rho),borderColor:'#facc15',borderWidth:2,pointRadius:4,fill:false},
+      {label:'D(8) 8h',data:ps.map(s=>s.d8_rho),borderColor:'#f97316',borderWidth:2,pointRadius:4,fill:false},
       {label:'D(24) Daily',data:ps.map(s=>s.d24_rho),borderColor:'#ef4444',borderWidth:2,pointRadius:4,fill:false},
       {label:'Composite',data:ps.map(s=>s.composite),borderColor:'#a78bfa',borderWidth:3,pointRadius:5,
        fill:false,borderDash:[6,3]}]},
@@ -1153,8 +1153,8 @@ function scPlot(id,kI,color){
   new Chart(document.getElementById('rollChart').getContext('2d'),{type:'line',
     data:{labels,datasets:[
       {label:'D(1) Cheapest',data:rl.map(r=>r.d1),borderColor:'#22d3ee',borderWidth:1.5,pointRadius:0,fill:false,tension:0.3},
-      {label:'D(4) EV Charge',data:rl.map(r=>r.d4),borderColor:'#facc15',borderWidth:2,pointRadius:0,fill:false,tension:0.3},
-      {label:'D(8) Heat Pump',data:rl.map(r=>r.d8),borderColor:'#f97316',borderWidth:1.5,pointRadius:0,fill:false,tension:0.3},
+      {label:'D(4) 4h',data:rl.map(r=>r.d4),borderColor:'#facc15',borderWidth:2,pointRadius:0,fill:false,tension:0.3},
+      {label:'D(8) 8h',data:rl.map(r=>r.d8),borderColor:'#f97316',borderWidth:1.5,pointRadius:0,fill:false,tension:0.3},
       {label:'D(24) Daily Avg',data:rl.map(r=>r.d24),borderColor:'#ef4444',borderWidth:1.5,pointRadius:0,fill:false,tension:0.3},
       // zero line
       {label:'_zero',data:rl.map(()=>0),borderColor:'#475569',borderWidth:1,borderDash:[4,4],pointRadius:0,fill:false},

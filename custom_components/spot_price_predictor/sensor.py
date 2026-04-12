@@ -1,4 +1,14 @@
-"""Sensor entities for Spot Price Predictor."""
+"""Sensor entities for Spot Price Predictor.
+
+Provides two forecast sensors:
+  - Price Forecast: 170h hourly price array (spot EUR/MWh + consumer c/kWh)
+  - Duration Forecast: 7-day D(k) duration curves (CVaR of daily prices)
+
+Optimization functions (cheapest hours, load scheduling) belong in a
+separate thermal optimization integration that consumes these forecasts.
+
+Optional Nordpool sensors provide actual spot prices for comparison.
+"""
 
 from __future__ import annotations
 
@@ -48,10 +58,7 @@ async def async_setup_entry(
     coordinator: SpotPriceCoordinator = hass.data[DOMAIN][entry.entry_id]
 
     entities = [
-        SpotPriceForecastSensor(coordinator, entry),
-        ConsumerPriceSensor(coordinator, entry),
-        CheapestHoursSensor(coordinator, entry),
-        WeekStatsSensor(coordinator, entry),
+        PriceForecastSensor(coordinator, entry),
         DurationForecastSensor(coordinator, entry),
     ]
 
@@ -72,7 +79,7 @@ def _device_info(entry: ConfigEntry) -> dict[str, Any]:
         "name": "Spot Price Predictor",
         "manufacturer": "watti-matti",
         "model": "Spot Price Predictor",
-        "sw_version": "2.0.0",
+        "sw_version": "2.1.0",
     }
 
 
@@ -88,188 +95,69 @@ def _status_attributes(data: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
-class SpotPriceForecastSensor(CoordinatorEntity, SensorEntity):
-    """Predicted spot price for current hour (EUR/MWh)."""
-
-    _attr_has_entity_name = True
-    _attr_name = "Spot Price Forecast"
-    _attr_native_unit_of_measurement = "EUR/MWh"
-    _attr_icon = "mdi:chart-line"
-    _attr_suggested_display_precision = 2
-
-    def __init__(self, coordinator: SpotPriceCoordinator, entry: ConfigEntry) -> None:
-        super().__init__(coordinator)
-        self._attr_unique_id = f"{entry.entry_id}_spot_price_forecast"
-        self._entry = entry
-
-    @property
-    def native_value(self) -> float | None:
-        if self.coordinator.data:
-            return self.coordinator.data.get("spot_price")
-        return None
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        if not self.coordinator.data:
-            return {}
-        return {
-            "forecast": self.coordinator.data.get("spot_forecast", []),
-            "unit": "EUR/MWh",
-            "forecast_hours": len(self.coordinator.data.get("spot_forecast", [])),
-            **_status_attributes(self.coordinator.data),
-        }
-
-    @property
-    def device_info(self) -> dict[str, Any]:
-        return _device_info(self._entry)
+# ── Forecast sensors (always created) ──────────────────────────────
 
 
-class ConsumerPriceSensor(CoordinatorEntity, SensorEntity):
-    """Consumer price including transfer tariff, VAT, energy tax (EUR/kWh)."""
+class PriceForecastSensor(CoordinatorEntity, SensorEntity):
+    """Electricity price forecast — 170 hours ahead.
 
-    _attr_has_entity_name = True
-    _attr_name = "Consumer Price"
-    _attr_native_unit_of_measurement = "EUR/kWh"
-    _attr_icon = "mdi:currency-eur"
-    _attr_suggested_display_precision = 4
+    State: current consumer price (c/kWh) including transfer tariff,
+    energy tax, seller margin, and VAT.
 
-    def __init__(self, coordinator: SpotPriceCoordinator, entry: ConfigEntry) -> None:
-        super().__init__(coordinator)
-        self._attr_unique_id = f"{entry.entry_id}_consumer_price"
-        self._entry = entry
+    Attributes:
+      forecast: 170h array [{timestamp, spot_eur_mwh, consumer_ckwh,
+                wind, solar, temp}, ...]
+      current_spot_eur_mwh: current hour spot price
+      forecast_hours: number of forecast entries
+      week_min/avg/max_ckwh: statistics over forecast window
+      operator: configured operator name
 
-    @property
-    def native_value(self) -> float | None:
-        if self.coordinator.data:
-            return self.coordinator.data.get("consumer_price")
-        return None
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        if not self.coordinator.data:
-            return {}
-        return {
-            "forecast": self.coordinator.data.get("consumer_forecast", []),
-            "operator": self._entry.data.get("operator", ""),
-            "unit": "EUR/kWh",
-            **_status_attributes(self.coordinator.data),
-        }
-
-    @property
-    def device_info(self) -> dict[str, Any]:
-        return _device_info(self._entry)
-
-
-class CheapestHoursSensor(CoordinatorEntity, SensorEntity):
-    """Cheapest upcoming hours for load scheduling.
-
-    State: start time of the single cheapest hour in the next 24h.
-    Attributes: cheapest consecutive blocks (1h-8h) with start times
-    and average prices, plus list of all hours below average price.
+    This sensor provides the raw forecast data. Optimization decisions
+    (cheapest hours, load scheduling) should be computed downstream by
+    a thermal optimization integration or HA automation templates.
     """
 
     _attr_has_entity_name = True
-    _attr_name = "Cheapest Hours"
-    _attr_device_class = SensorDeviceClass.TIMESTAMP
-    _attr_icon = "mdi:clock-check-outline"
+    _attr_name = "Price Forecast"
+    _attr_native_unit_of_measurement = "c/kWh"
+    _attr_icon = "mdi:chart-line"
+    _attr_suggested_display_precision = 1
 
     def __init__(self, coordinator: SpotPriceCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
-        self._attr_unique_id = f"{entry.entry_id}_cheapest_hours"
-        self._entry = entry
-
-    @property
-    def native_value(self) -> datetime | None:
-        if self.coordinator.data:
-            ch = self.coordinator.data.get("cheapest_hours", {})
-            ts = ch.get("cheapest_1h_start")
-            if ts:
-                try:
-                    return datetime.fromisoformat(ts)
-                except (ValueError, TypeError):
-                    return None
-        return None
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        if not self.coordinator.data:
-            return {}
-        ch = self.coordinator.data.get("cheapest_hours", {})
-        return {
-            # Spot EUR/MWh prices
-            "cheapest_1h_start": ch.get("cheapest_1h_start"),
-            "cheapest_1h_price": ch.get("cheapest_1h_price"),
-            "cheapest_2h_start": ch.get("cheapest_2h_start"),
-            "cheapest_2h_avg_price": ch.get("cheapest_2h_avg_price"),
-            "cheapest_3h_start": ch.get("cheapest_3h_start"),
-            "cheapest_3h_avg_price": ch.get("cheapest_3h_avg_price"),
-            "cheapest_4h_start": ch.get("cheapest_4h_start"),
-            "cheapest_4h_avg_price": ch.get("cheapest_4h_avg_price"),
-            "cheapest_6h_start": ch.get("cheapest_6h_start"),
-            "cheapest_6h_avg_price": ch.get("cheapest_6h_avg_price"),
-            "cheapest_8h_start": ch.get("cheapest_8h_start"),
-            "cheapest_8h_avg_price": ch.get("cheapest_8h_avg_price"),
-            # Consumer c/kWh prices (includes tariff, VAT, tax, margin)
-            "cheapest_1h_consumer_price": ch.get("cheapest_1h_consumer_price"),
-            "cheapest_2h_avg_consumer_price": ch.get("cheapest_2h_avg_consumer_price"),
-            "cheapest_3h_avg_consumer_price": ch.get("cheapest_3h_avg_consumer_price"),
-            "cheapest_4h_avg_consumer_price": ch.get("cheapest_4h_avg_consumer_price"),
-            "cheapest_6h_avg_consumer_price": ch.get("cheapest_6h_avg_consumer_price"),
-            "cheapest_8h_avg_consumer_price": ch.get("cheapest_8h_avg_consumer_price"),
-            "avg_consumer_in_window": ch.get("avg_consumer_in_window"),
-            # Window info
-            "hours_below_avg": ch.get("hours_below_avg", []),
-            "window_hours": ch.get("window_hours", 24),
-            "avg_price_in_window": ch.get("avg_price_in_window"),
-            **_status_attributes(self.coordinator.data),
-        }
-
-    @property
-    def device_info(self) -> dict[str, Any]:
-        return _device_info(self._entry)
-
-
-class WeekStatsSensor(CoordinatorEntity, SensorEntity):
-    """Weekly consumer price forecast statistics (min, avg, max in EUR/kWh)."""
-
-    _attr_has_entity_name = True
-    _attr_name = "Week Price Stats"
-    _attr_native_unit_of_measurement = "EUR/kWh"
-    _attr_icon = "mdi:chart-box-outline"
-    _attr_suggested_display_precision = 4
-
-    def __init__(self, coordinator: SpotPriceCoordinator, entry: ConfigEntry) -> None:
-        super().__init__(coordinator)
-        self._attr_unique_id = f"{entry.entry_id}_week_stats"
+        self._attr_unique_id = f"{entry.entry_id}_price_forecast"
         self._entry = entry
 
     @property
     def native_value(self) -> float | None:
-        """State = weekly average consumer price."""
         if self.coordinator.data:
-            forecast = self.coordinator.data.get("consumer_forecast", [])
-            if forecast:
-                prices = [f["price_eur_kwh"] for f in forecast]
-                return round(sum(prices) / len(prices), 4)
+            return self.coordinator.data.get("current_consumer_ckwh")
         return None
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         if not self.coordinator.data:
             return {}
-        forecast = self.coordinator.data.get("consumer_forecast", [])
-        if not forecast:
-            return {}
-        prices = [f["price_eur_kwh"] for f in forecast]
-        return {
-            "week_min": round(min(prices), 4),
-            "week_avg": round(sum(prices) / len(prices), 4),
-            "week_max": round(max(prices), 4),
-            "unit": "EUR/kWh",
-            "forecast_hours": len(prices),
-            "operator": self._entry.data.get("operator", ""),
-            **_status_attributes(self.coordinator.data),
+        data = self.coordinator.data
+        forecast = data.get("forecast", [])
+
+        # Compute week statistics from forecast
+        attrs: dict[str, Any] = {
+            "current_spot_eur_mwh": data.get("current_spot_eur_mwh"),
+            "forecast": forecast,
+            "forecast_hours": len(forecast),
+            "operator": self._entry.data.get(CONF_OPERATOR, ""),
         }
+
+        if forecast:
+            prices = [f["consumer_ckwh"] for f in forecast if "consumer_ckwh" in f]
+            if prices:
+                attrs["week_min_ckwh"] = round(min(prices), 2)
+                attrs["week_avg_ckwh"] = round(sum(prices) / len(prices), 2)
+                attrs["week_max_ckwh"] = round(max(prices), 2)
+
+        attrs.update(_status_attributes(data))
+        return attrs
 
     @property
     def device_info(self) -> dict[str, Any]:
@@ -277,11 +165,21 @@ class WeekStatsSensor(CoordinatorEntity, SensorEntity):
 
 
 class DurationForecastSensor(CoordinatorEntity, SensorEntity):
-    """D(k) duration curve forecast — daily cost by usage duration.
+    """D(k) duration curve forecast — 7 days ahead.
 
-    State: today's D(4) = average consumer price for cheapest 4 hours (c/kWh).
-    Attributes: 7-day daily D(k) curves with consumer c/kWh prices.
-    Use for: EV charging (D4), heat pumps (D8), daily averages (D24).
+    State: first forecast day's D(4) = average consumer price for the
+    cheapest 4 hours (c/kWh). D(k) = CVaR at level k/24.
+
+    Attributes:
+      daily_forecast: 7-day array, each entry:
+        {date, weekday, dk_consumer_cent_kwh[24], dk_spot_eur_mwh[24]}
+        dk_consumer_cent_kwh[k-1] = D(k) consumer price in c/kWh for k=1..24
+        dk_spot_eur_mwh[k-1] = D(k) spot price in EUR/MWh for k=1..24
+      forecast_days: number of forecast days
+
+    All D(k) vectors are guaranteed length 24 (only complete days
+    are included). Thermal optimization can read any D(k) directly
+    from the vector: dk_consumer_cent_kwh[k-1] for k=1..24.
     """
 
     _attr_has_entity_name = True
@@ -295,21 +193,16 @@ class DurationForecastSensor(CoordinatorEntity, SensorEntity):
         self._attr_unique_id = f"{entry.entry_id}_duration_forecast"
         self._entry = entry
 
-    def _today_dk(self) -> dict[str, Any] | None:
-        """Get today's D(k) entry."""
+    @property
+    def native_value(self) -> float | None:
+        """State = first forecast day's D(4) in c/kWh."""
         if not self.coordinator.data:
             return None
         dk_list = self.coordinator.data.get("duration_forecast", [])
         if not dk_list:
             return None
-        # Return first available day (today or earliest forecast day)
-        return dk_list[0] if dk_list else None
-
-    @property
-    def native_value(self) -> float | None:
-        """State = today's D(4) EV charge cost in c/kWh."""
-        dk = self._today_dk()
-        return dk.get("d4") if dk else None
+        dk_vec = dk_list[0].get("dk_consumer_cent_kwh", [])
+        return dk_vec[3] if len(dk_vec) >= 4 else None
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -319,27 +212,18 @@ class DurationForecastSensor(CoordinatorEntity, SensorEntity):
         if not dk_list:
             return {}
 
-        today = self._today_dk()
-        attrs: dict[str, Any] = {
-            "unit": "c/kWh",
+        return {
+            "daily_forecast": dk_list,
             "forecast_days": len(dk_list),
+            **_status_attributes(self.coordinator.data),
         }
-
-        # Today's key levels
-        if today:
-            attrs["today_d1"] = today.get("d1")
-            attrs["today_d4"] = today.get("d4")
-            attrs["today_d8"] = today.get("d8")
-            attrs["today_d24"] = today.get("d24")
-
-        # Full 7-day forecast for dashboard charts
-        attrs["daily_forecast"] = dk_list
-        attrs.update(_status_attributes(self.coordinator.data))
-        return attrs
 
     @property
     def device_info(self) -> dict[str, Any]:
         return _device_info(self._entry)
+
+
+# ── Nordpool sensors (optional, for actual price comparison) ────────
 
 
 def _get_tariff_config(entry: ConfigEntry) -> dict[str, float]:
@@ -378,11 +262,9 @@ def _process_nordpool_data(hass: HomeAssistant, entity_id: str) -> list[dict[str
     if not state:
         return []
 
-    # Use dict keyed by timestamp to deduplicate
     entries: dict[str, float] = {}
     attrs = state.attributes
 
-    # Try 'data' attribute first (some Nordpool integrations)
     data_attr = attrs.get("data")
     if data_attr and isinstance(data_attr, list):
         for d in data_attr:
@@ -395,8 +277,6 @@ def _process_nordpool_data(hass: HomeAssistant, entity_id: str) -> list[dict[str
                     ts_key = str(ts)
                 entries[ts_key] = float(price)
     else:
-        # Fallback: try today/tomorrow attributes
-        # Use raw_today/raw_tomorrow first (more reliable), then today/tomorrow
         for attr_name in ("raw_today", "raw_tomorrow", "today", "tomorrow"):
             prices = attrs.get(attr_name)
             if prices and isinstance(prices, list):
@@ -406,11 +286,9 @@ def _process_nordpool_data(hass: HomeAssistant, entity_id: str) -> list[dict[str
                         price = p.get("value") or p.get("price")
                         if ts and price is not None:
                             ts_key = str(ts)
-                            if ts_key not in entries:  # Don't overwrite
+                            if ts_key not in entries:
                                 entries[ts_key] = float(price)
 
-    # Return full resolution (15-min or hourly depending on source)
-    # sorted and deduplicated
     return sorted(
         [{"timestamp": k, "price_eur_kwh": v} for k, v in entries.items()],
         key=lambda x: x["timestamp"],
@@ -459,7 +337,6 @@ class SpotElectricityPriceSensor(CoordinatorEntity, SensorEntity):
             return {}
         tariff = _get_tariff_config(self._entry)
         raw_timeline = _process_nordpool_data(self._hass, entity_id)
-        # Apply consumer price overhead to each hour
         consumer_timeline = []
         for entry_item in raw_timeline:
             try:
@@ -524,8 +401,6 @@ class SpotElectricitySellingPriceSensor(CoordinatorEntity, SensorEntity):
         if not entity_id:
             return {}
 
-        # Selling price = spot price minus commission (no overhead added)
-        # Same time range as the buying price sensor (Nordpool today + tomorrow only)
         raw_timeline = _process_nordpool_data(self._hass, entity_id)
         timeline = [
             {

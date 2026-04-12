@@ -317,12 +317,13 @@ duration_model:
   exp_cap: 20.0                      # Cap linear predictor: exp(20) ≈ 485M, prevents overflow
 
   # Segment definitions: which hours belong to each segment
+  # Boundaries aligned with day/night tariff (07 and 22)
   # Total must be 24 hours, segments must not overlap
   segments:
-    night:   [22, 23, 0, 1, 2, 3, 4, 5]    # 8 hours
-    morning: [6, 7, 8, 9]                    # 4 hours
-    midday:  [10, 11, 12, 13, 14, 15]        # 6 hours
-    evening: [16, 17, 18, 19, 20, 21]        # 6 hours
+    night:   [22, 23, 0, 1, 2, 3, 4, 5, 6]  # 9 hours (night tariff 22-07)
+    morning: [7, 8, 9, 10, 11]               # 5 hours (day tariff)
+    midday:  [12, 13, 14, 15, 16, 17]        # 6 hours (day tariff)
+    evening: [18, 19, 20, 21]                # 4 hours (day tariff 07-22)
 
   # Features used per segment (aggregated as segment means)
   features:

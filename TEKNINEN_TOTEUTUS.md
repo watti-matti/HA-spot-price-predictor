@@ -20,10 +20,10 @@ Fingrid API ────┘ (valinnainen)
 
 ```
 Open-Meteo  ──┐
-Elpriset    ──┼──> Piirrerakentaja ──> Tuntimalli     ──> Kuluttajahinta
-Elering     ──┤    (puhdas Python)     + Kestomalli       + Halvimmat tunnit
-Fingrid     ──┘                        (puhdas Python)    + 7 vrk ennuste
-Nord Pool UMM ─────────────────────────┘                  + Kojelauta
+Elpriset    ──┼──> Piirrerakentaja ──> Tuntimalli     ──> Hintaennuste (170h)
+Elering     ──┤    (puhdas Python)     + Kestomalli       + D(k) kestokäyrät (7 vrk)
+Fingrid     ──┘                        (puhdas Python)    + Kojelauta
+Nord Pool UMM ─────────────────────────┘
 ```
 
 ### Kojelaudat
@@ -145,7 +145,7 @@ Ennustaa D(k) = keskimääräisen spot-hinnan halvimmille k tunnille päivässä
 **PAVA** (Pool Adjacent Violators Algorithm) on isotonisen regression menetelmä, joka pakottaa monotonisuuden. Koska D(k) on määritelmän mukaan ei-vähenevä — useampien tuntien lisääminen keskiarvoon voi sisältää vain yhtä kalliita tai kalliimpia tunteja — PAVA yhdistää itsenäisten Ridge-ennusteiden rikkomukset keskiarvoistamalla vierekkäisiä pareja kunnes D(1) ≤ D(2) ≤ ... ≤ D(N) toteutuu kaikkialla.
 
 **Arkkitehtuuri:**
-- 4 päiväsegmenttiä: yö (22-05, 8h), aamu (06-09, 4h), keskipäivä (10-15, 6h), ilta (16-21, 6h)
+- 4 päiväsegmenttiä tariffirajojen mukaan: yö (22-06, 9h), aamu (07-11, 5h), keskipäivä (12-17, 6h), ilta (18-21, 4h)
 - Jokainen (segmentti, kestotaso): itsenäinen Ridge-malli 10 piirteellä
 - Log-lineaarinen kohde: log(D(k) + 55)
 - Unohtamiskerroin λ = 0,960 (puoliintumisaika 17 päivää, optimoitu pyyhkäisyllä)
@@ -188,34 +188,33 @@ Kaikki säädettävät parametrit on keskitetty tiedostoon `config/regions/finla
 
 ---
 
-## Kuluttajahinta ja ohjaussignaalit
+## Kuluttajahinnan laskenta
 
 **Kaava:** `(max(0, spot_EUR_MWh) / 1000 + marginaali + siirtohinta + energiavero) × ALV × 100` [c/kWh]
 
 Konfiguroitavissa operaattorikohtaisesti tiedostossa `finland.yaml`. Oletus: Elenia (päivä 3,61, yö 2,20 c/kWh), ALV 25,5%, energiavero 2,325 c/kWh, myyjän marginaali 0,00 c/kWh (aseta sähkösopimuksesi mukaan).
 
-**Sensorit:**
+### Ennustesensorit (luodaan aina)
 
-**Ennustesensorit (luodaan aina):**
+| Sensori | Tila | Attribuutit |
+|---------|------|-------------|
+| Price Forecast | Kuluttajahinta c/kWh | `forecast` (170h taulukko: spot_eur_mwh, consumer_ckwh, wind, solar, temp), `week_min/avg/max_ckwh` |
+| Duration Forecast | D(4) c/kWh | `daily_forecast` (7 vrk taulukko: dk_consumer_cent_kwh[24], dk_spot_eur_mwh[24] per päivä) |
 
-| Sensori | Yksikkö | Kuvaus |
-|---------|---------|--------|
-| Spot Price Forecast | EUR/MWh | Ennustettu spot-hinta + 170h ennuste |
-| Consumer Price | EUR/kWh | Kokonaishinta sis. marginaalin, siirtohinnan, ALV:n, energiaveron |
-| Duration Forecast | c/kWh | D(k) kestokäyrät: päivittäinen kustannus käyttökeston mukaan (7 vrk ennuste) |
-| Cheapest Hours | aikaleima | Halvimmat 1h/2h/3h/4h/6h/8h jaksot säädettävässä hakuikkunassa |
-| Week Price Stats | EUR/kWh | Kuluttajahinnan min/keskiarvo/max ennusteikkunassa |
-
-**Spot-hintasensorit (valinnainen, kun Nordpool-entiteetti on konfiguroitu):**
+### Todellinen hinta -sensorit (valinnainen, Nordpool)
 
 | Sensori | Yksikkö | Kuvaus |
 |---------|---------|--------|
-| Spot Electricity Price | EUR/kWh | Todellinen ostohinta Nordpoolista jatkuvalla aikajanalla |
+| Spot Electricity Price | EUR/kWh | Todellinen kuluttajahinta Nordpoolista jatkuvalla aikajanalla |
 | Spot Electricity Selling Price | EUR/kWh | Spot miinus aurinkosähkön myyntipalkkio |
 
-**Duration Forecast** -sensori on ensisijainen kustannussuunnittelutyökalu. Sen tila on päivän D(4) kuluttajahinta c/kWh. Attribuutit sisältävät `today_d1`, `today_d4`, `today_d8`, `today_d24` avaintasoille sekä `daily_forecast` täydet 7 vrk D(k)-käyrät (24 tasoa per päivä, sekä kuluttaja-c/kWh että spot-EUR/MWh). Kaikki kuluttajahinnat käyttävät konfiguroituja tariffeja — ei kovakoodattuja arvoja.
+### Suunnitteluperiaate
 
-**Cheapest Hours** -sensori tarjoaa alkamisajat ja keskihinnat halvimmille peräkkäisille N tunnin jaksoille säädettävässä hakuikkunassa sekä listan keskiarvon alittavista tunneista.
+Tämä integraatio tuottaa **ainoastaan ennusteita**. Optimointitoiminnot (halvimmat tunnit, kuormanohjaus, lämpöpumppuohjaus) kuuluvat erilliseen lämpöoptimointi-kerrokseen, joka kuluttaa ennustedataa. Tämä selkeä erottelu mahdollistaa kummankin komponentin itsenäisen korvaamisen.
+
+**Price Forecast** -sensori tarjoaa yhtenäisen 170 tunnin ennustetaulukon `forecast`-attribuutissa. Jokainen rivi sisältää `{timestamp, spot_eur_mwh, consumer_ckwh, wind, solar, temp}`. Viikkotilastot (`week_min/avg/max_ckwh`) sisältyvät attribuutteihin. Tila on nykyisen tunnin kuluttajahinta c/kWh.
+
+**Duration Forecast** -sensori tarjoaa D(k) = CVaR päivänsisäisestä hintajakaumasta. `daily_forecast`-attribuutti sisältää 7 päivää, joissa jokaisessa on `dk_consumer_cent_kwh[24]` (c/kWh) ja `dk_spot_eur_mwh[24]` (EUR/MWh). Mikä tahansa taso luetaan `dk_consumer_cent_kwh[k-1]` missä k=1..24. Kaikki vektorit ovat taattu pituudeltaan 24 — vain täydelliset päivät sisällytetään. Kaikki kuluttajahinnat käyttävät konfiguroituja tariffeja — ei kovakoodattuja arvoja.
 
 ---
 

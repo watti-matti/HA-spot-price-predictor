@@ -23,10 +23,6 @@ from .const import (
     CONF_CUSTOM_ENERGY_TAX,
     CONF_SELLER_MARGIN,
     DEFAULT_SELLER_MARGIN,
-    CONF_SEARCH_START_HOURS,
-    CONF_SEARCH_DURATION_HOURS,
-    DEFAULT_SEARCH_START_HOURS,
-    DEFAULT_SEARCH_DURATION_HOURS,
     OPERATORS,
     DEFAULT_VAT_MULTIPLIER,
     DEFAULT_ENERGY_TAX,
@@ -46,7 +42,13 @@ RETRY_INTERVAL_SECONDS = 900  # 15 minutes after failure
 
 
 class SpotPriceCoordinator(DataUpdateCoordinator):
-    """Coordinator that fetches data and runs model inference."""
+    """Coordinator that fetches data and runs model inference.
+
+    Produces a unified forecast array with both spot (EUR/MWh) and
+    consumer (c/kWh) prices for each hour, plus D(k) duration curves.
+    Optimization functions (cheapest hours, load scheduling) are NOT
+    included — they belong in a separate thermal optimization layer.
+    """
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry,
                  model: SpotPriceModel | None = None) -> None:
@@ -81,16 +83,17 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
 
         self.enable_tier2 = entry.data.get(CONF_ENABLE_TIER2, False)
         self.has_fingrid = bool(fingrid_key)
-        self.search_start_hours = entry.data.get(
-            CONF_SEARCH_START_HOURS, DEFAULT_SEARCH_START_HOURS
-        )
-        self.search_duration_hours = entry.data.get(
-            CONF_SEARCH_DURATION_HOURS, DEFAULT_SEARCH_DURATION_HOURS
-        )
 
         # Build holiday set
         now = datetime.now(timezone.utc)
         self.holidays = build_holiday_set(now.year - 1, now.year + 2)
+
+        # Timezone for local hour lookup
+        try:
+            from zoneinfo import ZoneInfo
+            self._tz = ZoneInfo(DEFAULT_TIMEZONE)
+        except Exception:
+            self._tz = None
 
         # Cache last successful result so sensors stay available during API failures
         self._last_successful_data: dict[str, Any] | None = None
@@ -100,7 +103,25 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
         # can show data from the beginning of the day, not just from
         # the last refresh time. Key = ISO timestamp, value = forecast entry.
         self._forecast_history: dict[str, dict] = {}
-        self._consumer_history: dict[str, dict] = {}
+
+    def _get_local_hour(self, ts_utc: datetime) -> int:
+        """Get local hour for a UTC timestamp."""
+        if self._tz:
+            try:
+                from zoneinfo import ZoneInfo
+                aware = ts_utc.replace(tzinfo=ZoneInfo("UTC")) if ts_utc.tzinfo is None else ts_utc
+                return aware.astimezone(self._tz).hour
+            except Exception:
+                pass
+        # Fallback: UTC+3 (Finland without DST)
+        return (ts_utc.hour + 3) % 24
+
+    def _spot_to_consumer_ckwh(self, spot_eur_mwh: float, is_night: bool) -> float:
+        """Convert spot EUR/MWh to consumer c/kWh using configured tariffs."""
+        transfer = self.night_rate if is_night else self.day_rate
+        spot_kwh = max(0.0, spot_eur_mwh) / 1000.0
+        return (spot_kwh + self.seller_margin + transfer + self.energy_tax) \
+            * self.vat_multiplier * 100
 
     def _return_cached_or_fail(self, err: Exception) -> dict[str, Any]:
         """Return cached data on failure, or raise UpdateFailed if no cache."""
@@ -195,21 +216,20 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                             if recent else []
 
                         # Build forecast hours: (local_hour, is_workday)
-                        try:
-                            from zoneinfo import ZoneInfo
-                            tz = ZoneInfo(DEFAULT_TIMEZONE)
-                        except Exception:
-                            tz = None
                         forecast_hours = []
                         for i in range(n_hours):
                             h_utc = now_utc + timedelta(hours=i)
-                            if tz:
-                                h_local = h_utc.astimezone(tz)
+                            local_h = self._get_local_hour(h_utc)
+                            if self._tz:
+                                from zoneinfo import ZoneInfo
+                                h_local = h_utc.replace(
+                                    tzinfo=ZoneInfo("UTC")).astimezone(self._tz)
+                                local_dow = h_local.weekday()
+                                date_s = h_local.strftime("%Y-%m-%d")
                             else:
                                 h_local = h_utc + timedelta(hours=3)
-                            local_h = h_local.hour
-                            local_dow = h_local.weekday()
-                            date_s = h_local.strftime("%Y-%m-%d")
+                                local_dow = h_local.weekday()
+                                date_s = h_local.strftime("%Y-%m-%d")
                             is_wd = (local_dow < 5) and (date_s not in self.holidays)
                             forecast_hours.append((local_h, is_wd))
 
@@ -239,47 +259,24 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
             # Run model inference
             predictions = self.model.predict_batch(feature_rows)
 
-            # Build forecast list with timestamps and weather context
+            # Build unified forecast: spot + consumer + weather per hour
             forecast = []
             for i, pred in enumerate(predictions):
                 ts = now + timedelta(hours=i)
-                entry = {
-                    "timestamp": ts.isoformat(),
-                    "price_eur_mwh": round(pred, 2),
-                }
-                # Include weather data for dashboard charts
-                if i < len(weather):
-                    entry["wind_weighted"] = round(weather[i].get("wind_weighted", 0), 1)
-                    entry["solar_weighted"] = round(weather[i].get("solar_weighted", 0), 0)
-                    entry["temp_weighted"] = round(weather[i].get("temp_weighted", 0), 1)
-                forecast.append(entry)
-
-            # Compute consumer prices (EUR/kWh) with tariff
-            consumer_forecast = []
-            for entry_item in forecast:
-                ts = datetime.fromisoformat(entry_item["timestamp"])
-                try:
-                    from zoneinfo import ZoneInfo
-                    local_hour = ts.replace(tzinfo=ZoneInfo("UTC")).astimezone(ZoneInfo(DEFAULT_TIMEZONE)).hour
-                except Exception:
-                    local_hour = (ts + timedelta(hours=3)).hour
+                local_hour = self._get_local_hour(ts)
                 is_night = local_hour < 7 or local_hour >= 22
-                transfer = self.night_rate if is_night else self.day_rate
-                spot_kwh = entry_item["price_eur_mwh"] / 1000.0
-                consumer_price = (spot_kwh + self.seller_margin + transfer + self.energy_tax) * self.vat_multiplier
-                consumer_forecast.append({
-                    "timestamp": entry_item["timestamp"],
-                    "price_eur_kwh": round(consumer_price, 5),
-                })
+                consumer = self._spot_to_consumer_ckwh(pred, is_night)
 
-            # Cheapest hours calculation (user-configurable search window)
-            cheapest_hours = self._find_cheapest_hours(
-                forecast, now,
-                start_offset_hours=self.search_start_hours,
-                duration_hours=self.search_duration_hours,
-            )
-            # Add consumer price equivalents (c/kWh) using configured tariffs
-            self._enrich_cheapest_with_consumer(cheapest_hours, consumer_forecast)
+                entry: dict[str, Any] = {
+                    "timestamp": ts.isoformat(),
+                    "spot_eur_mwh": round(pred, 2),
+                    "consumer_ckwh": round(consumer, 2),
+                }
+                if i < len(weather):
+                    entry["wind"] = round(weather[i].get("wind_weighted", 0), 1)
+                    entry["solar"] = round(weather[i].get("solar_weighted", 0), 0)
+                    entry["temp"] = round(weather[i].get("temp_weighted", 0), 1)
+                forecast.append(entry)
 
             # D(k) duration curve forecast (7-day daily curves)
             duration_forecast = self._compute_duration_forecast(
@@ -287,32 +284,19 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
             )
 
             # Merge into rolling history (keeps past predictions for charts)
-            # New predictions overwrite older ones for the same timestamp
             for f in forecast:
                 self._forecast_history[f["timestamp"]] = f
-            for c in consumer_forecast:
-                self._consumer_history[c["timestamp"]] = c
 
-            # Prune history older than 7 days
-            cutoff = (now - timedelta(days=7)).isoformat()
+            # Prune history older than 24 hours (enough for intra-day chart context)
+            cutoff = (now - timedelta(hours=24)).isoformat()
             self._forecast_history = {
                 k: v for k, v in self._forecast_history.items() if k >= cutoff
-            }
-            self._consumer_history = {
-                k: v for k, v in self._consumer_history.items() if k >= cutoff
             }
 
             # Build combined forecast from history (sorted by timestamp)
             combined_forecast = sorted(
                 self._forecast_history.values(), key=lambda x: x["timestamp"]
             )
-            combined_consumer = sorted(
-                self._consumer_history.values(), key=lambda x: x["timestamp"]
-            )
-
-            # Current hour values
-            current_spot = forecast[0]["price_eur_mwh"] if forecast else 0.0
-            current_consumer = consumer_forecast[0]["price_eur_kwh"] if consumer_forecast else 0.0
 
             # Tiers active description
             tiers = ["Tier 1 (weather)"]
@@ -322,11 +306,9 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                 tiers.append("Tier 3 (Fingrid)")
 
             result = {
-                "spot_price": current_spot,
-                "spot_forecast": combined_forecast,
-                "consumer_price": current_consumer,
-                "consumer_forecast": combined_consumer,
-                "cheapest_hours": cheapest_hours,
+                "current_consumer_ckwh": forecast[0]["consumer_ckwh"] if forecast else 0.0,
+                "current_spot_eur_mwh": forecast[0]["spot_eur_mwh"] if forecast else 0.0,
+                "forecast": combined_forecast,
                 "duration_forecast": duration_forecast,
                 "tiers_active": " + ".join(tiers),
                 "last_update": now.isoformat(),
@@ -350,157 +332,6 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
             _LOGGER.exception("Unexpected error during update")
             return self._return_cached_or_fail(err)
 
-    @staticmethod
-    def _format_offset(hours: int) -> str:
-        """Format hours as 'Nd Nh' string."""
-        d, h = divmod(hours, 24)
-        return f"{d}d {h}h"
-
-    @staticmethod
-    def _find_cheapest_hours(
-        forecast: list[dict[str, Any]],
-        now: datetime,
-        start_offset_hours: int = 24,
-        duration_hours: int = 48,
-    ) -> dict[str, Any]:
-        """Find cheapest consecutive hour blocks in a configurable window.
-
-        Args:
-            forecast: Full forecast list with timestamp + price_eur_mwh.
-            now: Current UTC time.
-            start_offset_hours: Hours from now to start of search window.
-                Default 24 = tomorrow midnight (approximately).
-            duration_hours: Length of search window in hours.
-                Default 48 = two days.
-
-        Returns start timestamps and average prices for blocks of
-        1, 2, 3, 4, 6, and 8 consecutive hours, plus a list of all
-        hours with below-average price (useful for flexible loads).
-        """
-        window_start = now + timedelta(hours=start_offset_hours)
-        window_end = window_start + timedelta(hours=duration_hours)
-
-        # Filter forecast to the search window
-        upcoming = []
-        for f in forecast:
-            try:
-                ts = datetime.fromisoformat(f["timestamp"])
-                if window_start <= ts < window_end:
-                    upcoming.append(f)
-            except (ValueError, TypeError):
-                continue
-
-        result: dict[str, Any] = {
-            "search_start": window_start.isoformat(),
-            "search_end": window_end.isoformat(),
-            "search_window": (
-                f"start {SpotPriceCoordinator._format_offset(start_offset_hours)}"
-                f" + duration {SpotPriceCoordinator._format_offset(duration_hours)}"
-            ),
-            "hours_in_window": len(upcoming),
-        }
-
-        if not upcoming:
-            return result
-
-        prices = [f["price_eur_mwh"] for f in upcoming]
-        avg_price = sum(prices) / len(prices)
-        result["avg_price_in_window"] = round(avg_price, 2)
-
-        # Find cheapest N consecutive hours
-        def cheapest_block(n: int) -> tuple[str | None, float | None]:
-            if len(upcoming) < n:
-                return None, None
-            best_avg = float("inf")
-            best_start = None
-            for i in range(len(upcoming) - n + 1):
-                block_avg = sum(prices[i:i + n]) / n
-                if block_avg < best_avg:
-                    best_avg = block_avg
-                    best_start = upcoming[i]["timestamp"]
-            return best_start, round(best_avg, 2) if best_start else None
-
-        for n in (1, 2, 3, 4, 6, 8):
-            start, avg = cheapest_block(n)
-            result[f"cheapest_{n}h_start"] = start
-            key = "cheapest_1h_price" if n == 1 else f"cheapest_{n}h_avg_price"
-            result[key] = avg
-
-        # All hours with price below window average
-        result["hours_below_avg"] = [
-            f["timestamp"] for f in upcoming
-            if f["price_eur_mwh"] < avg_price
-        ]
-
-        return result
-
-    def _enrich_cheapest_with_consumer(
-        self,
-        cheapest: dict[str, Any],
-        consumer_forecast: list[dict[str, Any]],
-    ) -> None:
-        """Add consumer c/kWh prices to cheapest hours attributes.
-
-        Uses the pre-computed consumer forecast (which already includes
-        the configured tariffs, VAT, energy tax, seller margin) to look up
-        average consumer prices for each cheapest block. This avoids
-        hardcoding any rates in dashboard templates.
-        """
-        # Build timestamp → consumer price lookup
-        cons_by_ts: dict[str, float] = {
-            c["timestamp"]: c["price_eur_kwh"] for c in consumer_forecast
-        }
-        if not cons_by_ts:
-            return
-
-        # For each block size, compute avg consumer price from the block hours
-        for n in (1, 2, 3, 4, 6, 8):
-            start_key = f"cheapest_{n}h_start"
-            start_ts = cheapest.get(start_key)
-            if not start_ts:
-                continue
-
-            # Find the block hours in consumer forecast
-            try:
-                block_start = datetime.fromisoformat(start_ts)
-            except (ValueError, TypeError):
-                continue
-
-            block_prices = []
-            for hour_offset in range(n):
-                ts = (block_start + timedelta(hours=hour_offset)).isoformat()
-                if ts in cons_by_ts:
-                    block_prices.append(cons_by_ts[ts])
-
-            if block_prices:
-                avg_cons = sum(block_prices) / len(block_prices)
-                cons_key = (
-                    "cheapest_1h_consumer_price"
-                    if n == 1
-                    else f"cheapest_{n}h_avg_consumer_price"
-                )
-                cheapest[cons_key] = round(avg_cons * 100, 2)  # c/kWh
-
-        # Window average in consumer c/kWh
-        window_start = cheapest.get("search_start")
-        window_end = cheapest.get("search_end")
-        if window_start and window_end:
-            window_prices = []
-            for c in consumer_forecast:
-                if window_start <= c["timestamp"] < window_end:
-                    window_prices.append(c["price_eur_kwh"])
-            if window_prices:
-                cheapest["avg_consumer_in_window"] = round(
-                    sum(window_prices) / len(window_prices) * 100, 2
-                )
-
-    def _spot_to_consumer_ckwh(self, spot_eur_mwh: float, is_night: bool) -> float:
-        """Convert spot EUR/MWh to consumer c/kWh using configured tariffs."""
-        transfer = self.night_rate if is_night else self.day_rate
-        spot_kwh = max(0.0, spot_eur_mwh) / 1000.0
-        return (spot_kwh + self.seller_margin + transfer + self.energy_tax) \
-            * self.vat_multiplier * 100
-
     def _compute_duration_forecast(
         self,
         forecast: list[dict[str, Any]],
@@ -511,9 +342,11 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
     ) -> list[dict[str, Any]]:
         """Compute 7-day D(k) duration curve forecast.
 
-        Returns list of daily entries:
-        [{"date": "2026-04-12", "d1": 8.2, "d4": 9.5, "d8": 10.1, "d24": 12.3,
-          "dk_consumer": [24 floats in c/kWh], "dk_spot": [24 floats in EUR/MWh]}, ...]
+        Returns list of daily entries (only complete 24h days):
+        [{"date": "2026-04-13", "weekday": "Mon",
+          "dk_consumer_cent_kwh": [24 floats], "dk_spot_eur_mwh": [24 floats]}, ...]
+        dk_consumer_cent_kwh[k-1] = D(k) consumer price in c/kWh, k=1..24
+        dk_spot_eur_mwh[k-1] = D(k) spot price in EUR/MWh, k=1..24
         """
         if not self.model.duration_model:
             return []
@@ -527,20 +360,15 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
         for seg_name, seg_cfg in dur_model.segments.items():
             seg_hours[seg_name] = seg_cfg.get("hours", [])
 
-        try:
-            from zoneinfo import ZoneInfo
-            tz = ZoneInfo(DEFAULT_TIMEZONE)
-        except Exception:
-            tz = None
-
         # Group forecast hours by local date
         by_date: dict[str, list[dict]] = {}
         for i, entry in enumerate(forecast):
             try:
                 ts = datetime.fromisoformat(entry["timestamp"])
-                if tz:
-                    local = ts.astimezone(tz) if ts.tzinfo else ts.replace(
-                        tzinfo=ZoneInfo("UTC")).astimezone(tz)
+                if self._tz:
+                    from zoneinfo import ZoneInfo
+                    aware = ts.replace(tzinfo=ZoneInfo("UTC")) if ts.tzinfo is None else ts
+                    local = aware.astimezone(self._tz)
                 else:
                     local = ts + timedelta(hours=3)
             except Exception:
@@ -563,22 +391,27 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
 
         for date_str in sorted(by_date.keys()):
             day_hours = by_date[date_str]
-            if len(day_hours) < 20:
+            hour_lookup = {h["local_hour"]: h for h in day_hours}
+
+            # Require all segments to have complete hours → guarantees 24 D(k) levels
+            all_complete = True
+            for hours_list in seg_hours.values():
+                if any(h not in hour_lookup for h in hours_list):
+                    all_complete = False
+                    break
+            if not all_complete:
                 continue
 
-            hour_lookup = {h["local_hour"]: h for h in day_hours}
             dow = day_hours[0]["dow"]
             is_holiday = date_str in self.holidays
             is_wd = 1.0 if (dow < 5 and not is_holiday) else 0.0
             mo = int(date_str.split("-")[1])
 
-            # Build per-segment features
+            # Build per-segment features (all segments guaranteed complete)
             segment_features: dict[str, dict[str, float]] = {}
 
             for seg_name, hours_list in seg_hours.items():
-                seg_hrs = [hour_lookup[h] for h in hours_list if h in hour_lookup]
-                if len(seg_hrs) < 2:
-                    continue
+                seg_hrs = [hour_lookup[h] for h in hours_list]
 
                 wind_mean = sum(h["wind"] for h in seg_hrs) / len(seg_hrs)
                 solar_mean = sum(h["solar"] for h in seg_hrs) / len(seg_hrs)
@@ -618,25 +451,49 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
             # Run duration model
             day_result = dur_model.predict_day(segment_features)
             dk_spot = day_result.get("duration_curve", [])
-            if not dk_spot:
+            if len(dk_spot) != 24:
+                _LOGGER.warning(
+                    "D(k) for %s has %d levels (expected 24), skipping",
+                    date_str, len(dk_spot),
+                )
                 continue
 
-            # Convert to consumer c/kWh (use average of day/night rate for D(k))
-            # D(k) represents cheapest k hours which span mixed day/night periods
-            dk_consumer = [
-                round(self._spot_to_consumer_ckwh(v, False), 2) for v in dk_spot
-            ]
+            # Convert to consumer c/kWh with per-segment tariff:
+            # Extract sorted prices from each segment, convert using
+            # the segment's correct day/night rate, then merge and
+            # recompute consumer D(k).
+            segment_curves = day_result.get("segment_curves", {})
+            night_segments = {"night"}  # Segments using night tariff
+            consumer_sorted_prices: list[float] = []
+            for seg_name, curve in segment_curves.items():
+                is_night = seg_name in night_segments
+                for i in range(len(curve)):
+                    if i == 0:
+                        p = curve[0]
+                    else:
+                        p = (i + 1) * curve[i] - i * curve[i - 1]
+                        p = max(0.0, p)
+                    consumer_sorted_prices.append(
+                        self._spot_to_consumer_ckwh(p, is_night))
+            consumer_sorted_prices.sort()
+            running_sum = 0.0
+            dk_consumer: list[float] = []
+            for i, cp in enumerate(consumer_sorted_prices):
+                running_sum += cp
+                dk_consumer.append(round(running_sum / (i + 1), 2))
 
-            n = len(dk_spot)
+            if len(dk_consumer) != 24:
+                _LOGGER.warning(
+                    "Consumer D(k) for %s has %d levels (expected 24), skipping",
+                    date_str, len(dk_consumer),
+                )
+                continue
+
             day_entry: dict[str, Any] = {
                 "date": date_str,
                 "weekday": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][dow],
-                "d1": dk_consumer[0] if n > 0 else None,
-                "d4": dk_consumer[3] if n > 3 else None,
-                "d8": dk_consumer[7] if n > 7 else None,
-                "d24": dk_consumer[min(23, n - 1)],
-                "dk_consumer": dk_consumer,
-                "dk_spot": [round(v, 2) for v in dk_spot],
+                "dk_consumer_cent_kwh": dk_consumer,
+                "dk_spot_eur_mwh": [round(v, 2) for v in dk_spot],
             }
             result.append(day_entry)
 

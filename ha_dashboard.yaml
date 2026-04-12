@@ -6,12 +6,18 @@
 #   - apexcharts-card (https://github.com/RomRider/apexcharts-card)
 #   - mushroom (https://github.com/piitaya/lovelace-mushroom)
 #
-# Usage:
-#   1. Copy this file content into a HA dashboard (raw YAML editor)
-#   2. Adjust entity IDs if your integration instance has a custom name
+# Sensors used:
+#   - sensor.spot_price_predictor_price_forecast
+#     State: current consumer price (c/kWh)
+#     Attributes: forecast[] (170h array with spot_eur_mwh, consumer_ckwh,
+#                 wind, solar, temp), week_min/avg/max_ckwh
 #
-# Entity ID pattern: sensor.spot_price_predictor_<sensor_name>
-# If renamed in HA, update the entity IDs below accordingly.
+#   - sensor.spot_price_predictor_duration_forecast
+#     State: today D(4) (c/kWh)
+#     Attributes: daily_forecast[] (7-day D(k) curves), today_d1/d4/d8/d24
+#
+# Optimization (cheapest hours, load scheduling) is NOT part of this
+# integration — it belongs in a separate thermal optimization layer.
 # ============================================================
 
 title: Electricity Forecast
@@ -30,29 +36,29 @@ views:
           - type: custom:mushroom-chips-card
             chips:
               - type: template
-                entity: sensor.spot_price_predictor_consumer_price
+                entity: sensor.spot_price_predictor_price_forecast
                 icon: mdi:flash
                 icon_color: |-
-                  {% set p = states('sensor.spot_price_predictor_consumer_price') | float(0) * 100 %}
+                  {% set p = states('sensor.spot_price_predictor_price_forecast') | float(0) %}
                   {% if p < 8 %}green
                   {% elif p < 15 %}amber
                   {% else %}red{% endif %}
                 content: >-
-                  Now {{ (states('sensor.spot_price_predictor_consumer_price') | float(0) * 100) | round(1) }} c/kWh
+                  Now {{ states('sensor.spot_price_predictor_price_forecast') | round(1) }} c/kWh
                 tap_action:
                   action: more-info
               - type: template
                 entity: sensor.spot_price_predictor_duration_forecast
-                icon: mdi:ev-station
+                icon: mdi:chart-timeline-variant-shimmer
                 icon_color: teal
                 content: >-
                   D(4) {{ states('sensor.spot_price_predictor_duration_forecast') | round(1) }} c/kWh
               - type: template
-                entity: sensor.spot_price_predictor_week_price_stats
+                entity: sensor.spot_price_predictor_price_forecast
                 icon: mdi:chart-box-outline
                 icon_color: cyan
                 content: >-
-                  Week {{ (states('sensor.spot_price_predictor_week_price_stats') | float(0) * 100) | round(1) }}
+                  Week {{ state_attr('sensor.spot_price_predictor_price_forecast', 'week_avg_ckwh') | round(1) }}
 
           # ── Consumer price forecast — 48h bar chart ──
           - type: custom:apexcharts-card
@@ -85,7 +91,7 @@ views:
                 x:
                   format: "ddd dd.MM HH:mm"
             series:
-              - entity: sensor.spot_price_predictor_consumer_price
+              - entity: sensor.spot_price_predictor_price_forecast
                 name: Consumer price
                 yaxis_id: price
                 type: column
@@ -107,9 +113,7 @@ views:
                 data_generator: |
                   const fc = entity.attributes.forecast;
                   if (!fc) return [];
-                  return fc.map((e) => {
-                    return [new Date(e.timestamp).getTime(), parseFloat((e.price_eur_kwh * 100).toFixed(2))];
-                  });
+                  return fc.map((e) => [new Date(e.timestamp).getTime(), e.consumer_ckwh]);
 
           # ── 7-day consumer price trend ──
           - type: custom:apexcharts-card
@@ -140,7 +144,7 @@ views:
                 x:
                   format: "ddd dd.MM HH:mm"
             series:
-              - entity: sensor.spot_price_predictor_consumer_price
+              - entity: sensor.spot_price_predictor_price_forecast
                 name: Consumer price
                 yaxis_id: price
                 type: area
@@ -151,9 +155,7 @@ views:
                 data_generator: |
                   const fc = entity.attributes.forecast;
                   if (!fc) return [];
-                  return fc.map((e) => {
-                    return [new Date(e.timestamp).getTime(), parseFloat((e.price_eur_kwh * 100).toFixed(2))];
-                  });
+                  return fc.map((e) => [new Date(e.timestamp).getTime(), e.consumer_ckwh]);
 
       # ── Right column: D(k) duration curves + info ──
       - title: ""
@@ -169,12 +171,14 @@ views:
               {% elif p < 15 %}amber
               {% else %}red{% endif %}
             primary: >-
-              Today D(4) {{ states('sensor.spot_price_predictor_duration_forecast') | round(1) }} c/kWh
+              D(4) {{ states('sensor.spot_price_predictor_duration_forecast') | round(1) }} c/kWh
             secondary: >-
-              {% set dk = 'sensor.spot_price_predictor_duration_forecast' %}
-              D(1) {{ state_attr(dk, 'today_d1') | round(1) }}
-              · D(8) {{ state_attr(dk, 'today_d8') | round(1) }}
-              · D(24) {{ state_attr(dk, 'today_d24') | round(1) }} c/kWh
+              {% set dk = state_attr('sensor.spot_price_predictor_duration_forecast', 'daily_forecast') %}
+              {% if dk and dk | length > 0 %}
+              D(1) {{ dk[0].dk_consumer_cent_kwh[0] | round(1) }}
+              · D(8) {{ dk[0].dk_consumer_cent_kwh[7] | round(1) }}
+              · D(24) {{ dk[0].dk_consumer_cent_kwh[23] | round(1) }} c/kWh
+              {% endif %}
             layout: horizontal
             tap_action:
               action: more-info
@@ -212,7 +216,7 @@ views:
                   format: "ddd dd.MM"
             series:
               - entity: sensor.spot_price_predictor_duration_forecast
-                name: "D(1) Cheapest 1h"
+                name: "D(1)"
                 yaxis_id: dk
                 type: line
                 float_precision: 1
@@ -221,9 +225,9 @@ views:
                 data_generator: |
                   const dk = entity.attributes.daily_forecast;
                   if (!dk) return [];
-                  return dk.map((d) => [new Date(d.date + 'T12:00:00').getTime(), d.d1]);
+                  return dk.map((d) => [new Date(d.date + 'T12:00:00').getTime(), d.dk_consumer_cent_kwh[0]]);
               - entity: sensor.spot_price_predictor_duration_forecast
-                name: "D(4) Cheapest 4h"
+                name: "D(4)"
                 yaxis_id: dk
                 type: line
                 float_precision: 1
@@ -232,9 +236,9 @@ views:
                 data_generator: |
                   const dk = entity.attributes.daily_forecast;
                   if (!dk) return [];
-                  return dk.map((d) => [new Date(d.date + 'T12:00:00').getTime(), d.d4]);
+                  return dk.map((d) => [new Date(d.date + 'T12:00:00').getTime(), d.dk_consumer_cent_kwh[3]]);
               - entity: sensor.spot_price_predictor_duration_forecast
-                name: "D(8) Cheapest 8h"
+                name: "D(8)"
                 yaxis_id: dk
                 type: line
                 float_precision: 1
@@ -243,9 +247,9 @@ views:
                 data_generator: |
                   const dk = entity.attributes.daily_forecast;
                   if (!dk) return [];
-                  return dk.map((d) => [new Date(d.date + 'T12:00:00').getTime(), d.d8]);
+                  return dk.map((d) => [new Date(d.date + 'T12:00:00').getTime(), d.dk_consumer_cent_kwh[7]]);
               - entity: sensor.spot_price_predictor_duration_forecast
-                name: "D(24) Daily avg"
+                name: "D(24)"
                 yaxis_id: dk
                 type: line
                 float_precision: 1
@@ -254,57 +258,57 @@ views:
                 data_generator: |
                   const dk = entity.attributes.daily_forecast;
                   if (!dk) return [];
-                  return dk.map((d) => [new Date(d.date + 'T12:00:00').getTime(), d.d24]);
+                  return dk.map((d) => [new Date(d.date + 'T12:00:00').getTime(), d.dk_consumer_cent_kwh[23]]);
 
           # ── Week price range ──
           - type: custom:mushroom-template-card
-            entity: sensor.spot_price_predictor_week_price_stats
+            entity: sensor.spot_price_predictor_price_forecast
             icon: mdi:calendar-week
             icon_color: cyan
             primary: "Week forecast"
             secondary: >-
-              Min {{ (state_attr('sensor.spot_price_predictor_week_price_stats', 'week_min') | float(0) * 100) | round(1) }}
-              · Avg {{ (state_attr('sensor.spot_price_predictor_week_price_stats', 'week_avg') | float(0) * 100) | round(1) }}
-              · Max {{ (state_attr('sensor.spot_price_predictor_week_price_stats', 'week_max') | float(0) * 100) | round(1) }} c/kWh
+              Min {{ state_attr('sensor.spot_price_predictor_price_forecast', 'week_min_ckwh') | round(1) }}
+              · Avg {{ state_attr('sensor.spot_price_predictor_price_forecast', 'week_avg_ckwh') | round(1) }}
+              · Max {{ state_attr('sensor.spot_price_predictor_price_forecast', 'week_max_ckwh') | round(1) }} c/kWh
             layout: horizontal
             tap_action:
               action: more-info
 
           # ── Current consumer price ──
           - type: custom:mushroom-template-card
-            entity: sensor.spot_price_predictor_consumer_price
+            entity: sensor.spot_price_predictor_price_forecast
             icon: mdi:flash
             icon_color: |-
-              {% set p = states('sensor.spot_price_predictor_consumer_price') | float(0) * 100 %}
+              {% set p = states('sensor.spot_price_predictor_price_forecast') | float(0) %}
               {% if p < 8 %}green
               {% elif p < 15 %}amber
               {% else %}red{% endif %}
             primary: >-
-              {{ (states('sensor.spot_price_predictor_consumer_price') | float(0) * 100) | round(2) }} c/kWh
+              {{ states('sensor.spot_price_predictor_price_forecast') | round(2) }} c/kWh
             secondary: >-
-              Spot {{ states('sensor.spot_price_predictor_spot_price_forecast') | round(1) }} EUR/MWh
-              · {{ state_attr('sensor.spot_price_predictor_consumer_price', 'operator') }}
+              Spot {{ state_attr('sensor.spot_price_predictor_price_forecast', 'current_spot_eur_mwh') | round(1) }} EUR/MWh
+              · {{ state_attr('sensor.spot_price_predictor_price_forecast', 'operator') }}
             layout: horizontal
             tap_action:
               action: more-info
 
           # ── Data status ──
           - type: custom:mushroom-template-card
-            entity: sensor.spot_price_predictor_spot_price_forecast
+            entity: sensor.spot_price_predictor_price_forecast
             icon: mdi:information-outline
             icon_color: |-
-              {% if state_attr('sensor.spot_price_predictor_spot_price_forecast', 'stale') %}
+              {% if state_attr('sensor.spot_price_predictor_price_forecast', 'stale') %}
                 red
               {% else %}
                 green
               {% endif %}
             primary: "Forecast status"
             secondary: >-
-              {{ state_attr('sensor.spot_price_predictor_spot_price_forecast', 'tiers_active') }}
-              · {{ state_attr('sensor.spot_price_predictor_spot_price_forecast', 'forecast_hours') }}h
+              {{ state_attr('sensor.spot_price_predictor_price_forecast', 'tiers_active') }}
+              · {{ state_attr('sensor.spot_price_predictor_price_forecast', 'forecast_hours') }}h
               · {{ state_attr('sensor.spot_price_predictor_duration_forecast', 'forecast_days') }}d D(k)
-              {% if state_attr('sensor.spot_price_predictor_spot_price_forecast', 'stale') %}
-                · Stale ({{ state_attr('sensor.spot_price_predictor_spot_price_forecast', 'data_age_minutes') }} min)
+              {% if state_attr('sensor.spot_price_predictor_price_forecast', 'stale') %}
+                · Stale ({{ state_attr('sensor.spot_price_predictor_price_forecast', 'data_age_minutes') }} min)
               {% endif %}
             layout: horizontal
             tap_action:
