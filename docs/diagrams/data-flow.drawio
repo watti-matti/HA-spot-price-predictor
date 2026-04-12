@@ -7,7 +7,7 @@
         <mxCell id="title" parent="1" style="text;html=1;fontSize=18;fontStyle=1;align=center;" value="Data Flow: Training Pipeline + HA Inference" vertex="1">
           <mxGeometry height="30" width="600" x="284" y="36" as="geometry" />
         </mxCell>
-        <mxCell id="tier1-label" parent="1" style="text;html=1;fontSize=12;fontStyle=1;fontColor=#82b366;" value="TIER 1 (Required, Free)" vertex="1">
+        <mxCell id="tier1-label" parent="1" style="text;html=1;fontSize=12;fontStyle=1;fontColor=#82b366;" value="Required (Free)" vertex="1">
           <mxGeometry height="20" width="200" x="40" y="60" as="geometry" />
         </mxCell>
         <mxCell id="sahkotin" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;size=10;" value="Sahkotin API&#xa;sahkotin.fi/prices&#xa;FI spot prices" vertex="1">
@@ -19,7 +19,7 @@
         <mxCell id="openmeteo-ar" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;size=10;" value="Open-Meteo&#xa;Archive API&#xa;4-year history" vertex="1">
           <mxGeometry height="70" width="130" x="40" y="173" as="geometry" />
         </mxCell>
-        <mxCell id="tier2-label" parent="1" style="text;html=1;fontSize=12;fontStyle=1;fontColor=#6c8ebf;" value="TIER 2 (Optional, Free)" vertex="1">
+        <mxCell id="tier2-label" parent="1" style="text;html=1;fontSize=12;fontStyle=1;fontColor=#6c8ebf;" value="Cross-border (Optional, Free)" vertex="1">
           <mxGeometry height="20" width="200" x="40" y="340" as="geometry" />
         </mxCell>
         <mxCell id="mgrey" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;size=10;" value="mgrey.se&#xa;SE1 + SE3&#xa;Swedish prices" vertex="1">
@@ -28,7 +28,7 @@
         <mxCell id="elering" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;size=10;" value="Elering API&#xa;EE&#xa;Estonian prices" vertex="1">
           <mxGeometry height="70" width="130" x="40" y="450" as="geometry" />
         </mxCell>
-        <mxCell id="tier3-label" parent="1" style="text;html=1;fontSize=12;fontStyle=1;fontColor=#d6b656;" value="TIER 3 (Optional, API Key)" vertex="1">
+        <mxCell id="tier3-label" parent="1" style="text;html=1;fontSize=12;fontStyle=1;fontColor=#d6b656;" value="Nuclear (Optional, API Key)" vertex="1">
           <mxGeometry height="20" width="200" x="40" y="540" as="geometry" />
         </mxCell>
         <mxCell id="fingrid" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;size=10;dashed=1;" value="Fingrid API&#xa;Nuclear #188&#xa;Capacity #24/27/115" vertex="1">
@@ -64,19 +64,19 @@
         <mxCell id="f-scarcity" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" value="Scarcity indicators (4)&#xa;wind drought, cold stress, Dunkelflaute" vertex="1">
           <mxGeometry height="40" width="190" x="485" y="315" as="geometry" />
         </mxCell>
-        <mxCell id="f-t1-total" parent="1" style="text;html=1;fontSize=10;fontStyle=3;fontColor=#82b366;" value="Tier 1 Total: 28 features" vertex="1">
+        <mxCell id="f-t1-total" parent="1" style="text;html=1;fontSize=10;fontStyle=3;fontColor=#82b366;" value="Base Total: 28 features" vertex="1">
           <mxGeometry height="15" width="190" x="485" y="360" as="geometry" />
         </mxCell>
         <mxCell id="f-trade" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" value="Cross-border trade (6)&#xa;import/export potential SE1/SE3/EE" vertex="1">
           <mxGeometry height="40" width="190" x="485" y="385" as="geometry" />
         </mxCell>
-        <mxCell id="f-t2-total" parent="1" style="text;html=1;fontSize=10;fontStyle=3;fontColor=#6c8ebf;" value="Tier 1+2 Total: 34 features" vertex="1">
+        <mxCell id="f-t2-total" parent="1" style="text;html=1;fontSize=10;fontStyle=3;fontColor=#6c8ebf;" value="Base + Cross-border: 34 features" vertex="1">
           <mxGeometry height="15" width="190" x="485" y="430" as="geometry" />
         </mxCell>
         <mxCell id="f-grid" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;dashed=1;" value="Grid infrastructure (4)&#xa;nuclear MW, capacity SE1/SE3/EE" vertex="1">
           <mxGeometry height="40" width="175" x="485" y="455" as="geometry" />
         </mxCell>
-        <mxCell id="f-t3-total" parent="1" style="text;html=1;fontSize=10;fontStyle=3;fontColor=#d6b656;" value="Tier 1+2+3 Total: 38 features" vertex="1">
+        <mxCell id="f-t3-total" parent="1" style="text;html=1;fontSize=10;fontStyle=3;fontColor=#d6b656;" value="All Sources: 38 features" vertex="1">
           <mxGeometry height="15" width="190" x="485" y="500" as="geometry" />
         </mxCell>
         <mxCell id="stage1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=11;fontStyle=1;" value="Stage 1: Ridge Regression&#xa;beta = (X&#39;WX + aI)^-1 X&#39;Wy&#xa;Time-decay weighted" vertex="1">

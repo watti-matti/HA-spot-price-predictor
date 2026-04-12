@@ -13,7 +13,7 @@
 # Adjust entity names if your installation uses different names.
 
 # ── Status Card (place above the chart) ──────────────────────────
-# Shows last update time, active prediction tier, and staleness warning.
+# Shows last update time, active data sources, and staleness warning.
 # Copy this as a separate Markdown card in your dashboard.
 #
 # type: markdown
@@ -21,8 +21,8 @@
 #   **Last update:**
 #   {{ state_attr('sensor.spot_price_predictor_price_forecast', 'last_update')
 #      | as_datetime | relative_time }} ago
-#   | **Tiers:**
-#   {{ state_attr('sensor.spot_price_predictor_price_forecast', 'tiers_active') }}
+#   | **Sources:**
+#   {{ state_attr('sensor.spot_price_predictor_price_forecast', 'data_sources_active') }}
 #   {% if state_attr('sensor.spot_price_predictor_price_forecast', 'stale') %}
 #   | Data is stale
 #   ({{ state_attr('sensor.spot_price_predictor_price_forecast', 'data_age_minutes') }} min old)

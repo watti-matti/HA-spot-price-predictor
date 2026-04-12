@@ -5,9 +5,9 @@ Usage:
     python -m src.train_model --region finland [--years 4] [--half-life 365]
 
 The pipeline adapts to available data sources:
-  - Tier 1 (28 features): Always available (Sahkotin + Open-Meteo)
-  - Tier 2 (+6 features): If mgrey.se + Elering reachable
-  - Tier 3 (+4 features): If FINGRID_API_KEY env var is set
+  - Base (11 features): Always available (Sahkotin + Open-Meteo)
+  - Cross-border (+4 features): If elprisetjustnu.se + Elering reachable
+  - Nuclear (+2 features): If FINGRID_API_KEY env var is set
 """
 
 import argparse
@@ -220,12 +220,12 @@ def train(
                 mae1, r2_1, preds_te.max(), preds_te.min())
 
     # ── Build output dict ─────────────────────────────────────────────
-    tier_info = {"tier1": True, "tier2": False, "tier3": False}
+    data_sources = {"weather": True, "neighbor_prices": False, "nuclear": False}
     for name in feature_cols:
         if name.startswith(("import_potential_", "export_potential_", "ar_")):
-            tier_info["tier2"] = True
+            data_sources["neighbor_prices"] = True
         if name.startswith(("nuclear_",)):
-            tier_info["tier3"] = True
+            data_sources["nuclear"] = True
 
     coefs_dict = {
         "model_version": "v2.0.0",
@@ -236,7 +236,7 @@ def train(
         "intercept": float(intercept),
         "feature_count": len(feature_cols),
         "feature_names": feature_cols,
-        "tier_info": tier_info,
+        "data_sources": data_sources,
         "metrics": {
             "mae": float(mae1),
             "r2": float(r2_1),
@@ -597,10 +597,12 @@ def main():
                         help="Override time-decay half-life (days)")
     parser.add_argument("--out-dir", default="output",
                         help="Output directory for model artifacts")
-    parser.add_argument("--skip-tier2", action="store_true",
-                        help="Skip Tier 2 (cross-border prices)")
-    parser.add_argument("--skip-tier3", action="store_true",
-                        help="Skip Tier 3 (grid data)")
+    parser.add_argument("--skip-cross-border", "--skip-tier2", action="store_true",
+                        dest="skip_cross_border",
+                        help="Skip cross-border neighbor prices")
+    parser.add_argument("--skip-nuclear", "--skip-tier3", action="store_true",
+                        dest="skip_nuclear",
+                        help="Skip nuclear/grid data")
     parser.add_argument("--no-piecewise", action="store_true",
                         help="Skip Stage 2 piecewise calibration (Stage 1 only)")
     parser.add_argument("--use-cache", action="store_true",
@@ -655,7 +657,7 @@ def main():
         logger.info("  Prices: %d rows, Weather: %d rows", len(prices), len(weather))
 
         neighbor_prices = None
-        if not args.skip_tier2:
+        if not args.skip_cross_border:
             np_path = out_dir / "fi_neighbor_prices.parquet"
             if np_path.exists():
                 np_df = pd.read_parquet(np_path)
@@ -663,7 +665,7 @@ def main():
                 logger.info("  Neighbor prices: %d columns", len(neighbor_prices))
 
         grid_data = None
-        if not args.skip_tier3:
+        if not args.skip_nuclear:
             gd_path = out_dir / "fi_grid_data.parquet"
             if gd_path.exists():
                 gd_df = pd.read_parquet(gd_path)
@@ -681,22 +683,22 @@ def main():
         prices.to_frame().to_parquet(out_dir / "fi_prices.parquet")
         weather.to_parquet(out_dir / "fi_weather.parquet")
 
-        # Tier 2: Cross-border prices
+        # Cross-border neighbor prices
         neighbor_prices = None
-        if not args.skip_tier2:
+        if not args.skip_cross_border:
             neighbor_prices = fetch_neighbor_prices(config, start_dt, end_dt)
             if not neighbor_prices:
-                logger.info("No neighbor prices available, Tier 2 disabled")
+                logger.info("No neighbor prices available, cross-border features disabled")
                 neighbor_prices = None
             else:
                 pd.DataFrame(neighbor_prices).to_parquet(out_dir / "fi_neighbor_prices.parquet")
 
-        # Tier 3: Grid data
+        # Nuclear/grid data
         grid_data = None
-        if not args.skip_tier3:
+        if not args.skip_nuclear:
             grid_data = fetch_grid_data(config, start_dt, end_dt)
             if not grid_data:
-                logger.info("No grid data available, Tier 3 disabled")
+                logger.info("No grid data available, nuclear features disabled")
                 grid_data = None
             else:
                 pd.DataFrame(grid_data).to_parquet(out_dir / "fi_grid_data.parquet")
@@ -741,7 +743,7 @@ def main():
     logger.info("=" * 60)
     logger.info("  Model:      %s", coefs.get("model_type", "linear"))
     logger.info("  Features:   %d", coefs["feature_count"])
-    logger.info("  Tiers:      %s", coefs["tier_info"])
+    logger.info("  Sources:    %s", coefs["data_sources"])
     logger.info("  MAE:        %.2f EUR/MWh", coefs["metrics"]["mae"])
     logger.info("  R2:         %.4f", coefs["metrics"]["r2"])
     logger.info("  Max pred:   %.1f EUR/MWh", coefs["metrics"]["max_prediction"])

@@ -167,7 +167,7 @@ class SpotPriceApiClient:
     # ------------------------------------------------------------------
 
     async def fetch_neighbor_prices(self) -> dict[str, list[dict[str, Any]]]:
-        """Fetch cross-border prices for Tier 2 features.
+        """Fetch cross-border neighbor prices.
 
         Returns dict with keys se1, se3, ee mapping to price lists.
         """
@@ -225,7 +225,7 @@ class SpotPriceApiClient:
         return result
 
     # ------------------------------------------------------------------
-    # Fingrid grid data (Tier 3)
+    # Fingrid nuclear/grid data
     # ------------------------------------------------------------------
 
     async def fetch_fingrid_data(self) -> dict[str, float]:
@@ -277,7 +277,7 @@ class SpotPriceApiClient:
             return False
 
     # ------------------------------------------------------------------
-    # Utility: compute rolling spread for Tier 2
+    # Utility: compute rolling spread for cross-border prices
     # ------------------------------------------------------------------
 
     @staticmethod

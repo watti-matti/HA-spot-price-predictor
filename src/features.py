@@ -1,10 +1,10 @@
 """
 Dynamic feature engineering driven by region config.
 
-Builds features in three tiers based on available data:
-  Tier 1 (11 features): Weather + demand + wind nonlinear (always available)
-  Tier 2 (+4 features): AR neighbor prices (SE1, SE3, EE) + export potential
-  Tier 3 (+2 features): Nuclear deficit + nuclear x scarcity interaction
+Builds features from three data source groups:
+  Base (11 features): Weather + demand + wind nonlinear (always available)
+  Cross-border (+4 features): AR neighbor prices (SE1, SE3, EE) + export potential
+  Nuclear (+2 features): Nuclear deficit + nuclear x scarcity interaction
 
 v2.0.0: log-linear Ridge regression on up to 17 sign-validated features.
 AR(2) models predict cross-border neighbor prices using workday/weekend
@@ -38,10 +38,10 @@ def _gauss_bump(hour: float, centre: float, sigma: float) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Tier 1: Base features (11)
+# Base features (11): weather + demand + wind nonlinear
 # ---------------------------------------------------------------------------
 
-TIER1_FEATURES = [
+BASE_FEATURES = [
     # Supply (more supply -> lower price)
     "wind_speed_weighted", "solar_irradiance_weighted",
     # Time cycles
@@ -57,12 +57,12 @@ TIER1_FEATURES = [
 ]
 
 
-def _build_tier1(
+def _build_base_features(
     df: pd.DataFrame,
     config: dict[str, Any],
     holidays: set[str],
 ) -> pd.DataFrame:
-    """Build Tier 1 features from weather + demand data."""
+    """Build base features from weather + demand data."""
     demand = config.get("demand", {})
     region = config.get("region", {})
     latitude = region.get("latitude", 62.0)
@@ -124,7 +124,7 @@ def _build_tier1(
     df["wind_calm_x_peak_am"] = wind_calm * double_peak_am
     df["wind_calm_x_peak_pm"] = wind_calm * double_peak_pm
 
-    # Scarcity indicator (intermediate for nuclear_x_scarcity in Tier 3)
+    # Scarcity indicator (intermediate for nuclear_x_scarcity)
     wind_low_thresh = feat_cfg.get("wind_low_threshold", 5.0)
     low_wind = np.maximum(0.0, wind_low_thresh - w)
     peak_demand_full = np.maximum(raw_am, raw_pm)
@@ -136,7 +136,7 @@ def _build_tier1(
 
 
 # ---------------------------------------------------------------------------
-# Tier 2: AR neighbor prices + export potential (+4)
+# Cross-border: AR neighbor prices + export potential (+4)
 # ---------------------------------------------------------------------------
 
 def build_ar_models(
@@ -219,7 +219,7 @@ def build_ar_models(
     return ar_models
 
 
-def _build_tier2(
+def _build_cross_border_features(
     df: pd.DataFrame,
     fi_prices: pd.Series,
     neighbor_prices: dict[str, pd.Series],
@@ -273,7 +273,7 @@ def _build_tier2(
         ar_divisor = feat_cfg.get("ar_normalize_divisor", 100)
         df[feature_name] = (profile + ar_pred) / ar_divisor
         new_features.append(feature_name)
-        logger.info("  Tier 2: added %s (AR neighbor price)", feature_name)
+        logger.info("  Cross-border: added %s (AR neighbor price)", feature_name)
 
     # Export potential SE3 (spread-based, kept from previous model)
     se3_series = neighbor_prices.get("se3")
@@ -285,16 +285,16 @@ def _build_tier2(
         df["export_potential_se3"] = np.maximum(0.0, -spread_aligned.values)
         df["export_potential_se3"] = df["export_potential_se3"].fillna(0.0)
         new_features.append("export_potential_se3")
-        logger.info("  Tier 2: added export_potential_se3")
+        logger.info("  Cross-border: added export_potential_se3")
 
     return df, new_features, ar_models
 
 
 # ---------------------------------------------------------------------------
-# Tier 3: Nuclear deficit + scarcity interaction (+0-2)
+# Nuclear features: deficit + scarcity interaction (+0-2)
 # ---------------------------------------------------------------------------
 
-def _build_tier3(
+def _build_nuclear_features(
     df: pd.DataFrame,
     grid_data: dict[str, pd.Series],
 ) -> tuple[pd.DataFrame, list[str]]:
@@ -314,13 +314,13 @@ def _build_tier3(
         # Standalone nuclear deficit
         df["nuclear_deficit"] = nuclear_deficit
         new_features.append("nuclear_deficit")
-        logger.info("  Tier 3: added nuclear_deficit (max=%.3f)", nuclear_deficit.max())
+        logger.info("  Nuclear: added nuclear_deficit (max=%.3f)", nuclear_deficit.max())
 
         # Nuclear deficit x scarcity interaction
         if "_scarcity_indicator" in df.columns:
             df["nuclear_x_scarcity"] = nuclear_deficit * df["_scarcity_indicator"]
             new_features.append("nuclear_x_scarcity")
-            logger.info("  Tier 3: added nuclear_x_scarcity")
+            logger.info("  Nuclear: added nuclear_x_scarcity")
 
     return df, new_features
 
@@ -342,8 +342,8 @@ def build_features(
         prices: FI spot prices (EUR/MWh), UTC index.
         weather: Weather DataFrame (wind, solar, temp weighted columns).
         config: Region config dict.
-        neighbor_prices: Optional dict of neighbor zone price series (Tier 2).
-        grid_data: Optional dict of grid infrastructure series (Tier 3).
+        neighbor_prices: Optional dict of neighbor zone price series (cross-border).
+        grid_data: Optional dict of grid infrastructure series (nuclear).
 
     Returns:
         Tuple of (DataFrame, feature column names, AR model params or None).
@@ -361,30 +361,30 @@ def build_features(
     df = prices.to_frame("price_eur_mwh").join(weather, how="inner").dropna()
     logger.info("Merged price+weather: %d rows", len(df))
 
-    # Tier 1: Base features
-    df = _build_tier1(df, config, holidays)
-    feature_cols = list(TIER1_FEATURES)
-    logger.info("Tier 1: %d features", len(feature_cols))
+    # Base features (weather + demand + wind nonlinear)
+    df = _build_base_features(df, config, holidays)
+    feature_cols = list(BASE_FEATURES)
+    logger.info("Base: %d features", len(feature_cols))
 
-    # Tier 2: AR neighbor prices + export potential
+    # Cross-border: AR neighbor prices + export potential
     ar_models = None
     if neighbor_prices:
-        df, tier2_features, ar_models = _build_tier2(
+        df, cross_border_features, ar_models = _build_cross_border_features(
             df, prices, neighbor_prices, holidays, spread_window, config=config)
-        feature_cols.extend(tier2_features)
-        logger.info("Tier 2: +%d features (total: %d)",
-                     len(tier2_features), len(feature_cols))
+        feature_cols.extend(cross_border_features)
+        logger.info("Cross-border: +%d features (total: %d)",
+                     len(cross_border_features), len(feature_cols))
     else:
-        logger.info("Tier 2: skipped (no neighbor prices)")
+        logger.info("Cross-border: skipped (no neighbor prices)")
 
-    # Tier 3: Nuclear features
+    # Nuclear features
     if grid_data:
-        df, tier3_features = _build_tier3(df, grid_data)
-        feature_cols.extend(tier3_features)
-        logger.info("Tier 3: +%d features (total: %d)",
-                     len(tier3_features), len(feature_cols))
+        df, nuclear_features = _build_nuclear_features(df, grid_data)
+        feature_cols.extend(nuclear_features)
+        logger.info("Nuclear: +%d features (total: %d)",
+                     len(nuclear_features), len(feature_cols))
     else:
-        logger.info("Tier 3: skipped (no grid data)")
+        logger.info("Nuclear: skipped (no grid data)")
 
     # Remove internal intermediate columns
     for col in list(df.columns):

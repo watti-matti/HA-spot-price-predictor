@@ -39,8 +39,8 @@ def compute_features_for_hour(
     temp_weighted: float,
     holidays: set[str],
     demand: dict[str, Any] | None = None,
-    tier2_spreads: dict[str, float] | None = None,
-    tier3_data: dict[str, float] | None = None,
+    neighbor_spreads: dict[str, float] | None = None,
+    nuclear_data: dict[str, float] | None = None,
     ar_neighbor_prices: dict[str, float] | None = None,
 ) -> dict[str, float]:
     """Compute all 17 features for a single forecast hour.
@@ -52,8 +52,8 @@ def compute_features_for_hour(
         temp_weighted: Capacity-weighted temperature (C).
         holidays: Set of ISO date strings for holidays.
         demand: Demand config overrides.
-        tier2_spreads: Dict of rolling spread values per neighbor (se3).
-        tier3_data: Dict with nuclear_mw (normalized 0-1).
+        neighbor_spreads: Dict of rolling spread values per neighbor (se3).
+        nuclear_data: Dict with nuclear_mw (normalized 0-1).
         ar_neighbor_prices: Dict with ar_se1, ar_se3, ar_ee (EUR/MWh / 100).
 
     Returns:
@@ -127,7 +127,7 @@ def compute_features_for_hour(
         "wind_calm_x_peak_pm": wind_calm_x_peak_pm,
     }
 
-    # Tier 2: AR neighbor prices
+    # Cross-border: AR neighbor prices
     if ar_neighbor_prices:
         feat["ar_se1"] = ar_neighbor_prices.get("ar_se1", 0.0)
         feat["ar_se3"] = ar_neighbor_prices.get("ar_se3", 0.0)
@@ -137,17 +137,17 @@ def compute_features_for_hour(
         feat["ar_se3"] = 0.0
         feat["ar_ee"] = 0.0
 
-    # Tier 2: export potential SE3
-    if tier2_spreads:
-        spread = tier2_spreads.get("se3", 0.0)
+    # Cross-border: export potential SE3
+    if neighbor_spreads:
+        spread = neighbor_spreads.get("se3", 0.0)
         feat["export_potential_se3"] = max(0.0, -spread)
     else:
         feat["export_potential_se3"] = 0.0
 
-    # Tier 3: nuclear features
+    # Nuclear: nuclear features
     nuc = 0.0
-    if tier3_data:
-        nuc = tier3_data.get("nuclear_mw", 0.0)
+    if nuclear_data:
+        nuc = nuclear_data.get("nuclear_mw", 0.0)
     nuclear_deficit = max(0.0, 1.0 - nuc)
     feat["nuclear_deficit"] = nuclear_deficit
     feat["nuclear_x_scarcity"] = nuclear_deficit * scarcity_indicator
@@ -203,9 +203,9 @@ def build_forecast_features(
     weather_data: list[dict[str, float]],
     holidays: set[str],
     demand: dict[str, Any] | None = None,
-    tier2_spreads: dict[str, float] | None = None,
-    tier3_data: dict[str, float] | None = None,
-    tier3_hourly: dict[str, list[float]] | None = None,
+    neighbor_spreads: dict[str, float] | None = None,
+    nuclear_data: dict[str, float] | None = None,
+    nuclear_hourly: dict[str, list[float]] | None = None,
     ar_neighbor_hourly: dict[str, list[float]] | None = None,
 ) -> list[dict[str, float]]:
     """Build feature dicts for each hour of the forecast window.
@@ -216,9 +216,9 @@ def build_forecast_features(
         weather_data: List of dicts with wind_weighted, solar_weighted, temp_weighted.
         holidays: Set of ISO date strings.
         demand: Demand config overrides.
-        tier2_spreads: Constant spread values per neighbor.
-        tier3_data: Constant grid data values.
-        tier3_hourly: Per-hour overrides for tier3 features.
+        neighbor_spreads: Constant spread values per neighbor.
+        nuclear_data: Constant grid data values.
+        nuclear_hourly: Per-hour overrides for nuclear features.
         ar_neighbor_hourly: Per-hour AR neighbor prices {se1: [...], se3: [...], ee: [...]}.
 
     Returns:
@@ -229,12 +229,12 @@ def build_forecast_features(
         utc_dt = start_utc + timedelta(hours=i)
         wd = weather_data[i]
 
-        # Per-hour tier3 data
-        hour_tier3 = dict(tier3_data) if tier3_data else None
-        if tier3_hourly and hour_tier3 is not None:
-            for key, values in tier3_hourly.items():
+        # Per-hour nuclear data
+        hour_nuclear = dict(nuclear_data) if nuclear_data else None
+        if nuclear_hourly and hour_nuclear is not None:
+            for key, values in nuclear_hourly.items():
                 if i < len(values):
-                    hour_tier3[key] = values[i]
+                    hour_nuclear[key] = values[i]
 
         # Per-hour AR neighbor prices
         hour_ar = None
@@ -251,8 +251,8 @@ def build_forecast_features(
             temp_weighted=wd.get("temp_weighted", 0.0),
             holidays=holidays,
             demand=demand,
-            tier2_spreads=tier2_spreads,
-            tier3_data=hour_tier3,
+            neighbor_spreads=neighbor_spreads,
+            nuclear_data=hour_nuclear,
             ar_neighbor_prices=hour_ar,
         )
         rows.append(feat)

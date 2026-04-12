@@ -1,10 +1,10 @@
 """
 API clients for all data sources, driven by region config.
 
-Supports three tiers of data:
-  Tier 1 (required): Spot prices (Sahkotin) + Weather (Open-Meteo)
-  Tier 2 (optional): Neighboring zone prices (mgrey.se, Elering)
-  Tier 3 (optional): Grid data (Fingrid, requires API key)
+Data source groups:
+  Required: Spot prices (Sahkotin) + Weather (Open-Meteo)
+  Cross-border (optional): Neighboring zone prices (elprisetjustnu.se, Elering)
+  Nuclear (optional): Grid data (Fingrid, requires free API key)
 
 Each fetcher reads its configuration from the region YAML and handles
 retries, rate limiting, and unit conversion.
@@ -23,7 +23,7 @@ import requests
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Tier 1: Spot prices
+# Spot prices (required)
 # ---------------------------------------------------------------------------
 
 def fetch_prices(
@@ -78,7 +78,7 @@ def fetch_prices(
 
 
 # ---------------------------------------------------------------------------
-# Tier 1: Weather data
+# Weather data (required)
 # ---------------------------------------------------------------------------
 
 def fetch_weather(
@@ -187,7 +187,7 @@ def fetch_weather(
 
 
 # ---------------------------------------------------------------------------
-# Tier 2: Neighboring zone prices
+# Cross-border: Neighboring zone prices (optional)
 # ---------------------------------------------------------------------------
 
 def fetch_neighbor_prices(
@@ -203,7 +203,7 @@ def fetch_neighbor_prices(
     """
     sources = config.get("neighbor_price_sources", [])
     if not sources:
-        logger.info("No neighbor price sources configured, skipping Tier 2")
+        logger.info("No neighbor price sources configured, skipping cross-border features")
         return {}
 
     results: dict[str, pd.Series] = {}
@@ -408,7 +408,7 @@ def _fetch_elering(
 
 
 # ---------------------------------------------------------------------------
-# Tier 3: Grid data (Fingrid)
+# Nuclear: Grid data (Fingrid, optional)
 # ---------------------------------------------------------------------------
 
 def fetch_grid_data(
@@ -424,7 +424,7 @@ def fetch_grid_data(
     """
     sources = config.get("grid_sources", [])
     if not sources:
-        logger.info("No grid sources configured, skipping Tier 3")
+        logger.info("No grid sources configured, skipping nuclear features")
         return {}
 
     results: dict[str, pd.Series] = {}

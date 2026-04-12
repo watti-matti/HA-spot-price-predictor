@@ -11,7 +11,7 @@
 
 - **170-hour price forecast** — predict Nord Pool day-ahead prices a full week into the future
 - **Works out-of-the-box** — pre-trained model included, no setup beyond choosing your operator
-- **3-tier data architecture** — starts with free weather data, optionally adds cross-border prices and Fingrid nuclear data for improved accuracy
+- **Modular data sources** — starts with free weather data, optionally adds cross-border prices and Fingrid nuclear data for improved accuracy
 - **Sign-validated features** — all model coefficients match economic theory (more wind = lower price, more scarcity = higher price)
 - **Nuclear outage awareness** — planned outage schedules from Nord Pool UMM enable forward-looking nuclear impact
 - **D(k) duration forecast** — predict daily cost by usage duration (CVaR of intra-day price distribution)
@@ -68,25 +68,25 @@ An [ApexCharts dashboard example](docs/yaml_examples/apexcharts_dashboard.yaml) 
 
 This allows visual comparison of how well the forecast matches reality. Requires the [apexcharts-card](https://github.com/RomRider/apexcharts-card) custom card (install via HACS Frontend).
 
-## Feature Tiers
+## Data Sources & Features
 
-The model supports up to 17 sign-validated features selected via greedy forward selection with bootstrap stability analysis. The bundled default model uses Tier 1+2 (15 features, no API keys required). Adding Fingrid nuclear data enables the full 17 features.
+The model supports up to 17 sign-validated features selected via greedy forward selection with bootstrap stability analysis. The bundled default model uses 15 features (weather + cross-border, no API keys required). Adding Fingrid nuclear data enables the full 17 features.
 
-| Tier | Features | Data Sources | API Keys |
-|------|:---:|-------------|:---:|
-| 1 | 11 (weather + wind nonlinear) | Sahkotin + Open-Meteo | None |
-| 1+2 | 15 (+AR neighbor prices) | + elprisetjustnu.se + Elering | None |
-| 1+2+3 | 17 (+nuclear features) | + Fingrid nuclear | 1 (free) |
+| Data Sources | Features | API Keys |
+|-------------|:---:|:---:|
+| Weather (Sahkotin + Open-Meteo) | 11 (weather + wind nonlinear) | None |
+| + Cross-border (elprisetjustnu.se + Elering) | 15 (+AR neighbor prices) | None |
+| + Nuclear (Fingrid) | 17 (+nuclear features) | 1 (free) |
 
-**Tier 1** includes wind speed, solar irradiance, heating degree days, time cycles, holidays, and nonlinear wind features (log-scarcity, calm-wind x demand-peak interactions).
+**Weather features** include wind speed, solar irradiance, heating degree days, time cycles, holidays, and nonlinear wind features (log-scarcity, calm-wind x demand-peak interactions).
 
-**Tier 2** adds AR(2) autoregressive neighbor price models for Sweden (SE1, SE3) and Estonia (EE), each with separate workday/weekend hourly profiles. The AR models capture European market coupling — when neighbor markets are expensive, Finnish prices follow. Also includes SE3 export potential from 7-day price spreads.
+**Cross-border features** add AR(2) autoregressive neighbor price models for Sweden (SE1, SE3) and Estonia (EE), each with separate workday/weekend hourly profiles. The AR models capture European market coupling — when neighbor markets are expensive, Finnish prices follow. Also includes SE3 export potential from 7-day price spreads.
 
-**Tier 3** adds nuclear deficit (fraction of nuclear capacity offline) and nuclear x scarcity interaction (amplified price impact during weather stress). Planned outage schedules from [Nord Pool UMM](https://umm.nordpoolgroup.com/) (public API, no key required) provide forward-looking nuclear awareness.
+**Nuclear features** add nuclear deficit (fraction of nuclear capacity offline) and nuclear x scarcity interaction (amplified price impact during weather stress). Planned outage schedules from [Nord Pool UMM](https://umm.nordpoolgroup.com/) (public API, no key required) provide forward-looking nuclear awareness.
 
 ## Model Performance
 
-**Bundled model (Tier 1+2, 15 features):**
+**Bundled model (weather + cross-border, 15 features):**
 
 | Metric | Value |
 |--------|:---:|
@@ -103,7 +103,7 @@ The model supports up to 17 sign-validated features selected via greedy forward 
 | D(8) | Cheapest 8h | 0.921 |
 | D(24) | Daily avg | 0.937 |
 
-Retraining with Fingrid nuclear data (Tier 3, free API key) adds 2 features and improves accuracy.
+Retraining with Fingrid nuclear data (free API key) adds 2 features and improves accuracy.
 
 ## Supported Operators (Finland) (check your contract)
 

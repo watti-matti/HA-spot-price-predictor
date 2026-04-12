@@ -136,7 +136,7 @@ def _register_services(hass: HomeAssistant) -> None:
                 f"Model coefficients updated successfully.\n"
                 f"Features: {coefs.get('feature_count', '?')}\n"
                 f"Version: {coefs.get('model_version', '?')}\n"
-                f"Tiers: {coefs.get('tier_info', {})}",
+                f"Data sources: {coefs.get('data_sources', {})}",
                 title="Spot Price Predictor",
                 notification_id=f"{DOMAIN}_coefs_updated",
             )
@@ -177,7 +177,7 @@ def _register_services(hass: HomeAssistant) -> None:
                 f"**Model source:** {'User-uploaded' if using_user else 'Bundled default'}\n"
                 f"**Version:** {coefs.get('model_version', 'unknown')}\n"
                 f"**Features:** {coefs.get('feature_count', '?')}\n"
-                f"**Tiers:** {coefs.get('tier_info', {})}\n"
+                f"**Data sources:** {coefs.get('data_sources', {})}\n"
                 f"**MAE:** {metrics.get('mae', '?')} EUR/MWh\n"
                 f"**R²:** {metrics.get('r2', '?')}\n"
                 f"**Train samples:** {metrics.get('train_samples', '?')}\n"

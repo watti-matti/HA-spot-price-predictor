@@ -304,7 +304,7 @@ views:
               {% endif %}
             primary: "Forecast status"
             secondary: >-
-              {{ state_attr('sensor.spot_price_predictor_price_forecast', 'tiers_active') }}
+              {{ state_attr('sensor.spot_price_predictor_price_forecast', 'data_sources_active') }}
               · {{ state_attr('sensor.spot_price_predictor_price_forecast', 'forecast_hours') }}h
               · {{ state_attr('sensor.spot_price_predictor_duration_forecast', 'forecast_days') }}d D(k)
               {% if state_attr('sensor.spot_price_predictor_price_forecast', 'stale') %}

@@ -99,7 +99,7 @@ weather_source:
     # Total weights: wind=0.79+0.21 residual, solar=0.96, temp=0.83
 
 # ============================================================================
-# Cross-border price sources (OPTIONAL - Tier 2, free, no auth)
+# Cross-border price sources (OPTIONAL, free, no auth)
 # ============================================================================
 # Used to compute 7-day rolling average price spreads,
 # from which import_potential_xx and export_potential_xx features are derived.
@@ -143,7 +143,7 @@ neighbor_price_sources:
 spread_window_days: 7                # Rolling average window for spread calculation
 
 # ============================================================================
-# Grid data sources (OPTIONAL - Tier 3, requires free API key)
+# Grid data sources (OPTIONAL, requires free API key)
 # ============================================================================
 # Skipped automatically if FINGRID_API_KEY env var is missing.
 # Register for free at https://data.fingrid.fi
@@ -265,7 +265,7 @@ features:
                                      # Captures price spike when wind drops below 8 m/s
   wind_calm_threshold: 6.0           # max(0, threshold - wind_speed)
                                      # Interaction with peak demand hours
-  wind_low_threshold: 5.0            # For nuclear x scarcity interaction (Tier 3)
+  wind_low_threshold: 5.0            # For nuclear x scarcity interaction
 
   # AR neighbor price normalization
   ar_normalize_divisor: 100          # AR features divided by this to ~unit scale

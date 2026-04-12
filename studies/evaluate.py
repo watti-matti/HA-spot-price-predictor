@@ -12,8 +12,8 @@ Produces output/evaluation_report.html with:
   - Residual histogram with gradient coloring
   - Hourly MAE bar chart (blue gradient)
   - Monthly MAE bar chart (pink gradient)
-  - Tier contribution comparison table
-  - Feature importance horizontal bar chart (color-coded by tier)
+  - Data source contribution comparison table
+  - Feature importance horizontal bar chart (color-coded by data source)
 """
 
 import argparse
@@ -30,7 +30,7 @@ import pandas as pd
 import yaml
 
 from src.data_sources import fetch_prices, fetch_weather, fetch_neighbor_prices, fetch_grid_data
-from src.features import build_features, TIER1_FEATURES
+from src.features import build_features, BASE_FEATURES
 from src.train_model import _make_time_weights, _batched_stats, _solve_normal_eq, _predict
 
 logger = logging.getLogger(__name__)
@@ -72,12 +72,12 @@ def _predict_model(
     return X @ feature_coefs + coefs["intercept"]
 
 
-def _train_tier_variant(
+def _train_source_variant(
     df: pd.DataFrame,
     feature_subset: list[str],
     config: dict,
 ) -> dict:
-    """Quick train a model variant for tier comparison. Returns metrics dict."""
+    """Quick train a model variant for data source comparison. Returns metrics dict."""
     from sklearn.metrics import mean_absolute_error, r2_score
 
     training = config.get("training", {})
@@ -133,7 +133,7 @@ def run_evaluation(config: dict, out_dir: Path) -> None:
     prices = pd.read_parquet(out_dir / "fi_prices.parquet")["price_eur_mwh"]
     weather = pd.read_parquet(out_dir / "fi_weather.parquet")
 
-    # Load cached tier 2/3 data if available
+    # Load cached cross-border and nuclear data if available
     neighbor_prices = None
     grid_data = None
 
@@ -209,19 +209,19 @@ def run_evaluation(config: dict, out_dir: Path) -> None:
     mape = float(np.mean(np.abs((y_te_clip[mape_mask] - preds[mape_mask]) / y_te_clip[mape_mask])) * 100)
     logger.info("Overall: MAE=%.2f, RMSE=%.2f, R2=%.4f, MAPE=%.1f%%", mae, rmse, r2, mape)
 
-    # ── Tier contribution analysis ────────────────────────────────────
-    logger.info("Computing tier contributions...")
+    # ── Data source contribution analysis ─────────────────────────────
+    logger.info("Computing data source contributions...")
 
-    tier1_cols = [f for f in TIER1_FEATURES if f in df.columns]
-    tier2_cols = [f for f in base_features if f.startswith(("import_potential_", "export_potential_"))]
-    tier3_cols = [f for f in base_features if f.startswith(("nuclear_", "flow_fi_"))]
+    base_cols = [f for f in BASE_FEATURES if f in df.columns]
+    cross_border_cols = [f for f in base_features if f.startswith(("import_potential_", "export_potential_"))]
+    nuclear_cols = [f for f in base_features if f.startswith(("nuclear_", "flow_fi_"))]
 
-    tier_results = {}
-    tier_results["T1 only"] = _train_tier_variant(df, tier1_cols, config)
-    if tier2_cols:
-        tier_results["T1+2"] = _train_tier_variant(df, tier1_cols + tier2_cols, config)
-    if tier3_cols:
-        tier_results["T1+2+3"] = _train_tier_variant(df, base_features, config)
+    source_results = {}
+    source_results["Base only"] = _train_source_variant(df, base_cols, config)
+    if cross_border_cols:
+        source_results["Base+CB"] = _train_source_variant(df, base_cols + cross_border_cols, config)
+    if nuclear_cols:
+        source_results["All sources"] = _train_source_variant(df, base_features, config)
 
     # ── Per-hour / per-month analysis (test set) ──────────────────────
     tz_offset = 2
@@ -269,13 +269,13 @@ def run_evaluation(config: dict, out_dir: Path) -> None:
         name = feat["name"]
         c = feat["coef"]
         if name.startswith(("stage1_pred", "pw_relu_")):
-            tier = "Stage2"
+            group = "calibration"
         elif name.startswith(("import_potential_", "export_potential_")):
-            tier = "T2"
+            group = "cross-border"
         elif name.startswith(("nuclear_", "flow_fi_")):
-            tier = "T3"
+            group = "nuclear"
         else:
-            tier = "T1"
+            group = "base"
 
         # Compute feature std for normalization
         if name in df.columns:
@@ -300,7 +300,7 @@ def run_evaluation(config: dict, out_dir: Path) -> None:
         impact = abs(c) * feat_std
         feature_importance.append({
             "name": name, "coef": c, "abs_coef": abs(c),
-            "std": round(feat_std, 4), "impact": round(impact, 4), "tier": tier,
+            "std": round(feat_std, 4), "impact": round(impact, 4), "group": group,
         })
     feature_importance.sort(key=lambda x: x["impact"], reverse=True)
 
@@ -365,14 +365,14 @@ def run_evaluation(config: dict, out_dir: Path) -> None:
             "centers": [round(c, 2) for c in hist_centers],
             "counts": [int(c) for c in hist_counts],
         },
-        "tier_results": {k: {"mae": round(v["mae"], 2), "r2": round(v["r2"], 4),
+        "source_results": {k: {"mae": round(v["mae"], 2), "r2": round(v["r2"], 4),
                               "n_features": v["n_features"]}
-                         for k, v in tier_results.items()},
+                         for k, v in source_results.items()},
         "feature_importance": [
             {"name": f["name"], "coef": round(f["coef"], 4),
              "abs_coef": round(f["abs_coef"], 4),
              "std": f.get("std", 1.0), "impact": f.get("impact", 0.0),
-             "tier": f["tier"]}
+             "group": f["group"]}
             for f in top_features
         ],
         "split_index": split,
@@ -506,10 +506,10 @@ footer {{
   <div class="chart-box"><canvas id="histChart" height="140"></canvas></div>
 </div>
 
-<!-- Tier Contribution -->
-<h2>Tier Contribution</h2>
+<!-- Data Source Contribution -->
+<h2>Data Source Contribution</h2>
 <div class="panel">
-  <table id="tierTable">
+  <table id="sourceTable">
     <thead><tr><th>Configuration</th><th>Features</th><th>MAE (EUR/MWh)</th><th>R&sup2;</th></tr></thead>
     <tbody></tbody>
   </table>
@@ -744,16 +744,16 @@ setWindow(30);
   }});
 }})();
 
-// ── Tier contribution table ──────────────────────────────────────────
+// ── Data source contribution table ───────────────────────────────────
 (function() {{
-  const tbody = document.querySelector('#tierTable tbody');
-  const keys = Object.keys(DATA.tier_results);
+  const tbody = document.querySelector('#sourceTable tbody');
+  const keys = Object.keys(DATA.source_results);
   for (let i = 0; i < keys.length; i++) {{
     const k = keys[i];
-    const v = DATA.tier_results[k];
+    const v = DATA.source_results[k];
     const improve = i > 0 ?
-      ' <span class="improve">(' + (DATA.tier_results[keys[0]].mae - v.mae > 0 ? '-' : '+') +
-        Math.abs(DATA.tier_results[keys[0]].mae - v.mae).toFixed(2) + ')</span>' : '';
+      ' <span class="improve">(' + (DATA.source_results[keys[0]].mae - v.mae > 0 ? '-' : '+') +
+        Math.abs(DATA.source_results[keys[0]].mae - v.mae).toFixed(2) + ')</span>' : '';
     tbody.innerHTML += `<tr><td>${{k}}</td><td>${{v.n_features}}</td><td>${{v.mae.toFixed(2)}}${{improve}}</td><td>${{v.r2.toFixed(4)}}</td></tr>`;
   }}
 }})();
@@ -762,10 +762,10 @@ setWindow(30);
 (function() {{
   const ctx = document.getElementById('fiChart').getContext('2d');
   const fi = DATA.feature_importance;
-  const tierColors = {{ T1: '#34d399', T2: '#60a5fa', T3: '#fb923c', Stage2: '#c084fc' }};
+  const groupColors = {{ base: '#34d399', 'cross-border': '#60a5fa', nuclear: '#fb923c', calibration: '#c084fc' }};
   const labels = fi.map(f => f.name);
   const values = fi.map(f => f.impact || 0);
-  const bgColors = fi.map(f => tierColors[f.tier] || '#94a3b8');
+  const bgColors = fi.map(f => groupColors[f.group] || '#94a3b8');
   initChart(ctx, {{
     type: 'bar',
     data: {{

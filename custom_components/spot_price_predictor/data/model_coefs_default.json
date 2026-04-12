@@ -23,10 +23,10 @@
     "ar_ee",
     "export_potential_se3"
   ],
-  "tier_info": {
-    "tier1": true,
-    "tier2": true,
-    "tier3": false
+  "data_sources": {
+    "weather": true,
+    "neighbor_prices": true,
+    "nuclear": false
   },
   "metrics": {
     "mae": 24.70076764362028,

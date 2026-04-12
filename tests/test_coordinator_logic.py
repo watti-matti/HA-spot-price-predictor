@@ -507,7 +507,7 @@ class TestUploadCoefficientsValidation:
     CURRENT_MODEL_KEYS = {
         "intercept", "features", "feature_names", "model_version",
         "model_type", "log_offset", "power_scale", "power_exp",
-        "feature_count", "tier_info", "metrics",
+        "feature_count", "data_sources", "metrics",
     }
 
     def test_production_model_has_required_keys(self):

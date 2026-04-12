@@ -17,7 +17,7 @@ from .const import (
     CONF_REGION,
     CONF_OPERATOR,
     CONF_FINGRID_API_KEY,
-    CONF_ENABLE_TIER2,
+    CONF_ENABLE_NEIGHBOR_PRICES,
     CONF_CUSTOM_DAY_RATE,
     CONF_CUSTOM_NIGHT_RATE,
     CONF_CUSTOM_VAT,
@@ -141,7 +141,7 @@ class SpotPricePredictorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_optional_apis(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.FlowResult:
-        """Step 3: Optional API keys and tier selection."""
+        """Step 3: Optional API keys and data source selection."""
         errors: dict[str, str] = {}
 
         if user_input is not None:
@@ -157,8 +157,8 @@ class SpotPricePredictorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             if not errors:
                 if fingrid_key:
                     self._data[CONF_FINGRID_API_KEY] = fingrid_key
-                self._data[CONF_ENABLE_TIER2] = user_input.get(
-                    CONF_ENABLE_TIER2, True
+                self._data[CONF_ENABLE_NEIGHBOR_PRICES] = user_input.get(
+                    CONF_ENABLE_NEIGHBOR_PRICES, True
                 )
 
                 title = f"Spot Price ({REGIONS.get(self._data.get(CONF_REGION, 'finland'), 'Finland')})"
@@ -166,7 +166,7 @@ class SpotPricePredictorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         schema = vol.Schema({
             vol.Optional(CONF_FINGRID_API_KEY, default=""): str,
-            vol.Optional(CONF_ENABLE_TIER2, default=True): bool,
+            vol.Optional(CONF_ENABLE_NEIGHBOR_PRICES, default=True): bool,
         })
         return self.async_show_form(
             step_id="optional_apis", data_schema=schema, errors=errors
@@ -224,8 +224,8 @@ class SpotPriceOptionsFlow(config_entries.OptionsFlow):
                 new_data[CONF_SELLER_MARGIN] = user_input.get(
                     CONF_SELLER_MARGIN, DEFAULT_SELLER_MARGIN
                 )
-                new_data[CONF_ENABLE_TIER2] = user_input.get(
-                    CONF_ENABLE_TIER2, True
+                new_data[CONF_ENABLE_NEIGHBOR_PRICES] = user_input.get(
+                    CONF_ENABLE_NEIGHBOR_PRICES, True
                 )
                 if fingrid_key:
                     new_data[CONF_FINGRID_API_KEY] = fingrid_key
@@ -282,8 +282,8 @@ class SpotPriceOptionsFlow(config_entries.OptionsFlow):
                 description={"suggested_value": current.get(CONF_CUSTOM_ENERGY_TAX, DEFAULT_ENERGY_TAX)},
             ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=0.20)),
             vol.Optional(
-                CONF_ENABLE_TIER2,
-                default=current.get(CONF_ENABLE_TIER2, True),
+                CONF_ENABLE_NEIGHBOR_PRICES,
+                default=current.get(CONF_ENABLE_NEIGHBOR_PRICES, True),
             ): bool,
             vol.Optional(
                 CONF_FINGRID_API_KEY,

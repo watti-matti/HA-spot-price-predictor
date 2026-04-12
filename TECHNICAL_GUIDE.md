@@ -64,7 +64,7 @@ Used to fit AR(2) models on cross-border price deviations from hourly daytype pr
 |--------|---------|
 | [Fingrid Open Data](https://data.fingrid.fi) | Nuclear production (#188) for nuclear deficit and scarcity features |
 
-Register for free at data.fingrid.fi. Without this key, the model trains on Tier 1+2 features only (15 features).
+Register for free at data.fingrid.fi. Without this key, the model trains on weather + cross-border features only (15 features).
 
 ### Nuclear outage schedule (free, no key)
 
@@ -76,9 +76,9 @@ Register for free at data.fingrid.fi. Without this key, the model trains on Tier
 
 ## Feature Engineering
 
-Model v2.0 supports up to 17 sign-validated features selected via greedy forward selection with sign constraints. The bundled default model uses Tier 1+2 (15 features). All tunable parameters are in `config/regions/finland.yaml` under the `features` section.
+Model v2.0 supports up to 17 sign-validated features selected via greedy forward selection with sign constraints. The bundled default model uses weather + cross-border features (15 features). All tunable parameters are in `config/regions/finland.yaml` under the `features` section.
 
-### Tier 1: Base features (11) -- no API keys needed
+### Base features (11) — weather + demand, no API keys needed
 
 | Category | Features | Coefficient sign |
 |----------|----------|:---:|
@@ -90,7 +90,7 @@ Model v2.0 supports up to 17 sign-validated features selected via greedy forward
 | Wind x demand | `wind_calm_x_peak_am` = max(0, 6-wind) × AM peak (9h, σ=1.8) | positive |
 | Wind x demand | `wind_calm_x_peak_pm` = max(0, 6-wind) × PM peak (19h, σ=2.0) | positive |
 
-### Tier 2: AR neighbor prices + export potential (+4) -- no API keys needed
+### Cross-border features (+4) — AR neighbor prices, no API keys needed
 
 AR(2) models predict cross-border neighbor prices using workday/weekend hourly profiles with damped autoregressive deviation. This captures the European market coupling signal that drives Finnish prices.
 
@@ -103,7 +103,7 @@ AR(2) models predict cross-border neighbor prices using workday/weekend hourly p
 
 The AR models decompose neighbor prices into deterministic daily profiles (workday vs weekend, 24 hours each) plus a stochastic deviation modeled by AR(2). The AR deviation is damped (max root < 0.95) so predictions converge to the daily profile within 24 hours, ensuring stability over the full 170-hour forecast window.
 
-### Tier 3: Nuclear features (+0-2) -- requires Fingrid API key
+### Nuclear features (+0-2) — requires Fingrid API key
 
 | Feature | Formula | Meaning |
 |---------|---------|---------|
@@ -116,9 +116,9 @@ The AR models decompose neighbor prices into deterministic daily profiles (workd
 
 | Configuration | Features | API keys |
 |---------------|----------|----------|
-| Tier 1 only | 11 | None |
-| Tier 1 + 2 | 15 | None |
-| Tier 1 + 2 + 3 | 17 | 1 (Fingrid, free) |
+| Weather only | 11 | None |
+| Weather + cross-border | 15 | None |
+| All sources | 17 | 1 (Fingrid, free) |
 
 ---
 
@@ -278,7 +278,7 @@ building stock.
 
 ## Accuracy and Retraining
 
-### Current performance (v2.0, Tier 1+2, 15 features, 4-year training, 120-day half-life)
+### Current performance (v2.0, weather + cross-border, 15 features, 4-year training, 120-day half-life)
 
 **Hourly model:**
 
@@ -295,7 +295,7 @@ building stock.
 | D(8) | Cheapest 8h | 0.921 |
 | D(24) | Daily avg | 0.937 |
 
-Retraining with Fingrid nuclear data (Tier 3, free API key) adds 2 features and improves hourly accuracy.
+Retraining with Fingrid nuclear data (free API key) adds 2 features and improves hourly accuracy.
 
 ### Recommended retraining frequency
 

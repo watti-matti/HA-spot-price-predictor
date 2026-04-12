@@ -443,29 +443,29 @@ for m in range(1, 13):
     monthly_mae_vals.append(float(sk_mae(y_clipped[mask], preds_all[mask])) if mask.sum() > 10 else 0.0)
 
 # Feature importance (|coef| * std)
-from src.features import TIER1_FEATURES
+from src.features import BASE_FEATURES
 feature_importance = []
 for feat in model_coefs["features"]:
     name = feat["name"]
     c = feat["coef"]
     if name.startswith(("import_potential_", "export_potential_", "ar_")):
-        tier = "T2"
+        group = "cross-border"
     elif name.startswith(("nuclear_", "flow_fi_")):
-        tier = "T3"
+        group = "nuclear"
     else:
-        tier = "T1"
+        group = "base"
     feat_std = float(df[name].std()) if name in df.columns else 1.0
     impact = abs(c) * feat_std
     feature_importance.append({
         "name": name, "coef": round(c, 4), "abs_coef": round(abs(c), 4),
-        "std": round(feat_std, 4), "impact": round(impact, 4), "tier": tier,
+        "std": round(feat_std, 4), "impact": round(impact, 4), "group": group,
     })
 feature_importance.sort(key=lambda x: x["impact"], reverse=True)
 top_features = feature_importance[:20]
 
 print("  Top 5 features by impact:")
 for fi in top_features[:5]:
-    print("    %-25s impact=%.4f  coef=%+.4f  tier=%s" % (fi["name"], fi["impact"], fi["coef"], fi["tier"]))
+    print("    %-25s impact=%.4f  coef=%+.4f  group=%s" % (fi["name"], fi["impact"], fi["coef"], fi["group"]))
 
 # ================================================================
 # BUILD HTML DASHBOARD
@@ -519,7 +519,7 @@ chart_json = json.dumps({
         "monthly_mae": [round(v, 2) for v in monthly_mae_vals],
         "feature_importance": [
             {"name": f["name"], "coef": f["coef"], "impact": f["impact"],
-             "std": f["std"], "tier": f["tier"]}
+             "std": f["std"], "group": f["group"]}
             for f in top_features
         ],
         "model_version": model_coefs.get("model_version", "?"),
@@ -631,9 +631,9 @@ Scrolls with slider.</p>
 <h2 style="margin-top:40px;border-top:2px solid #60a5fa;padding-top:20px">
   Hourly Model — Feature Importance &amp; Error Analysis</h2>
 <p class="sub">Log-linear Ridge regression. Impact = |coefficient| &times; std(feature) [EUR/MWh].
-Color by tier: <span style="color:#34d399">T1 Base</span> |
-<span style="color:#60a5fa">T2 Cross-border</span> |
-<span style="color:#fb923c">T3 Grid</span></p>
+Color by source: <span style="color:#34d399">Base (weather)</span> |
+<span style="color:#60a5fa">Cross-border</span> |
+<span style="color:#fb923c">Nuclear</span></p>
 <div class="mrow" id="hourly-metrics"></div>
 <div class="box" style="height:500px"><canvas id="fiChart"></canvas></div>
 
@@ -1197,12 +1197,12 @@ document.getElementById('sl').addEventListener('input',function(){slP=parseInt(t
   const hm=D.hourly_model;
   if(!hm||!hm.feature_importance) return;
   const fi=hm.feature_importance;
-  const tierColors={T1:'#34d399',T2:'#60a5fa',T3:'#fb923c'};
+  const groupColors={base:'#34d399','cross-border':'#60a5fa',nuclear:'#fb923c'};
   new Chart(document.getElementById('fiChart').getContext('2d'),{
     type:'bar',
     data:{labels:fi.map(f=>f.name),
       datasets:[{label:'Impact',data:fi.map(f=>f.impact),
-        backgroundColor:fi.map(f=>tierColors[f.tier]||'#94a3b8'),borderWidth:0}]},
+        backgroundColor:fi.map(f=>groupColors[f.group]||'#94a3b8'),borderWidth:0}]},
     options:{responsive:true,maintainAspectRatio:false,indexAxis:'y',animation:false,
       scales:{
         x:{title:{display:true,text:'Impact: |coefficient| \\u00D7 std(feature) [EUR/MWh]',color:'#e2e8f0'},
@@ -1211,9 +1211,9 @@ document.getElementById('sl').addEventListener('input',function(){slP=parseInt(t
       plugins:{
         legend:{display:true,labels:{color:'#e2e8f0',
           generateLabels:function(){return[
-            {text:'T1: Base',fillStyle:'#34d399',strokeStyle:'#34d399',fontColor:'#e2e8f0'},
-            {text:'T2: Cross-border',fillStyle:'#60a5fa',strokeStyle:'#60a5fa',fontColor:'#e2e8f0'},
-            {text:'T3: Grid',fillStyle:'#fb923c',strokeStyle:'#fb923c',fontColor:'#e2e8f0'}];}}},
+            {text:'Base (weather)',fillStyle:'#34d399',strokeStyle:'#34d399',fontColor:'#e2e8f0'},
+            {text:'Cross-border',fillStyle:'#60a5fa',strokeStyle:'#60a5fa',fontColor:'#e2e8f0'},
+            {text:'Nuclear',fillStyle:'#fb923c',strokeStyle:'#fb923c',fontColor:'#e2e8f0'}];}}},
         tooltip:{callbacks:{afterLabel:function(ctx){
           const f=fi[ctx.dataIndex];
           return 'Coef: '+(f.coef>0?'+':'')+f.coef.toFixed(4)+'  Std: '+f.std.toFixed(3);}}}}}});

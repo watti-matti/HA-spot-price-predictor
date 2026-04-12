@@ -316,7 +316,7 @@ def compute_features(utc_dt, wind, solar, temp, hour_idx=0):
         "wind_calm_x_peak_pm": wind_calm * double_peak_pm,
     }
 
-    # Tier 2: AR neighbor prices (proper hourly AR(2) forecast)
+    # Cross-border: AR neighbor prices (proper hourly AR(2) forecast)
     for prefix in ["se1", "se3", "ee"]:
         if prefix in ar_hourly and hour_idx < len(ar_hourly[prefix]):
             features[f"ar_{prefix}"] = ar_hourly[prefix][hour_idx] / ar_divisor
@@ -326,7 +326,7 @@ def compute_features(utc_dt, wind, solar, temp, hour_idx=0):
     # Export potential SE3 (from recent spread)
     features["export_potential_se3"] = export_potential_se3
 
-    # Tier 3: nuclear (use reasonable default if no Fingrid key)
+    # Nuclear: use reasonable default if no Fingrid key
     features["nuclear_deficit"] = 0.05  # ~95% capacity typical
     low_wind = max(0.0, wind_low_thresh - wind)
     peak_full = max(raw_am, raw_pm)

@@ -64,7 +64,7 @@ AR(2)-mallit sovitetaan naapurihintojen poikkeamiin tuntiprofiileista. Analyysis
 |-------|-----------|
 | [Fingrid Open Data](https://data.fingrid.fi) | Ydinvoimatuotanto (#188) nuclear_deficit- ja niukkuuspiirteisiin |
 
-Rekisteröidy ilmaiseksi osoitteessa data.fingrid.fi. Ilman avainta malli koulutetaan Taso 1+2 -piirteillä (15 piirrettä).
+Rekisteröidy ilmaiseksi osoitteessa data.fingrid.fi. Ilman avainta malli koulutetaan sää- ja rajat ylittävillä piirteillä (15 piirrettä).
 
 ### Ydinvoimaseisokkiaikataulu (ilmainen, ei avainta)
 
@@ -76,9 +76,9 @@ Rekisteröidy ilmaiseksi osoitteessa data.fingrid.fi. Ilman avainta malli koulut
 
 ## Piirteiden suunnittelu
 
-Malli v2.0 tukee enintään 17 merkkivalidoitua piirrettä. Mukana tuleva oletusmalli käyttää tasoja 1+2 (15 piirrettä). Kaikki säädettävät parametrit ovat `config/regions/finland.yaml` -tiedoston `features`-osiossa.
+Malli v2.0 tukee enintään 17 merkkivalidoitua piirrettä. Mukana tuleva oletusmalli käyttää sää- ja rajat ylittäviä piirteitä (15 piirrettä). Kaikki säädettävät parametrit ovat `config/regions/finland.yaml` -tiedoston `features`-osiossa.
 
-### Taso 1: Peruspiirteet (11) — ei API-avaimia tarvita
+### Peruspiirteet (11) — sää + kysyntä, ei API-avaimia
 
 | Kategoria | Piirteet | Kertoimen etumerkki |
 |-----------|----------|:---:|
@@ -90,7 +90,7 @@ Malli v2.0 tukee enintään 17 merkkivalidoitua piirrettä. Mukana tuleva oletus
 | Tuuli × kysyntä | `wind_calm_x_peak_am` = max(0, 6-tuuli) × aamuhuippu (klo 9, σ=1,8) | positiivinen |
 | Tuuli × kysyntä | `wind_calm_x_peak_pm` = max(0, 6-tuuli) × iltahuippu (klo 19, σ=2,0) | positiivinen |
 
-### Taso 2: AR-naapurihinnat + vientipotentiaali (+4) — ei API-avaimia
+### Rajat ylittävät piirteet (+4) — AR-naapurihinnat, ei API-avaimia
 
 AR(2)-mallit ennustavat rajat ylittäviä naapurihintoja käyttäen arkipäivä/viikonloppu-tuntiprofiileja ja vaimennettua autoregressiivista poikkeamaa.
 
@@ -103,7 +103,7 @@ AR(2)-mallit ennustavat rajat ylittäviä naapurihintoja käyttäen arkipäivä/
 
 AR-poikkeama vaimennetaan (maksimijuuri < 0,95), joten ennusteet konvergoituvat päiväprofiiliin 24 tunnissa, mikä takaa vakauden koko 170 tunnin ennusteikkunassa.
 
-### Taso 3: Ydinvoimapiirteet (+0-2) — vaatii Fingrid API-avaimen
+### Ydinvoimapiirteet (+0-2) — vaatii Fingrid API-avaimen
 
 | Piirre | Kaava | Merkitys |
 |--------|-------|----------|
@@ -116,9 +116,9 @@ AR-poikkeama vaimennetaan (maksimijuuri < 0,95), joten ennusteet konvergoituvat 
 
 | Konfiguraatio | Piirteet | API-avaimet |
 |---------------|----------|-------------|
-| Vain Taso 1 | 11 | Ei mitään |
-| Taso 1 + 2 | 15 | Ei mitään |
-| Taso 1 + 2 + 3 | 17 | 1 (Fingrid, ilmainen) |
+| Vain sää | 11 | Ei mitään |
+| Sää + rajat ylittävät | 15 | Ei mitään |
+| Kaikki lähteet | 17 | 1 (Fingrid, ilmainen) |
 
 ---
 
@@ -257,7 +257,7 @@ Katso englanninkielisestä dokumentaatiosta ([TECHNICAL_GUIDE.md](TECHNICAL_GUID
 
 ## Tarkkuus ja uudelleenkoulutus
 
-### Nykyinen suorituskyky (v2.0, taso 1+2, 15 piirrettä, 4 vuoden koulutusdata, 120 päivän puoliintumisaika)
+### Nykyinen suorituskyky (v2.0, sää + rajat ylittävät, 15 piirrettä, 4 vuoden koulutusdata, 120 päivän puoliintumisaika)
 
 **Tuntimalli:**
 
@@ -274,7 +274,7 @@ Katso englanninkielisestä dokumentaatiosta ([TECHNICAL_GUIDE.md](TECHNICAL_GUID
 | D(8) | Halvimmat 8h | 0,921 |
 | D(24) | Päivän keskiarvo | 0,937 |
 
-Uudelleenkoulutus Fingrid-ydinvoimadatalla (taso 3, ilmainen API-avain) lisää 2 piirrettä ja parantaa tuntitarkkuutta.
+Uudelleenkoulutus Fingrid-ydinvoimadatalla (ilmainen API-avain) lisää 2 piirrettä ja parantaa tuntitarkkuutta.
 
 ### Suositeltu uudelleenkoulutustaajuus
 

@@ -89,7 +89,7 @@ def _status_attributes(data: dict[str, Any] | None) -> dict[str, Any]:
         return {}
     return {
         "last_update": data.get("last_update"),
-        "tiers_active": data.get("tiers_active", ""),
+        "data_sources_active": data.get("data_sources_active", ""),
         "stale": data.get("stale", False),
         "data_age_minutes": data.get("data_age_minutes", 0),
     }
