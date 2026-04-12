@@ -6,7 +6,7 @@ Builds features in three tiers based on available data:
   Tier 2 (+4 features): AR neighbor prices (SE1, SE3, EE) + export potential
   Tier 3 (+2 features): Nuclear deficit + nuclear x scarcity interaction
 
-Model v6.0: log-linear Ridge regression on 17 sign-validated features.
+v2.0.0: log-linear Ridge regression on up to 17 sign-validated features.
 AR(2) models predict cross-border neighbor prices using workday/weekend
 hourly profiles + damped autoregressive deviation.
 """

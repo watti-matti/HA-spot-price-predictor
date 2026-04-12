@@ -70,7 +70,7 @@ This allows visual comparison of how well the forecast matches reality. Requires
 
 ## Feature Tiers
 
-The model uses 17 sign-validated features selected via greedy forward selection with bootstrap stability analysis.
+The model supports up to 17 sign-validated features selected via greedy forward selection with bootstrap stability analysis. The bundled default model uses Tier 1+2 (15 features, no API keys required). Adding Fingrid nuclear data enables the full 17 features.
 
 | Tier | Features | Data Sources | API Keys |
 |------|:---:|-------------|:---:|
@@ -84,17 +84,26 @@ The model uses 17 sign-validated features selected via greedy forward selection 
 
 **Tier 3** adds nuclear deficit (fraction of nuclear capacity offline) and nuclear x scarcity interaction (amplified price impact during weather stress). Planned outage schedules from [Nord Pool UMM](https://umm.nordpoolgroup.com/) (public API, no key required) provide forward-looking nuclear awareness.
 
-## Model Performance (v6.0)
+## Model Performance
+
+**Bundled model (Tier 1+2, 15 features):**
 
 | Metric | Value |
 |--------|:---:|
-| MAE | 2.34 EUR/MWh |
-| R2 | 0.75 |
-| Features | 17 (sign-validated, bootstrap-stable) |
-| 4h block rank concordance | 97.1% (for >5 EUR/MWh differences) |
-| 8h block rank concordance | 99.0% |
-| EV savings captured | 94.2% of optimal |
+| MAE | 24.7 EUR/MWh |
+| R² | 0.39 |
+| Features | 15 (sign-validated, bootstrap-stable) |
 | Training data | 4 years (2022-2026) |
+
+**Duration model (D(k) Spearman ρ, last 365 days):**
+
+| D(k) | Use case | ρ |
+|:---:|:-:|:---:|
+| D(4) | Cheapest 4h | 0.908 |
+| D(8) | Cheapest 8h | 0.921 |
+| D(24) | Daily avg | 0.937 |
+
+Retraining with Fingrid nuclear data (Tier 3, free API key) adds 2 features and improves accuracy.
 
 ## Supported Operators (Finland) (check your contract)
 

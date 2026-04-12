@@ -228,7 +228,7 @@ def train(
             tier_info["tier3"] = True
 
     coefs_dict = {
-        "model_version": "v6.1",
+        "model_version": "v2.0.0",
         "model_type": "log-linear",
         "log_offset": log_offset,
         "power_scale": power_scale,

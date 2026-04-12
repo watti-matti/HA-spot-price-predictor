@@ -20,7 +20,7 @@ from model import SpotPriceModel
 def simple_model():
     """Simple 2-feature log-linear model."""
     return SpotPriceModel({
-        "model_version": "v6.1",
+        "model_version": "v2.0.0",
         "model_type": "log-linear",
         "intercept": 4.0,
         "log_offset": 55,
@@ -59,7 +59,7 @@ class TestLogLinearPrediction:
     def test_negative_raw_clamped_to_zero(self):
         """When exp(linear) < offset, prediction = 0."""
         model = SpotPriceModel({
-            "model_version": "v6.1",
+            "model_version": "v2.0.0",
             "model_type": "log-linear",
             "intercept": 2.0,  # exp(2) ≈ 7.39 < 55
             "log_offset": 55,
@@ -73,7 +73,7 @@ class TestLogLinearPrediction:
     def test_overflow_protection(self):
         """Linear > 20 is capped: exp(20) ≈ 485M."""
         model = SpotPriceModel({
-            "model_version": "v6.1",
+            "model_version": "v2.0.0",
             "model_type": "log-linear",
             "intercept": 100.0,
             "log_offset": 55,
@@ -92,7 +92,7 @@ class TestPowerStretch:
     def test_identity_stretch(self):
         """scale=1, power=1 → no stretch."""
         model = SpotPriceModel({
-            "model_version": "v6.1",
+            "model_version": "v2.0.0",
             "model_type": "log-linear",
             "intercept": 4.5,
             "log_offset": 55,
@@ -108,7 +108,7 @@ class TestPowerStretch:
     def test_stretch_amplifies(self):
         """scale=0.58, power=1.2 (production values)."""
         model = SpotPriceModel({
-            "model_version": "v6.1",
+            "model_version": "v2.0.0",
             "model_type": "log-linear",
             "intercept": 4.5,
             "log_offset": 55,

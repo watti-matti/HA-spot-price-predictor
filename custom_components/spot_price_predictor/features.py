@@ -1,6 +1,6 @@
 """Pure Python feature engineering for inference. No numpy/pandas.
 
-Model v6.0: 17 sign-validated features with AR neighbor prices.
+v2.0.0: up to 17 sign-validated features with AR neighbor prices.
 Log-linear prediction: price = exp(sum(coef * feature) + intercept) - offset
 """
 

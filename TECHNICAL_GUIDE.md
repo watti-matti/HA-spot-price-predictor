@@ -76,7 +76,7 @@ Register for free at data.fingrid.fi. Without this key, the model trains on Tier
 
 ## Feature Engineering
 
-Model v2.0 uses 17 sign-validated features selected via greedy forward selection with sign constraints. All tunable parameters are in `config/regions/finland.yaml` under the `features` section.
+Model v2.0 supports up to 17 sign-validated features selected via greedy forward selection with sign constraints. The bundled default model uses Tier 1+2 (15 features). All tunable parameters are in `config/regions/finland.yaml` under the `features` section.
 
 ### Tier 1: Base features (11) -- no API keys needed
 
@@ -278,23 +278,24 @@ building stock.
 
 ## Accuracy and Retraining
 
-### Current performance (v2.0, 4-year training, 120-day half-life)
+### Current performance (v2.0, Tier 1+2, 15 features, 4-year training, 120-day half-life)
 
 **Hourly model:**
 
 | Metric | Value |
 |--------|:---:|
-| MAE | 23.6 EUR/MWh |
-| RMSE | 47.1 EUR/MWh |
-| R² | 0.522 |
+| MAE | 24.7 EUR/MWh |
+| R² | 0.39 |
 
 **Duration model (Spearman ρ, last 365 days):**
 
 | D(k) | Use case | ρ |
 |:---:|:-:|:---:|
-| D(4) | Cheapest 4h | 0.906 |
+| D(4) | Cheapest 4h | 0.908 |
 | D(8) | Cheapest 8h | 0.921 |
 | D(24) | Daily avg | 0.937 |
+
+Retraining with Fingrid nuclear data (Tier 3, free API key) adds 2 features and improves hourly accuracy.
 
 ### Recommended retraining frequency
 

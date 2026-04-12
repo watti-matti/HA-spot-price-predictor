@@ -76,7 +76,7 @@ Rekisteröidy ilmaiseksi osoitteessa data.fingrid.fi. Ilman avainta malli koulut
 
 ## Piirteiden suunnittelu
 
-Malli v2.0 käyttää 17 merkkivalidoitua piirrettä. Kaikki säädettävät parametrit ovat `config/regions/finland.yaml` -tiedoston `features`-osiossa.
+Malli v2.0 tukee enintään 17 merkkivalidoitua piirrettä. Mukana tuleva oletusmalli käyttää tasoja 1+2 (15 piirrettä). Kaikki säädettävät parametrit ovat `config/regions/finland.yaml` -tiedoston `features`-osiossa.
 
 ### Taso 1: Peruspiirteet (11) — ei API-avaimia tarvita
 
@@ -257,23 +257,24 @@ Katso englanninkielisestä dokumentaatiosta ([TECHNICAL_GUIDE.md](TECHNICAL_GUID
 
 ## Tarkkuus ja uudelleenkoulutus
 
-### Nykyinen suorituskyky (v2.0, 4 vuoden koulutusdata, 120 päivän puoliintumisaika)
+### Nykyinen suorituskyky (v2.0, taso 1+2, 15 piirrettä, 4 vuoden koulutusdata, 120 päivän puoliintumisaika)
 
 **Tuntimalli:**
 
 | Mittari | Arvo |
 |---------|:---:|
-| MAE | 23,6 EUR/MWh |
-| RMSE | 47,1 EUR/MWh |
-| R² | 0,522 |
+| MAE | 24,7 EUR/MWh |
+| R² | 0,39 |
 
 **Kestomalli (Spearmanin ρ, viimeiset 365 päivää):**
 
 | D(k) | Käyttötapaus | ρ |
 |:---:|:-:|:---:|
-| D(4) | Halvimmat 4h | 0,906 |
+| D(4) | Halvimmat 4h | 0,908 |
 | D(8) | Halvimmat 8h | 0,921 |
 | D(24) | Päivän keskiarvo | 0,937 |
+
+Uudelleenkoulutus Fingrid-ydinvoimadatalla (taso 3, ilmainen API-avain) lisää 2 piirrettä ja parantaa tuntitarkkuutta.
 
 ### Suositeltu uudelleenkoulutustaajuus
 

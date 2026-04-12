@@ -223,7 +223,7 @@ class TestSpotPriceModelIntegration:
     def test_loads_without_duration(self):
         """Backward compatibility: no duration_model key."""
         coefs = {
-            "model_version": "v6.1",
+            "model_version": "v2.0.0",
             "model_type": "log-linear",
             "intercept": 4.0,
             "log_offset": 55,
@@ -238,7 +238,7 @@ class TestSpotPriceModelIntegration:
     def test_loads_with_duration(self, minimal_duration_config):
         """Duration model loads when present."""
         coefs = {
-            "model_version": "v6.1",
+            "model_version": "v2.0.0",
             "model_type": "log-linear",
             "intercept": 4.0,
             "log_offset": 55,
@@ -255,7 +255,7 @@ class TestSpotPriceModelIntegration:
     def test_hourly_prediction_unaffected(self, minimal_duration_config):
         """Adding duration model doesn't change hourly predictions."""
         base_coefs = {
-            "model_version": "v6.1",
+            "model_version": "v2.0.0",
             "model_type": "log-linear",
             "intercept": 4.0,
             "log_offset": 55,

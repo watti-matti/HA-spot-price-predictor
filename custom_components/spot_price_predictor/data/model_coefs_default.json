@@ -1,5 +1,5 @@
 {
-  "model_version": "v6.1",
+  "model_version": "v2.0.0",
   "model_type": "log-linear",
   "log_offset": 55,
   "power_scale": 1.0216822650283568,

@@ -107,8 +107,8 @@ def _register_services(hass: HomeAssistant) -> None:
             else:
                 coefs = json.loads(json_data)
 
-            # Validate structure
-            required_keys = ["stage1", "features", "piecewise_breakpoints", "feature_names"]
+            # Validate structure (v2.0 log-linear model format)
+            required_keys = ["intercept", "features", "feature_names"]
             missing = [k for k in required_keys if k not in coefs]
             if missing:
                 _LOGGER.error("Invalid coefficients: missing keys %s", missing)
@@ -172,19 +172,20 @@ def _register_services(hass: HomeAssistant) -> None:
             with open(path, "r", encoding="utf-8") as f:
                 coefs = json.load(f)
 
+            metrics = coefs.get("metrics", {})
             info = (
                 f"**Model source:** {'User-uploaded' if using_user else 'Bundled default'}\n"
                 f"**Version:** {coefs.get('model_version', 'unknown')}\n"
                 f"**Features:** {coefs.get('feature_count', '?')}\n"
                 f"**Tiers:** {coefs.get('tier_info', {})}\n"
-                f"**Stage 1 MAE:** {coefs.get('metrics', {}).get('stage1_mae', '?')} EUR/MWh\n"
-                f"**Stage 2 MAE:** {coefs.get('metrics', {}).get('stage2_mae', '?')} EUR/MWh\n"
-                f"**R²:** {coefs.get('metrics', {}).get('stage2_r2', '?')}\n"
-                f"**Train samples:** {coefs.get('metrics', {}).get('train_samples', '?')}\n"
-                f"**Test samples:** {coefs.get('metrics', {}).get('test_samples', '?')}\n\n"
+                f"**MAE:** {metrics.get('mae', '?')} EUR/MWh\n"
+                f"**R²:** {metrics.get('r2', '?')}\n"
+                f"**Train samples:** {metrics.get('train_samples', '?')}\n"
+                f"**Test samples:** {metrics.get('test_samples', '?')}\n"
+                f"**Duration model:** {'Yes' if 'duration_model' in coefs else 'No'}\n\n"
                 f"To retrain, run on your PC:\n"
                 f"```\n"
-                f"python -m src.train_model --region finland --years 4\n"
+                f"python -m src.train_model --region finland\n"
                 f"```\n"
                 f"Then upload with the `{DOMAIN}.{SERVICE_UPLOAD_COEFFICIENTS}` service."
             )
