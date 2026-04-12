@@ -145,7 +145,7 @@ Ennustaa D(k) = keskimääräisen spot-hinnan halvimmille k tunnille päivässä
 **PAVA** (Pool Adjacent Violators Algorithm) on isotonisen regression menetelmä, joka pakottaa monotonisuuden. Koska D(k) on määritelmän mukaan ei-vähenevä — useampien tuntien lisääminen keskiarvoon voi sisältää vain yhtä kalliita tai kalliimpia tunteja — PAVA yhdistää itsenäisten Ridge-ennusteiden rikkomukset keskiarvoistamalla vierekkäisiä pareja kunnes D(1) ≤ D(2) ≤ ... ≤ D(N) toteutuu kaikkialla.
 
 **Arkkitehtuuri:**
-- 4 päiväsegmenttiä tariffirajojen mukaan: yö (22-06, 9h), aamu (07-11, 5h), keskipäivä (12-17, 6h), ilta (18-21, 4h)
+- 4 päiväsegmenttiä tariffirajojen mukaan: yö (22-07, 9h), aamu (07-12, 5h), keskipäivä (12-18, 6h), ilta (18-22, 4h)
 - Jokainen (segmentti, kestotaso): itsenäinen Ridge-malli 10 piirteellä
 - Log-lineaarinen kohde: log(D(k) + 55)
 - Unohtamiskerroin λ = 0,960 (puoliintumisaika 17 päivää, optimoitu pyyhkäisyllä)

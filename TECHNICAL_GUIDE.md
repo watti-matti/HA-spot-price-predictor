@@ -145,7 +145,7 @@ Predicts D(k) = average spot price for the cheapest k hours in a day. D(k) is ma
 **PAVA** (Pool Adjacent Violators Algorithm) is an isotonic regression method that enforces monotonicity. Since D(k) must be non-decreasing by definition — adding more hours to the average can only include equal or more expensive hours — PAVA merges any violations from independent per-level Ridge predictions by averaging adjacent violating pairs until D(1) ≤ D(2) ≤ ... ≤ D(N) holds everywhere.
 
 **Architecture:**
-- 4 day segments aligned with day/night tariff: night (22-06, 9h), morning (07-11, 5h), midday (12-17, 6h), evening (18-21, 4h)
+- 4 day segments aligned with day/night tariff: night (22-07, 9h), morning (07-12, 5h), midday (12-18, 6h), evening (18-22, 4h)
 - Per (segment, duration level): independent Ridge model with 10 features
 - Log-linear target: log(D(k) + 55)
 - Forgetting factor λ = 0.960 (half-life 17 days, optimized via sweep)

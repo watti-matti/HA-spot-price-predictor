@@ -299,7 +299,7 @@ class TestProductionCoefficients:
 
     def test_production_segment_sizes(self, prod_model):
         dm = prod_model.duration_model
-        # Tariff-aligned: night 22-06 (9h), morning 07-11 (5h),
+        # Tariff-aligned: night 22-07 (9h), morning 07-12 (5h),
         # midday 12-17 (6h), evening 18-21 (4h)
         assert dm.segments["night"]["n_levels"] == 9
         assert dm.segments["morning"]["n_levels"] == 5
