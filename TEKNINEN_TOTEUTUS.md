@@ -76,7 +76,7 @@ Rekisteröidy ilmaiseksi osoitteessa data.fingrid.fi. Ilman avainta malli koulut
 
 ## Piirteiden suunnittelu
 
-Malli v6.1 käyttää 17 merkkivalidoitua piirrettä. Kaikki säädettävät parametrit ovat `config/regions/finland.yaml` -tiedoston `features`-osiossa.
+Malli v2.0 käyttää 17 merkkivalidoitua piirrettä. Kaikki säädettävät parametrit ovat `config/regions/finland.yaml` -tiedoston `features`-osiossa.
 
 ### Taso 1: Peruspiirteet (11) — ei API-avaimia tarvita
 
@@ -140,7 +140,9 @@ Log-muunnos käsittelee luonnollisesti epälineaarisen hinta-niukkuussuhteen: l�
 
 ### Kestomalli: Segmenttihierarkkinen Ridge + PAVA
 
-Ennustaa D(k) = keskimääräisen spot-hinnan halvimmille k tunnille päivässä.
+Ennustaa D(k) = keskimääräisen spot-hinnan halvimmille k tunnille päivässä. D(k) on matemaattisesti ekvivalentti ehdollisen riskin arvon (CVaR, Conditional Value-at-Risk) kanssa päivänsisäisestä hintajakaumasta tasolla α = k/24, mikä tekee siitä luonnollisen kustannusmittarin kuormien ajoitukseen: "ajoita halvimmille k tunnille" minimoi CVaR:n.
+
+**PAVA** (Pool Adjacent Violators Algorithm) on isotonisen regression menetelmä, joka pakottaa monotonisuuden. Koska D(k) on määritelmän mukaan ei-vähenevä — useampien tuntien lisääminen keskiarvoon voi sisältää vain yhtä kalliita tai kalliimpia tunteja — PAVA yhdistää itsenäisten Ridge-ennusteiden rikkomukset keskiarvoistamalla vierekkäisiä pareja kunnes D(1) ≤ D(2) ≤ ... ≤ D(N) toteutuu kaikkialla.
 
 **Arkkitehtuuri:**
 - 4 päiväsegmenttiä: yö (22-05, 8h), aamu (06-09, 4h), keskipäivä (10-15, 6h), ilta (16-21, 6h)
@@ -256,7 +258,7 @@ Katso englanninkielisestä dokumentaatiosta ([TECHNICAL_GUIDE.md](TECHNICAL_GUID
 
 ## Tarkkuus ja uudelleenkoulutus
 
-### Nykyinen suorituskyky (v6.1, 4 vuoden koulutusdata, 120 päivän puoliintumisaika)
+### Nykyinen suorituskyky (v2.0, 4 vuoden koulutusdata, 120 päivän puoliintumisaika)
 
 **Tuntimalli:**
 

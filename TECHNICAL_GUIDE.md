@@ -76,7 +76,7 @@ Register for free at data.fingrid.fi. Without this key, the model trains on Tier
 
 ## Feature Engineering
 
-Model v6.1 uses 17 sign-validated features selected via greedy forward selection with sign constraints. All tunable parameters are in `config/regions/finland.yaml` under the `features` section.
+Model v2.0 uses 17 sign-validated features selected via greedy forward selection with sign constraints. All tunable parameters are in `config/regions/finland.yaml` under the `features` section.
 
 ### Tier 1: Base features (11) -- no API keys needed
 
@@ -140,7 +140,9 @@ The log transform naturally handles the nonlinear price-scarcity relationship: n
 
 ### Duration model: Segment-hierarchical Ridge + PAVA
 
-Predicts D(k) = average spot price for the cheapest k hours in a day.
+Predicts D(k) = average spot price for the cheapest k hours in a day. D(k) is mathematically equivalent to Conditional Value-at-Risk (CVaR) of the intra-day price distribution at level α = k/24, making it the natural cost metric for load scheduling: "schedule into the cheapest k hours" minimizes CVaR.
+
+**PAVA** (Pool Adjacent Violators Algorithm) is an isotonic regression method that enforces monotonicity. Since D(k) must be non-decreasing by definition — adding more hours to the average can only include equal or more expensive hours — PAVA merges any violations from independent per-level Ridge predictions by averaging adjacent violating pairs until D(1) ≤ D(2) ≤ ... ≤ D(N) holds everywhere.
 
 **Architecture:**
 - 4 day segments: night (22-05, 8h), morning (06-09, 4h), midday (10-15, 6h), evening (16-21, 6h)
@@ -277,7 +279,7 @@ building stock.
 
 ## Accuracy and Retraining
 
-### Current performance (v6.1, 4-year training, 120-day half-life)
+### Current performance (v2.0, 4-year training, 120-day half-life)
 
 **Hourly model:**
 
