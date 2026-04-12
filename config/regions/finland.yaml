@@ -22,8 +22,8 @@ region:
 price_source:
   name: "sahkotin"
   url: "https://sahkotin.fi/prices"
-  unit: "EUR/MWh"                    # Raw unit from API (value / 10)
-  divisor: 10                        # API returns value in 0.1 EUR/MWh
+  unit: "EUR/MWh"                    # Raw unit from API
+  divisor: 1                         # API returns value directly in EUR/MWh
   vat_param: false                   # Whether to request VAT-included prices
 
 # ============================================================================
@@ -254,6 +254,33 @@ consumer_pricing:
   default_operator: "Elenia"
 
 # ============================================================================
+# Feature engineering parameters
+# ============================================================================
+# These thresholds define nonlinear feature transforms.
+# Derived from Finnish wind/price analysis but may need tuning for other regions.
+
+features:
+  # Wind nonlinear transforms
+  wind_log_scarcity_base: 8.0        # log1p(max(0, base - wind_speed))
+                                     # Captures price spike when wind drops below 8 m/s
+  wind_calm_threshold: 6.0           # max(0, threshold - wind_speed)
+                                     # Interaction with peak demand hours
+  wind_low_threshold: 5.0            # For nuclear x scarcity interaction (Tier 3)
+
+  # AR neighbor price normalization
+  ar_normalize_divisor: 100          # AR features divided by this to ~unit scale
+                                     # SE1/SE3/EE prices typically 0-80 EUR/MWh -> 0-0.8
+
+  # AR stability
+  ar_max_root: 0.95                  # Damp AR(2) roots if |root| > this
+                                     # Ensures stable 170h forecast horizon
+  ar_split_frac: 0.85                # Train/test split for AR model fitting
+
+  # Time cycles (derived from equations, not tunable)
+  # hour_sin/cos: sin/cos(2*pi*hour/24)  — fixed by definition
+  # month_sin/cos: sin/cos(2*pi*month/12) — fixed by definition
+
+# ============================================================================
 # Model training parameters
 # ============================================================================
 training:
@@ -263,5 +290,49 @@ training:
   ridge_alpha: 1.0                   # Ridge regularization strength
   batch_size: 512                    # Batch size for memory-efficient training
   log_offset: 55                     # Log-linear: log(price + offset), handles negative prices
+                                     # Must exceed |min_price|; Finnish min ≈ -50 EUR/MWh
                                      # Power stretch fitted automatically via Nelder-Mead
   forecast_hours: 170                # Forecast window (7.08 days)
+
+  # Power stretch bounds (Nelder-Mead optimization)
+  power_scale_min: 0.0               # scale > 0 constraint
+  power_exp_min: 0.5                 # power exponent lower bound
+  power_exp_max: 3.0                 # power exponent upper bound
+  power_optim_maxiter: 1000          # Nelder-Mead max iterations
+  power_optim_tol: 0.001             # Nelder-Mead convergence tolerance
+
+# ============================================================================
+# Duration model parameters (D(k) = CVaR_{k/24})
+# ============================================================================
+# Segment-hierarchical Ridge regression predicting duration-sorted prices.
+# Each segment x level has its own Ridge model; PAVA enforces D(k) monotonicity.
+
+duration_model:
+  log_offset: 55                     # Same as hourly model: log(D(k) + offset)
+  lambda: 0.960                      # Forgetting factor; half-life = -ln(2)/ln(lambda)
+                                     # 0.960 -> 17 days; optimal from sweep [0.950, 1.000]
+                                     # Sweep result: 0.950-0.960 peak at mean rho=0.900
+  ridge_alpha: 1.0                   # Ridge regularization (same as hourly)
+  min_train_days: 180                # Minimum expanding window before evaluation
+  exp_cap: 20.0                      # Cap linear predictor: exp(20) ≈ 485M, prevents overflow
+
+  # Segment definitions: which hours belong to each segment
+  # Total must be 24 hours, segments must not overlap
+  segments:
+    night:   [22, 23, 0, 1, 2, 3, 4, 5]    # 8 hours
+    morning: [6, 7, 8, 9]                    # 4 hours
+    midday:  [10, 11, 12, 13, 14, 15]        # 6 hours
+    evening: [16, 17, 18, 19, 20, 21]        # 6 hours
+
+  # Features used per segment (aggregated as segment means)
+  features:
+    - wind_mean              # Mean wind speed in segment hours
+    - solar_mean             # Mean solar irradiance
+    - hdd_mean               # Mean heating degree days
+    - se3_mean               # Mean SE3 neighbor price (raw EUR/MWh)
+    - se1_mean               # Mean SE1 neighbor price (raw EUR/MWh)
+    - nuclear_deficit         # Nuclear capacity deficit (0-1)
+    - is_workday             # Binary: weekday and not holiday
+    - month_sin              # sin(2*pi*month/12)
+    - month_cos              # cos(2*pi*month/12)
+    - wind_log_scarcity      # log1p(max(0, base - wind_speed))

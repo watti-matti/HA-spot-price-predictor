@@ -278,6 +278,13 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                 start_offset_hours=self.search_start_hours,
                 duration_hours=self.search_duration_hours,
             )
+            # Add consumer price equivalents (c/kWh) using configured tariffs
+            self._enrich_cheapest_with_consumer(cheapest_hours, consumer_forecast)
+
+            # D(k) duration curve forecast (7-day daily curves)
+            duration_forecast = self._compute_duration_forecast(
+                forecast, weather, ar_neighbor_hourly, tier3_data, now,
+            )
 
             # Merge into rolling history (keeps past predictions for charts)
             # New predictions overwrite older ones for the same timestamp
@@ -320,6 +327,7 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                 "consumer_price": current_consumer,
                 "consumer_forecast": combined_consumer,
                 "cheapest_hours": cheapest_hours,
+                "duration_forecast": duration_forecast,
                 "tiers_active": " + ".join(tiers),
                 "last_update": now.isoformat(),
                 "stale": False,
@@ -424,4 +432,213 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
             if f["price_eur_mwh"] < avg_price
         ]
 
+        return result
+
+    def _enrich_cheapest_with_consumer(
+        self,
+        cheapest: dict[str, Any],
+        consumer_forecast: list[dict[str, Any]],
+    ) -> None:
+        """Add consumer c/kWh prices to cheapest hours attributes.
+
+        Uses the pre-computed consumer forecast (which already includes
+        the configured tariffs, VAT, energy tax, seller margin) to look up
+        average consumer prices for each cheapest block. This avoids
+        hardcoding any rates in dashboard templates.
+        """
+        # Build timestamp → consumer price lookup
+        cons_by_ts: dict[str, float] = {
+            c["timestamp"]: c["price_eur_kwh"] for c in consumer_forecast
+        }
+        if not cons_by_ts:
+            return
+
+        # For each block size, compute avg consumer price from the block hours
+        for n in (1, 2, 3, 4, 6, 8):
+            start_key = f"cheapest_{n}h_start"
+            start_ts = cheapest.get(start_key)
+            if not start_ts:
+                continue
+
+            # Find the block hours in consumer forecast
+            try:
+                block_start = datetime.fromisoformat(start_ts)
+            except (ValueError, TypeError):
+                continue
+
+            block_prices = []
+            for hour_offset in range(n):
+                ts = (block_start + timedelta(hours=hour_offset)).isoformat()
+                if ts in cons_by_ts:
+                    block_prices.append(cons_by_ts[ts])
+
+            if block_prices:
+                avg_cons = sum(block_prices) / len(block_prices)
+                cons_key = (
+                    "cheapest_1h_consumer_price"
+                    if n == 1
+                    else f"cheapest_{n}h_avg_consumer_price"
+                )
+                cheapest[cons_key] = round(avg_cons * 100, 2)  # c/kWh
+
+        # Window average in consumer c/kWh
+        window_start = cheapest.get("search_start")
+        window_end = cheapest.get("search_end")
+        if window_start and window_end:
+            window_prices = []
+            for c in consumer_forecast:
+                if window_start <= c["timestamp"] < window_end:
+                    window_prices.append(c["price_eur_kwh"])
+            if window_prices:
+                cheapest["avg_consumer_in_window"] = round(
+                    sum(window_prices) / len(window_prices) * 100, 2
+                )
+
+    def _spot_to_consumer_ckwh(self, spot_eur_mwh: float, is_night: bool) -> float:
+        """Convert spot EUR/MWh to consumer c/kWh using configured tariffs."""
+        transfer = self.night_rate if is_night else self.day_rate
+        spot_kwh = max(0.0, spot_eur_mwh) / 1000.0
+        return (spot_kwh + self.seller_margin + transfer + self.energy_tax) \
+            * self.vat_multiplier * 100
+
+    def _compute_duration_forecast(
+        self,
+        forecast: list[dict[str, Any]],
+        weather: list[dict[str, Any]],
+        ar_neighbor_hourly: dict[str, list[float]] | None,
+        tier3_data: dict[str, float] | None,
+        now: datetime,
+    ) -> list[dict[str, Any]]:
+        """Compute 7-day D(k) duration curve forecast.
+
+        Returns list of daily entries:
+        [{"date": "2026-04-12", "d1": 8.2, "d4": 9.5, "d8": 10.1, "d24": 12.3,
+          "dk_consumer": [24 floats in c/kWh], "dk_spot": [24 floats in EUR/MWh]}, ...]
+        """
+        if not self.model.duration_model:
+            return []
+
+        import math
+        dur_model = self.model.duration_model
+        hdd_threshold = DEMAND_DEFAULTS.get("hdd_threshold", 17.0)
+
+        # Segment hour mapping from model config
+        seg_hours: dict[str, list[int]] = {}
+        for seg_name, seg_cfg in dur_model.segments.items():
+            seg_hours[seg_name] = seg_cfg.get("hours", [])
+
+        try:
+            from zoneinfo import ZoneInfo
+            tz = ZoneInfo(DEFAULT_TIMEZONE)
+        except Exception:
+            tz = None
+
+        # Group forecast hours by local date
+        by_date: dict[str, list[dict]] = {}
+        for i, entry in enumerate(forecast):
+            try:
+                ts = datetime.fromisoformat(entry["timestamp"])
+                if tz:
+                    local = ts.astimezone(tz) if ts.tzinfo else ts.replace(
+                        tzinfo=ZoneInfo("UTC")).astimezone(tz)
+                else:
+                    local = ts + timedelta(hours=3)
+            except Exception:
+                continue
+
+            date_str = local.strftime("%Y-%m-%d")
+            if date_str not in by_date:
+                by_date[date_str] = []
+
+            by_date[date_str].append({
+                "local_hour": local.hour,
+                "dow": local.weekday(),
+                "forecast_idx": i,
+                "wind": weather[i].get("wind_weighted", 0) if i < len(weather) else 3.0,
+                "solar": weather[i].get("solar_weighted", 0) if i < len(weather) else 0.0,
+                "temp": weather[i].get("temp_weighted", 0) if i < len(weather) else 5.0,
+            })
+
+        result: list[dict[str, Any]] = []
+
+        for date_str in sorted(by_date.keys()):
+            day_hours = by_date[date_str]
+            if len(day_hours) < 20:
+                continue
+
+            hour_lookup = {h["local_hour"]: h for h in day_hours}
+            dow = day_hours[0]["dow"]
+            is_holiday = date_str in self.holidays
+            is_wd = 1.0 if (dow < 5 and not is_holiday) else 0.0
+            mo = int(date_str.split("-")[1])
+
+            # Build per-segment features
+            segment_features: dict[str, dict[str, float]] = {}
+
+            for seg_name, hours_list in seg_hours.items():
+                seg_hrs = [hour_lookup[h] for h in hours_list if h in hour_lookup]
+                if len(seg_hrs) < 2:
+                    continue
+
+                wind_mean = sum(h["wind"] for h in seg_hrs) / len(seg_hrs)
+                solar_mean = sum(h["solar"] for h in seg_hrs) / len(seg_hrs)
+                temp_mean = sum(h["temp"] for h in seg_hrs) / len(seg_hrs)
+                hdd_mean = max(0.0, hdd_threshold - temp_mean)
+
+                # AR neighbor means for this segment
+                def _ar_seg_mean(prefix: str, fallback: float = 40.0) -> float:
+                    if not ar_neighbor_hourly or prefix not in ar_neighbor_hourly:
+                        return fallback
+                    idxs = [h["forecast_idx"] for h in seg_hrs]
+                    vals = [ar_neighbor_hourly[prefix][j]
+                            for j in idxs
+                            if j < len(ar_neighbor_hourly[prefix])]
+                    return sum(vals) / len(vals) if vals else fallback
+
+                nuclear_deficit = 0.05  # default when no Fingrid data
+                if tier3_data and "nuclear_mw" in tier3_data:
+                    nuclear_deficit = max(0.0, 1.0 - tier3_data["nuclear_mw"] / 4372.0)
+
+                segment_features[seg_name] = {
+                    "wind_mean": wind_mean,
+                    "solar_mean": solar_mean,
+                    "hdd_mean": hdd_mean,
+                    "se3_mean": _ar_seg_mean("se3"),
+                    "se1_mean": _ar_seg_mean("se1"),
+                    "nuclear_deficit": nuclear_deficit,
+                    "is_workday": is_wd,
+                    "month_sin": math.sin(2 * math.pi * mo / 12),
+                    "month_cos": math.cos(2 * math.pi * mo / 12),
+                    "wind_log_scarcity": math.log1p(max(0.0, 8.0 - wind_mean)),
+                }
+
+            if not segment_features:
+                continue
+
+            # Run duration model
+            day_result = dur_model.predict_day(segment_features)
+            dk_spot = day_result.get("duration_curve", [])
+            if not dk_spot:
+                continue
+
+            # Convert to consumer c/kWh (use average of day/night rate for D(k))
+            # D(k) represents cheapest k hours which span mixed day/night periods
+            dk_consumer = [
+                round(self._spot_to_consumer_ckwh(v, False), 2) for v in dk_spot
+            ]
+
+            n = len(dk_spot)
+            day_entry: dict[str, Any] = {
+                "date": date_str,
+                "weekday": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][dow],
+                "d1": dk_consumer[0] if n > 0 else None,
+                "d4": dk_consumer[3] if n > 3 else None,
+                "d8": dk_consumer[7] if n > 7 else None,
+                "d24": dk_consumer[min(23, n - 1)],
+                "dk_consumer": dk_consumer,
+                "dk_spot": [round(v, 2) for v in dk_spot],
+            }
+            result.append(day_entry)
+
+        _LOGGER.info("Duration forecast computed: %d days", len(result))
         return result

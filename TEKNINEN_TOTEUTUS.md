@@ -1,40 +1,45 @@
 # Tekninen toteutus: HA-spot-price-predictor
 
-Suomen pörssisähkön spot-hinnan ennustaminen tunnin tarkkuudella Home Assistantiin Ridge-regressiolla käyttäen fysiikkapohjaisia piirteitä ja useiden datalähteiden integrointia
+Suomen pörssisähkön spot-hinnan ennustaminen tunnin tarkkuudella Home Assistantiin log-lineaarisella Ridge-regressiolla käyttäen fysiikkapohjaisia piirteitä, kestokäyräennustetta ja useiden datalähteiden integrointia.
 
 ## Arkkitehtuuri
 
-Järjestelmä koostuu kahdesta vaiheesta: **koulutus** (Python, ajetaan ajoittain PC:llä) ja **päättely** (Home Assistant, jatkuvasti päällä).
-
-![Arkkitehtuurikuva](docs/diagrams/architecture-overview.drawio.png)
-
-*Lähde: [docs/diagrams/architecture-overview.drawio](docs/diagrams/architecture-overview.drawio)*
+Järjestelmä koostuu kahdesta vaiheesta: **koulutus** (Python, ajetaan ajoittain PC:llä) ja **päättely** (Home Assistant -integraatio, jatkuvasti päällä).
 
 ### Koulutusputki
 
 ```
 Sahkotin API  ──┐
-Open-Meteo API ─┼──> Piirteiden käsittely ──> Kaksivaiheinen Ridge ──> model_coefs.json
-mgrey.se API ───┤    (28-38 piirrettä)      Regressio
-Elering API ────┤
+Open-Meteo API ─┼──> Piirteiden käsittely ──> Log-lineaarinen Ridge ──> model_coefs.json
+Elpriset API ───┤    (17 validoitua            + Tehovenytys            (tunti- ja kesto-
+Elering API ────┤     piirrettä)                + Kestomalli)            mallin kertoimet)
 Fingrid API ────┘ (valinnainen)
 ```
 
 ### Home Assistant -käyttöönotto
 
 ```
-REST-sensorit ──> Painotettu keskiarvo ──> Spot-hintaennuste ──> Kuluttajahinta
-(7-11 kpl)        Template-sensori         (Jinja2-päättely)     + Ohjaussignaalit
-                                                                  + Kojelauta
+Open-Meteo  ──┐
+Elpriset    ──┼──> Piirrerakentaja ──> Tuntimalli     ──> Kuluttajahinta
+Elering     ──┤    (puhdas Python)     + Kestomalli       + Halvimmat tunnit
+Fingrid     ──┘                        (puhdas Python)    + 7 vrk ennuste
+Nord Pool UMM ─────────────────────────┘                  + Kojelauta
 ```
 
-![Vuokaavio](docs/diagrams/data-flow.drawio.png)
+### Kojelaudat
 
-*Lähde: [docs/diagrams/data-flow.drawio](docs/diagrams/data-flow.drawio)*
+Kaksi visualisointikojelautaa:
+
+| Kojelauta | Skripti | Tarkoitus |
+|-----------|---------|-----------|
+| `model_dashboard.html` | `model_dashboard.py` | Mallin seuranta: D(k) tarkkuus, piirteiden tärkeys, liukuva Spearman, lambda-pyyhkäisy |
+| `forecast.html` | `forecast_dashboard.py` | Reaaliaikainen 7 vrk ennuste: D(k) kestokäyrät, tuntihinnat, sääkonteksti |
 
 ---
 
 ## Datalähteet
+
+Kaikki datalähteet konfiguroidaan tiedostossa `config/regions/finland.yaml`.
 
 ### Pakolliset (ilmaiset, ei tunnistautumista)
 
@@ -42,121 +47,151 @@ REST-sensorit ──> Painotettu keskiarvo ──> Spot-hintaennuste ──> Kul
 |-------|-----------|------------|
 | [Sahkotin API](https://sahkotin.fi/prices) | Suomen Nord Pool spot-hinnat (EUR/MWh) | Rajoittamaton |
 | [Open-Meteo API](https://api.open-meteo.com) | Tuuli (120m), aurinko (45° kallistus), lämpötila | 10 000/vrk |
-| [Open-Meteo Archive](https://archive-api.open-meteo.com) | Historiallinen säädata koulutukseen | 10 000/vrk |
+| [Open-Meteo Historical Forecast](https://historical-forecast-api.open-meteo.com) | Historiallinen säädata koulutukseen | 10 000/vrk |
 
 ### Rajat ylittävät hintalähteet (ilmaiset, ei tunnistautumista)
 
 | Lähde | Alueet | Tarkoitus |
 |-------|--------|-----------|
-| [mgrey.se](https://mgrey.se/espot/api) | SE1, SE3 | Ruotsin spot-hinnat hintaeron laskentaan |
-| [Elering API](https://dashboard.elering.ee/api/nps/price) | EE | Viron spot-hinnat hintaeron laskentaan |
+| [Elpriset](https://www.elprisetjustnu.se/api/v1/prices) | SE1, SE3 | Ruotsin spot-hinnat AR-malleihin |
+| [Elering API](https://dashboard.elering.ee/api/nps/price) | EE | Viron spot-hinnat AR-malleihin |
 
-Käytetään 7 päivän liukuvan hintaeron laskentaan, josta johdetaan `import_potential_xx` / `export_potential_xx` -piirteet. Analyysissa vahvistettu vahva autokorrelaatio (testijaksolla viikkotason lag-1 r=0,54-0,73, suunnan pysyvyys 100%).
+AR(2)-mallit sovitetaan naapurihintojen poikkeamiin tuntiprofiileista. Analyysissa vahvistettu vahva autokorrelaatio (viikkotason lag-1 r=0,54-0,73, suunnan pysyvyys 100%).
 
 ### Valinnainen verkkodata (ilmainen API-avain)
 
 | Lähde | Tarkoitus |
 |-------|-----------|
-| [Fingrid Open Data](https://data.fingrid.fi) | Ydinvoimatuotanto (#188), siirtokapasiteetti SE1-FI (#24), SE3-FI (#27), EE-FI (#115) |
+| [Fingrid Open Data](https://data.fingrid.fi) | Ydinvoimatuotanto (#188) nuclear_deficit- ja niukkuuspiirteisiin |
 
-Rekisteröidy ilmaiseksi osoitteessa data.fingrid.fi. Ilman tätä avainta malli koulutetaan vain Taso 1+2 -piirteillä.
+Rekisteröidy ilmaiseksi osoitteessa data.fingrid.fi. Ilman avainta malli koulutetaan Taso 1+2 -piirteillä (15 piirrettä).
+
+### Ydinvoimaseisokkiaikataulu (ilmainen, ei avainta)
+
+| Lähde | Tarkoitus |
+|-------|-----------|
+| [Nord Pool UMM](https://ummapi.nordpoolgroup.com/messages) | Suunnitellut ydinvoimaseisokit ennustehorisontin kapasiteettiin |
 
 ---
 
-## Mallin piirteet
+## Piirteiden suunnittelu
 
-### Taso 1: Peruspiirteet (28) — ei API-avaimia tarvita
+Malli v6.1 käyttää 17 merkkivalidoitua piirrettä. Kaikki säädettävät parametrit ovat `config/regions/finland.yaml` -tiedoston `features`-osiossa.
 
-| Kategoria | Määrä | Piirteet |
-|-----------|-------|----------|
-| Energiallähteet | 3 | `wind_speed_weighted`, `solar_irradiance_weighted`, `temperature_weighted` |
-| Aikajaksot | 4 | `hour_sin/cos`, `month_sin/cos` |
-| Kysyntämallit | 8 | `double_peak_am/pm` (Gauss, keskipiste 9h/19h), viikonloppuvariantit, `sauna_hour`, `monday_ramp`, `is_holiday`, `is_weekend` |
-| Lämpökysyntä | 6 | `hdd`, `hdd_sq`, `daylight_deficit`, ristitermit (`wind_x_hdd`, `solar_x_deficit`, `temp_x_hdd`) |
-| Fysiikaaliset korjauskertiomet | 3 | `wind_power_density` (tiheykorjattu), `solar_power_temp` (NOCT-malli), `renewable_surplus` |
-| Niukkuus | 4 | `scarcity_indicator`, `wind_drought_penalty`, `cold_morning_stress`, `cold_calm_dark` (Dunkelflaute) |
+### Taso 1: Peruspiirteet (11) — ei API-avaimia tarvita
 
-### Taso 2: Rajat ylittävän kaupan piirteet (6) — ei API-avaimia tarvita
+| Kategoria | Piirteet | Kertoimen etumerkki |
+|-----------|----------|:---:|
+| Tarjonta | `wind_speed_weighted`, `solar_irradiance_weighted` | negatiivinen (enemmän tarjontaa = alempi hinta) |
+| Aikajaksot | `hour_sin`, `hour_cos`, `month_sin`, `month_cos` | syklinen |
+| Kalenteri | `is_holiday` | negatiivinen (vähäisempi kysyntä) |
+| Lämpökysyntä | `hdd_sq` (lämmitystarveluvun neliö, kynnys 17°C) | positiivinen |
+| Tuulen epälineaarisuus | `wind_log_scarcity` = log1p(max(0, 8-tuuli)) | positiivinen (vähäinen tuuli = korkeampi hinta) |
+| Tuuli × kysyntä | `wind_calm_x_peak_am` = max(0, 6-tuuli) × aamuhuippu (klo 9, σ=1,8) | positiivinen |
+| Tuuli × kysyntä | `wind_calm_x_peak_pm` = max(0, 6-tuuli) × iltahuippu (klo 19, σ=2,0) | positiivinen |
 
-Johdettu 7 päivän liukuvasta hintaerosta:
+### Taso 2: AR-naapurihinnat + vientipotentiaali (+4) — ei API-avaimia
+
+AR(2)-mallit ennustavat rajat ylittäviä naapurihintoja käyttäen arkipäivä/viikonloppu-tuntiprofiileja ja vaimennettua autoregressiivista poikkeamaa.
+
+| Piirre | Lähde | Menetelmä |
+|--------|-------|-----------|
+| `ar_se1` | Ruotsi SE1 | AR(2) poikkeamasta tuntityyppiprofiilista, normalisoitu ÷100 |
+| `ar_se3` | Ruotsi SE3 | AR(2) poikkeamasta tuntityyppiprofiilista, normalisoitu ÷100 |
+| `ar_ee` | Viro | AR(2) poikkeamasta tuntityyppiprofiilista, normalisoitu ÷100 |
+| `export_potential_se3` | SE3-hintaero | max(0, -spread_7d_fi_se3) |
+
+AR-poikkeama vaimennetaan (maksimijuuri < 0,95), joten ennusteet konvergoituvat päiväprofiiliin 24 tunnissa, mikä takaa vakauden koko 170 tunnin ennusteikkunassa.
+
+### Taso 3: Ydinvoimapiirteet (+0-2) — vaatii Fingrid API-avaimen
 
 | Piirre | Kaava | Merkitys |
 |--------|-------|----------|
-| `import_potential_se1` | max(0, spread_7d_fi_se1) | Hintakannustin tuoda SE1:stä |
-| `import_potential_se3` | max(0, spread_7d_fi_se3) | Hintakannustin tuoda SE3:sta |
-| `import_potential_ee` | max(0, spread_7d_fi_ee) | Hintakannustin tuoda Virosta |
-| `export_potential_se1` | max(0, -spread_7d_fi_se1) | Hintakannustin viedä SE1:een |
-| `export_potential_se3` | max(0, -spread_7d_fi_se3) | Hintakannustin viedä SE3:een |
-| `export_potential_ee` | max(0, -spread_7d_fi_ee) | Hintakannustin viedä Viroon |
+| `nuclear_deficit` | max(0, 1 - nuclear_mw/4372) | Ydinvoimakapasiteetin puuteosuus |
+| `nuclear_x_scarcity` | nuclear_deficit × niukkuusindikaattori | Ydinvoimaseisokki vahvistaa sääpohjaista niukkuutta |
 
-### Taso 3: Verkkoinfrastruktuuripiirteet (0-4) — vaatii Fingrid API-avaimen
-
-| Piirre | Lähde | Normalisointi |
-|--------|-------|---------------|
-| `nuclear_mw` | Fingrid #188 | 0-1 (0-4372 MW) |
-| `import_capacity_se1` | Fingrid #24 | 0-1 (0-1500 MW) |
-| `import_capacity_se3` | Fingrid #27 | 0-1 (0-1200 MW) |
-| `import_capacity_ee` | Fingrid #115 | 0-1 (0-1016 MW) |
-
-#### Tunnettu rajoite: ydinvoimalaitosten huoltoseisokit
-
-`nuclear_mw`-piirre käyttää Fingridin **reaaliaikaista** ydinvoimatuotannon mittausta (tietojoukko #188), ei ennustetta. Malli reagoi ydinvoimakapasiteetin muutoksiin yhden päivitysjakson aikana (6 tuntia), mutta ei ennusta niitä etukäteen.
-
-Suomen ydinvoimakapasiteetti (yhteensä 4 394 MW):
-- Olkiluoto 1: 890 MWe
-- Olkiluoto 2: 890 MWe
-- Olkiluoto 3: 1 600 MWe
-- Loviisa 1: 507 MWe
-- Loviisa 2: 507 MWe
-
-Suunnitellut huoltoseisokit (tyypillisesti keväällä/syksyllä) nostavat hintoja merkittävästi. Kun reaktori pysähtyy, mallin `nuclear_mw`-piirre laskee ja seuraavat ennusteet heijastavat korkeampia hintoja. Alas-ajon ensimmäisten tuntien aikana ennusteet voivat kuitenkin olla epätarkkoja kunnes piirteen arvo päivittyy.
-
-Fingrid ei tarjoa ydinvoimakohtaista tuotantoennustetta rajapinnassaan. Suunnitellut huoltoaikataulut julkaistaan [Fingridin verkkosivuilla](https://www.fingrid.fi/sahkomarkkinat/) ja ENTSO-E REMIT -viesteissä. Ennustetarkkuus voi tilapäisesti heiketä suunniteltujen ydinvoimahuoltoseisokkien siirtymävaiheen aikana.
+**Ennakollinen seisokkiraportointi:** Suunnitellut seisokkiaikataulut haetaan [Nord Pool UMM -alustalta](https://umm.nordpoolgroup.com/) (julkinen rajapinta, ei avainta). Koordinaattori laskee ydinvoiman saatavuuden tunneittain ennustehorisontissa.
 
 ### Piirteiden lukumäärä konfiguraation mukaan
 
 | Konfiguraatio | Piirteet | API-avaimet |
 |---------------|----------|-------------|
-| Vain Taso 1 | 28 | Ei mitään |
-| Taso 1 + 2 | 34 | Ei mitään |
-| Taso 1 + 2 + 3 | 38 | 1 (Fingrid, ilmainen) |
+| Vain Taso 1 | 11 | Ei mitään |
+| Taso 1 + 2 | 15 | Ei mitään |
+| Taso 1 + 2 + 3 | 17 | 1 (Fingrid, ilmainen) |
 
 ---
 
 ## Malliarkkitehtuuri
 
-### Kaksivaiheinen Ridge-regressio paloittaisella kalibroinnilla
+### Tuntimalli: Log-lineaarinen Ridge-regressio
 
-**Vaihe 1 (perusmalli):**
-- Lineaarinen polynomi (aste 1) 28-38 piirteellä
-- Painotetut normaaliyhtälöt: beta = (X'WX + alpha*I)^(-1) X'Wy
-- Aikapainotus eksponentiaalisella vaimenemisella: w(t) = exp(-ln2 * ikä_tunnit / (365 * 24))
-- Ridge alpha = 1,0
+**Ennustekaava:** `hinta = skaala × max(0, exp(Σ kerroin_i × piirre_i + vakio) - 55) ^ potenssi`
 
-**Vaihe 2 (paloittainen kalibrointi):**
-- Laajennetut piirteet: vaiheen 1 ennuste + 3 ReLU-murtopistettä
-  - pw_relu_20 = max(0, s1 - 20)
-  - pw_relu_40 = max(0, s1 - 40)
-  - pw_relu_120 = max(0, s1 - 120)
-- Korjaa systemaattisen harhan eri hintatasoilla
+Log-muunnos käsittelee luonnollisesti epälineaarisen hinta-niukkuussuhteen: lähes lineaarinen matalilla hinnoilla, eksponentiaalinen vahvistus korkeilla hinnoilla.
 
-**Koulutus:** 4 vuoden historiallinen data, aikajärjestetty 85/15 jako, prosessointikehys (512 riviä).
+- Ridge-regressio kohteella log(hinta + 55)
+- 17 merkkivalidoitua piirrettä
+- Tehovenytys (skaala, eksponentti) sovitetaan Nelder-Mead-optimoinnilla
+- Aikapainotus: puoliintumisaika 120 päivää
+- Ridge alpha = 1,0, laajennettu matriisi (ei sakkoa vakiotermille)
 
-**Tuloste:** `model_coefs.json` sisältäen vaiheiden 1 ja 2 kertoimet, piirteiden nimet ja tasojen tiedot.
+**Koulutus:** 4 vuoden historiallinen data, aikajärjestetty 85/15 jako, eräkäsittely (512 riviä).
+
+### Kestomalli: Segmenttihierarkkinen Ridge + PAVA
+
+Ennustaa D(k) = keskimääräisen spot-hinnan halvimmille k tunnille päivässä.
+
+**Arkkitehtuuri:**
+- 4 päiväsegmenttiä: yö (22-05, 8h), aamu (06-09, 4h), keskipäivä (10-15, 6h), ilta (16-21, 6h)
+- Jokainen (segmentti, kestotaso): itsenäinen Ridge-malli 10 piirteellä
+- Log-lineaarinen kohde: log(D(k) + 55)
+- Unohtamiskerroin λ = 0,960 (puoliintumisaika 17 päivää, optimoitu pyyhkäisyllä)
+- PAVA isotoninen jälkikäsittely: pakottaa D(1) ≤ D(2) ≤ ... ≤ D(N)
+- Segmentistä päivään -rekonstruktio: eristä lajitellut hinnat → yhdistä → uudelleenlajittelu → 24h D(k)
+
+**Kestomallin piirteet:**
+`wind_mean`, `solar_mean`, `hdd_mean`, `se3_mean`, `se1_mean`, `nuclear_deficit`, `is_workday`, `month_sin`, `month_cos`, `wind_log_scarcity`
+
+**Suorituskyky (Spearmanin järjestyskorrelaatio):**
+
+| Kestotaso | Käyttötapaus | ρ (kaikki) | ρ (viim. 365 pv) |
+|:-:|:-:|:-:|:-:|
+| D(1) | Halvin tunti | 0,895 | 0,898 |
+| D(4) | Halvimmat 4h | 0,904 | 0,906 |
+| D(8) | Halvimmat 8h | 0,929 | 0,921 |
+| D(24) | Päivän keskiarvo | 0,935 | 0,937 |
+
+**Tuloste:** `model_coefs.json` sisältäen tuntimallin kertoimet, AR-mallin parametrit ja kestomallin kertoimet.
+
+---
+
+## Konfiguraatio
+
+Kaikki säädettävät parametrit on keskitetty tiedostoon `config/regions/finland.yaml`.
+
+| Osio | Parametrit |
+|------|-----------|
+| `region` | Nimi, aikavyöhyke, leveysaste, valuutta, tarjousalue |
+| `price_source` | Sahkotin API, yksikkömuunnos |
+| `weather_source` | Open-Meteo URL:t, 7 sijainnin määrittelyt kapasiteettipainoilla |
+| `neighbor_price_sources` | Elpriset (SE1, SE3), Elering (EE) rajapinnat |
+| `grid_sources` | Fingridin ydinvoimatietojoukko |
+| `demand` | HDD-kynnys, huipputunnit, saunatunnit, tuulen nimellisarvo |
+| `holidays` | Kiinteät, pääsiäispohjaiset ja erikoissääntöpyhäpäivät |
+| `consumer_pricing` | ALV, energiavero, myyjän marginaali, operaattoritariffit |
+| `features` | Tuulikynnykset, AR-normalisointi, AR-vakausrajat |
+| `training` | Vuodet, testijako, puoliintumisaika, Ridge alpha, tehovenytysrajat |
+| `duration_model` | Lambda, segmentit, piirteet, log-offset, exp-katto |
 
 ---
 
 ## Kuluttajahinta ja ohjaussignaalit
 
-**Kaava:** `(spot_EUR_MWh / 1000 + marginaali + siirtohinta + energiavero) × ALV`
+**Kaava:** `(max(0, spot_EUR_MWh) / 1000 + marginaali + siirtohinta + energiavero) × ALV × 100` [c/kWh]
 
-Konfiguroitavissa operaattorikohtaisesti tiedostossa `finland.yaml`. Oletus: Elenia (päivä 3,61, yö 2,20 c/kWh), ALV 25,5%, energiavero 2,325 c/kWh. Jos käytössä on yleissiirto niin yö- ja päivähinta asetetaan samaksi.
+Konfiguroitavissa operaattorikohtaisesti tiedostossa `finland.yaml`. Oletus: Elenia (päivä 3,61, yö 2,20 c/kWh), ALV 25,5%, energiavero 2,325 c/kWh, myyjän marginaali 0,00 c/kWh (aseta sähkösopimuksesi mukaan).
 
-**Tulosignaalit (170 tunnin listat):**
-
-| Signaali | Alue | Käyttötarkoitus |
-|----------|------|-----------------|
-| `price_with_tariff_forecast` | EUR/kWh | Absoluuttinen kuluttajahinta |
 **Sensorit:**
 
 **Ennustesensorit (luodaan aina):**
@@ -164,7 +199,8 @@ Konfiguroitavissa operaattorikohtaisesti tiedostossa `finland.yaml`. Oletus: Ele
 | Sensori | Yksikkö | Kuvaus |
 |---------|---------|--------|
 | Spot Price Forecast | EUR/MWh | Ennustettu spot-hinta + 170h ennuste |
-| Consumer Price | EUR/kWh | Kokonaishinta sisältäen marginaalin, siirtohinnan, ALV:n, energiaveron |
+| Consumer Price | EUR/kWh | Kokonaishinta sis. marginaalin, siirtohinnan, ALV:n, energiaveron |
+| Duration Forecast | c/kWh | D(k) kestokäyrät: päivittäinen kustannus käyttökeston mukaan (7 vrk ennuste) |
 | Cheapest Hours | aikaleima | Halvimmat 1h/2h/3h/4h/6h/8h jaksot säädettävässä hakuikkunassa |
 | Week Price Stats | EUR/kWh | Kuluttajahinnan min/keskiarvo/max ennusteikkunassa |
 
@@ -173,11 +209,11 @@ Konfiguroitavissa operaattorikohtaisesti tiedostossa `finland.yaml`. Oletus: Ele
 | Sensori | Yksikkö | Kuvaus |
 |---------|---------|--------|
 | Spot Electricity Price | EUR/kWh | Todellinen ostohinta Nordpoolista jatkuvalla aikajanalla |
-| Spot Electricity Selling Price | EUR/kWh | Spot-hinta miinus aurinkosähkön myyntipalkkio |
+| Spot Electricity Selling Price | EUR/kWh | Spot miinus aurinkosähkön myyntipalkkio |
 
-Nordpool-sensorit yhdistävät raakamuotoisen tänään/huomenna-datan jatkuvaksi aikajanaksi, mikä mahdollistaa toteutuneiden ja ennustettujen hintojen vertailun kojelaudalla.
+**Duration Forecast** -sensori on ensisijainen kustannussuunnittelutyökalu. Sen tila on päivän D(4) kuluttajahinta c/kWh. Attribuutit sisältävät `today_d1`, `today_d4`, `today_d8`, `today_d24` avaintasoille sekä `daily_forecast` täydet 7 vrk D(k)-käyrät (24 tasoa per päivä, sekä kuluttaja-c/kWh että spot-EUR/MWh). Kaikki kuluttajahinnat käyttävät konfiguroituja tariffeja — ei kovakoodattuja arvoja.
 
-**Cheapest Hours** -sensori on ensisijainen automaatio-ohjauksen työkalu. Sen attribuutit tarjoavat alkamisajat ja keskihinnat halvimmille peräkkäisille N tunnin jaksoille seuraavan 24 tunnin aikana sekä listan kaikista tunneista, joiden hinta on keskiarvon alapuolella. Tämä soveltuu ohjattavien kuormien ajoitukseen (sähköauton lataus, lämminvesivaraaja, lämpöpumput) edullisimpiin aikaikkunoihin.
+**Cheapest Hours** -sensori tarjoaa alkamisajat ja keskihinnat halvimmille peräkkäisille N tunnin jaksoille säädettävässä hakuikkunassa sekä listan keskiarvon alittavista tunneista.
 
 ---
 
@@ -185,128 +221,88 @@ Nordpool-sensorit yhdistävät raakamuotoisen tänään/huomenna-datan jatkuvaks
 
 ### Pyhäpäivien ja arkipäivien tunnistus
 
-Malli käyttää arkipäivä/pyhäpäivä-tietoa kysyntämallien valintaan (arkipäivän huiput vs viikonloppu/pyhäpäivä). Malli tukee kahta vaihtoehtoista toteutusta, joiden välillä voi vaihtaa `holidays.ha_workday_integration` -asetuksella aluekonfiguraatiossa.
+Malli käyttää arkipäivä/pyhäpäivä-tietoa kysyntämallien valintaan. Kaksi vaihtoehtoa `holidays.ha_workday_integration` -asetuksella.
 
 #### Vaihtoehto A: HA:n Workday-integraatio (suositeltu)
 
-Käyttää Home Assistantin sisäänrakennettua [Workday-integraatiota](https://www.home-assistant.io/integrations/workday/), joka tunnistaa pyhäpäivät automaattisesti yhteisön ylläpitämistä kalentereista.
+Käyttää Home Assistantin [Workday-integraatiota](https://www.home-assistant.io/integrations/workday/) pyhäpäivien automaattiseen tunnistukseen.
 
 **Asennus:**
 1. **Asetukset** → **Laitteet ja palvelut** → **Lisää integraatio** → hae **Workday**
 2. Aseta **Maa** arvoon `FI` (Suomi)
-3. Jätä oletusasetukset (sulkee pyhäpäivät ja viikonloput arkipäivistä)
-4. Integraatio luo `binary_sensor.workday_sensor` — **on** = arkipäivä, **off** = pyhäpäivä/viikonloppu
-
-**Miten ennustaja käyttää sitä:**
-- Koordinaattori kutsuu `workday.check_date` -palvelua jokaiselle tunnille 170h ennusteikkunassa
-- Tämä palauttaa kunkin tulevan päivän arkipäivätiedon huomioiden kaikki Suomen pyhäpäivät
-- Ei ylläpidettäviä pyhäpäivälistoja — Workday-integraatio päivittyy automaattisesti HA-päivitysten myötä
-
-**Vaihto A-vaihtoehtoon:** Aseta `holidays.ha_workday_integration: true` tiedostossa `finland.yaml`. Tämä on oletusasetus.
+3. Integraatio luo `binary_sensor.workday_sensor`
 
 #### Vaihtoehto B: Sisäänrakennettu pyhäpäivälaskuri
 
-Käyttää aluekonfiguraatiotiedostossa (`finland.yaml`) määriteltyjä pyhäpäiväsääntöjä sisäänrakennetulla pääsiäisalgoritmilla.
-
-**Milloin käyttää B-vaihtoehtoa:**
-- Mallin testaus Home Assistantin ulkopuolella (koulutusputki käyttää aina B-vaihtoehtoa)
-- Home Assistant ilman Workday-integraatiota
-- Käyttöönotto alueelle, jota Workday-integraation pyhäpäiväkirjasto ei vielä tue
-
-**Vaihto B-vaihtoehtoon:** Aseta `holidays.ha_workday_integration: false` tiedostossa `finland.yaml`.
-
-### Sensorit tasoittain
-
-Kaikki sensorit luodaan automaattisesti koulutetun mallin aktiivisten tasojen perusteella.
-
-**Taso 1 (aina mukana):** 7 Open-Meteo REST-sensoria, painotettu keskiarvo, spot-hintaennuste, kuluttajahinta.
-
-**Taso 2 (jos aktiivinen):** 3 rajat ylittävää hinta-REST-sensoria (mgrey.se, Elering), hintaeron laskenta.
-
-**Taso 3 (jos aktiivinen):** 4 Fingrid REST-sensoria (ydinvoima, SE1, SE3, EE kapasiteetti).
+Käyttää `finland.yaml` -tiedoston pyhäpäiväsääntöjä. Koulutusputki käyttää aina tätä vaihtoehtoa.
 
 ---
 
 ## Alueellinen lokalisointi
 
-Järjestelmää ohjaa yksittäinen aluekonfiguraatiotiedosto (`config/regions/finland.yaml`). Uuden alueen tukeminen:
+Järjestelmää ohjaa aluekonfiguraatiotiedosto (`config/regions/finland.yaml`). Uuden alueen tukeminen:
 
-1. **Tunnista säämittauspisteet** — etsi 5-8 maantieteellistä sijaintia kohdemaasta, jotka edustavat tuulivoiman, aurinkoenergian ja energiankulutuksen keskittymiä. Sijainnit painotetaan asennetun kapasiteetin (tuuli, aurinko) ja väestötiheyden (lämpötila/kysyntä) mukaan. Käytä alla olevaa tekoälykehotepohjaa.
-2. **Luo uusi YAML-tiedosto** (esim. `sweden.yaml`) tunnistetuilla sijainneilla, painoilla ja paikallisilla parametreilla.
-3. **Määrittele paikallinen hinta-API** — etsi ilmainen rajapinta, joka tarjoaa day-ahead spot-hinnat kohteen tarjousalueelle.
-4. **Konfiguroi pyhäpäivät** — kiinteät päivämäärät, pääsiäiseen sidotut päivät ja maakohtaiset erikoissäännöt.
-5. **Lisää naapurimaiden hintalähteet** rajat ylittäville piirteille.
-6. **Aseta kuluttajahinnoittelu** — ALV-kanta, energiavero ja jakeluverkko-operaattorien tariffit.
-7. **Aja koulutus** halutulle alueelle esimerkiksi komennolla `--region sweden`.
+1. **Tunnista säämittauspisteet** — 5-8 sijaintia, painotettuna asennetun kapasiteetin ja väestötiheyden mukaan
+2. **Luo uusi YAML-tiedosto** (esim. `sweden.yaml`)
+3. **Määrittele paikallinen hinta-API** — ilmainen day-ahead spot-hintarajapinta
+4. **Konfiguroi pyhäpäivät** — kiinteät, pääsiäispohjaiset ja erikoissäännöt
+5. **Lisää naapurihintalähteet** rajat ylittäville piirteille
+6. **Aseta kuluttajahinnoittelu** — ALV, energiavero, operaattoritariffit
+7. **Aja koulutus** komennolla `--region sweden`
 
-Valinnaiset datalähteet ohitetaan automaattisesti, jos niiden API-avain puuttuu tai aluekonfiguraatio ei sisällä niitä.
-
-Katso englanninkielisestä dokumentaatiosta ([TECHNICAL_GUIDE.md](TECHNICAL_GUIDE.md#finding-weather-locations-for-a-new-region)) tekoälykehotepohja uusien alueiden säämittauspisteiden tunnistamiseen.
+Katso englanninkielisestä dokumentaatiosta ([TECHNICAL_GUIDE.md](TECHNICAL_GUIDE.md#regional-localization)) tekoälykehotepohja uusien alueiden säämittauspisteiden tunnistamiseen.
 
 ---
 
 ## Tarkkuus ja uudelleenkoulutus
 
-### Nykyinen suorituskyky (90 päivän puoliintumisaika, 2 vuoden koulutusdata, aikavyöhykekorjattu)
+### Nykyinen suorituskyky (v6.1, 4 vuoden koulutusdata, 120 päivän puoliintumisaika)
 
-| Konfiguraatio | MAE (EUR/MWh) | R² |
-|---------------|:---:|:---:|
-| Taso 1+2+3 (38 piirrettä) | **3,02** | **0,621** |
+**Tuntimalli:**
 
-Huipputuntien poikkeama aikavyöhykekorjauksen jälkeen: aamuhuippu (klo 9) -0,6 EUR/MWh, iltahuippu (klo 19) -0,6 EUR/MWh. Aiemmissa versioissa aamuhuipun poikkeama oli +4,0 EUR/MWh kovakoodatun UTC+2-siirtymän vuoksi, joka ei huomioinut kesäaikaa (EEST=UTC+3).
+| Mittari | Arvo |
+|---------|:---:|
+| MAE | 23,6 EUR/MWh |
+| RMSE | 47,1 EUR/MWh |
+| R² | 0,522 |
 
-### Miksi uudelleenkoulutus on tarpeen
+**Kestomalli (Spearmanin ρ, viimeiset 365 päivää):**
 
-Malli käyttää kiinteitä kertoimia, jotka eivät päivity automaattisesti. Suomen sähkömarkkina kehittyy nopeasti:
-- Tuulivoimakapasiteetti kasvaa (~7 GW asennettu, kasvaa vuosittain)
-- Uudet siirtoyhteysprojektit ja kapasiteettimuutokset
-- Muuttuvat kysyntämallit sähkölämmityksen ja sähköautojen yleistyessä
+| D(k) | Käyttötapaus | ρ |
+|:---:|:-:|:---:|
+| D(4) | Halvimmat 4h | 0,906 |
+| D(8) | Halvimmat 8h | 0,921 |
+| D(24) | Päivän keskiarvo | 0,937 |
 
 ### Suositeltu uudelleenkoulutustaajuus
 
 **Kouluta uudelleen 3-4 kuukauden välein (neljännesvuosittain).**
 
-| Koulutusväli | Keskimääräinen MAE (EUR/MWh) |
-|:---:|:---:|
-| 90 päivää | 3,29 |
-| 120 päivää | **3,27** (optimaalinen) |
-| 180 päivää | 3,47 |
-| 365 päivää | 3,72 |
-
-### Milloin kouluttaa uudelleen
-
-- **Rutiini:** 3-4 kuukauden välein osana säännöllistä ylläpitoa
-- **Merkittävä markkinamuutos:** uusi ydinvoimayksikkö, uusi siirtoyhteys, sääntelymuutos
-- **Suorituskyvyn heikkeneminen:** kun havaittu aamuhuipun/iltahuipun ennustepoikkeama ylittää ±2 EUR/MWh
-
 ### Uudelleenkoulutuksen suorittaminen
 
 ```bash
-# PC:llä (vaatii Pythonin numpy, pandas, scipy -kirjastoilla)
 cd HA-spot-price-predictor
 pip install -r requirements.txt
 
 # Kouluta uusimmalla datalla
 export FINGRID_API_KEY=avaimesi  # valinnainen
-python -m src.train_model --region finland --years 2
+python -m src.train_model --region finland
 
-# Arvioi tarkkuus
-python -m src.evaluate --region finland
+# Luo seurantakojelauta
+python model_dashboard.py
 
-# Lataa Home Assistantiin palvelukutsulla:
-# spot_price_predictor.upload_coefficients
+# Luo 7 vrk ennustekojelauta
+python forecast_dashboard.py
+
+# Kopioi kertoimet HA-integraatioon
+cp output/model_coefs.json custom_components/spot_price_predictor/data/model_coefs_default.json
 ```
 
 ### Puoliintumisaika-parametri
 
-`half_life_days` (oletus: 90) määrittää kuinka nopeasti malli unohtaa vanhan koulutusdatan. Se **ei** määritä uudelleenkoulutustaajuutta — se määrittää miten malli painottaa historiallista dataa koulutettaessa:
+`half_life_days` (oletus: 120) määrittää miten malli painottaa historiallista dataa koulutettaessa. 120 päivää vanha data painolla 50%. Optimoitu Suomen nopeasti kasvavalle tuulivoimakapasiteetille.
 
-- **90 päivää (nykyinen):** 90 päivää vanha data painolla 50%, 180 päivää vanha 25%. Sopeutuu hyvin Suomen nopeasti kasvavaan tuulivoimakapasiteettiin. Vahvistettu optimaaliseksi aikavyöhykekorjauksen jälkeen (MAE=3,19, aamuhuipun poikkeama -0,6).
-- **365 päivää (aiempi):** Liian hidas — yhdistettynä UTC+2 aikavyöhykevirheeseen aiheutti +4 EUR/MWh systemaattisen poikkeaman aamuhuipuissa.
-
-### Tulevaisuus: automaattinen uudelleenkoulutus
-
-Mahdollinen jatkokehitys olisi GitHub Actions -työnkulku, joka kouluttaa mallin neljännesvuosittain ja julkaisee päivitetyt kertoimet HACS-julkaisuna. Käyttäjät saisivat päivitetyn mallin automaattisesti HACS-päivityksenä.
+Kestomalli käyttää erillistä unohtamiskerrointa λ = 0,960 (puoliintumisaika 17 päivää), optimoitu sääregiimimuutosten seuraamiseen.
 
 ---
 
@@ -317,19 +313,31 @@ HA-spot-price-predictor/
 ├── README.md
 ├── TECHNICAL_GUIDE.md           # Englanninkielinen dokumentaatio
 ├── TEKNINEN_TOTEUTUS.md         # Tämä dokumentti (suomeksi)
-├── docs/diagrams/               # draw.io-arkkitehtuurikaaviot
-├── requirements.txt
-├── .env.example                 # FINGRID_API_KEY-paikkamerkki
-├── .gitignore
-├── custom_components/
-│   └── spot_price_predictor/    # HACS-integraatio
-├── src/
-│   ├── train_model.py           # Koulutusputken pääohjelma
-│   ├── features.py              # Dynaaminen piirre-engineering
-│   ├── data_sources.py          # API-asiakasohjelmat (konfiguraatio-ohjattu)
-│   ├── holidays.py              # Pyhäpäivälaskuri
-│   └── evaluate.py              # Tarkkuusmittarit + visualisointi
 ├── config/regions/
-│   └── finland.yaml             # Suomen aluekonfiguraatio
-└── output/                      # Mallin tuotokset
+│   └── finland.yaml             # Keskitetty konfiguraatio (kaikki parametrit)
+├── src/
+│   ├── train_model.py           # Koulutusputki
+│   ├── features.py              # Piirteiden käsittely (koulutus)
+│   ├── data_sources.py          # API-asiakasohjelmat (koulutus)
+│   └── holidays.py              # Pyhäpäivälaskuri
+├── custom_components/
+│   └── spot_price_predictor/    # HA HACS -integraatio
+│       ├── model.py             # Puhdas Python päättely (tunti + kesto)
+│       ├── features.py          # Puhdas Python piirrerakentaja
+│       ├── coordinator.py       # HA-datakoordinaattori
+│       ├── sensor.py            # HA-sensorientiteetit
+│       ├── api_client.py        # Asynkroniset API-asiakkaat
+│       ├── const.py             # Vakiot ja oletusarvot
+│       └── data/
+│           ├── model_coefs_default.json  # Esiasennettu malli
+│           └── finland.yaml              # Esiasennettu konfiguraatio
+├── ha_dashboard.yaml            # Home Assistant Lovelace -kojelauta (ApexCharts + Mushroom)
+├── model_dashboard.py           # Seurantakojelauta
+├── forecast_dashboard.py        # Ennustekojelauta
+├── studies/                     # Arkistoidut analyysiskriptit
+├── tests/                       # 98 yksikkötestiä
+└── output/                      # Tuotetut artefaktit
+    ├── model_coefs.json
+    ├── model_dashboard.html
+    └── forecast.html
 ```

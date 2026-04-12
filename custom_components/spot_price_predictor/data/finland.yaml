@@ -22,8 +22,8 @@ region:
 price_source:
   name: "sahkotin"
   url: "https://sahkotin.fi/prices"
-  unit: "EUR/MWh"                    # Raw unit from API (value / 10)
-  divisor: 10                        # API returns value in 0.1 EUR/MWh
+  unit: "EUR/MWh"                    # Raw unit from API
+  divisor: 1                         # API returns value directly in EUR/MWh
   vat_param: false                   # Whether to request VAT-included prices
 
 # ============================================================================
@@ -32,7 +32,7 @@ price_source:
 weather_source:
   name: "open-meteo"
   forecast_url: "https://api.open-meteo.com/v1/forecast"
-  archive_url: "https://archive-api.open-meteo.com/v1/archive"
+  archive_url: "https://historical-forecast-api.open-meteo.com/v1/forecast"
   wind_height_m: 120                 # Hub height for wind speed
   solar_tilt_deg: 45                 # Panel tilt angle (south-facing)
   variables:
@@ -149,39 +149,15 @@ spread_window_days: 7                # Rolling average window for spread calcula
 # Register for free at https://data.fingrid.fi
 
 grid_sources:
+  # Nuclear production is used to derive the nuclear_x_scarcity interaction
+  # feature (nuclear deficit x weather scarcity). Raw nuclear_mw and flow
+  # features were removed due to sign instability in Ridge regression.
   - name: "fingrid_nuclear"
     env_key: "FINGRID_API_KEY"
     url: "https://data.fingrid.fi/api/datasets/188/data"
     feature_name: "nuclear_mw"
     max_value: 4372                  # Total Finnish nuclear capacity (MW)
     resolution: "3min"               # Needs hourly aggregation
-    update_interval_hours: 1
-
-  # Commercial flows: negative = import to FI, positive = export from FI
-  # These reflect actual market-driven power exchange (better than capacity)
-  # Day-ahead capacity datasets (24/25/27) returned empty as of Apr 2025
-  - name: "fingrid_flow_se1"
-    env_key: "FINGRID_API_KEY"
-    url: "https://data.fingrid.fi/api/datasets/31/data"
-    feature_name: "flow_fi_se1"      # Negative = import to FI from SE1
-    max_value: 5500                  # Peak flows can exceed line capacity (MW)
-    resolution: "15min"
-    update_interval_hours: 1
-
-  - name: "fingrid_flow_se3"
-    env_key: "FINGRID_API_KEY"
-    url: "https://data.fingrid.fi/api/datasets/32/data"
-    feature_name: "flow_fi_se3"
-    max_value: 1200
-    resolution: "15min"
-    update_interval_hours: 1
-
-  - name: "fingrid_flow_ee"
-    env_key: "FINGRID_API_KEY"
-    url: "https://data.fingrid.fi/api/datasets/140/data"
-    feature_name: "flow_fi_ee"
-    max_value: 1016                  # EstLink 1+2 combined
-    resolution: "15min"
     update_interval_hours: 1
 
 # ============================================================================
@@ -255,26 +231,54 @@ holidays:
 
 consumer_pricing:
   vat_multiplier: 1.255              # 25.5% VAT (updated Sep 2024)
-  energy_tax_eur_kwh: 0.02253        # Electricity tax class I (2025)
+  energy_tax_eur_kwh: 0.02325        # Electricity tax class I (2026)
+  seller_margin_eur_kwh: 0.0         # Energy seller's margin (excl. VAT, from contract)
 
   operators:
     - name: "Elenia"
-      day_rate_eur_kwh: 0.0560
-      night_rate_eur_kwh: 0.0430
+      day_rate_eur_kwh: 0.0361       # Updated April 2026
+      night_rate_eur_kwh: 0.0220     # Updated April 2026
 
-    - name: "Caruna South"
-      day_rate_eur_kwh: 0.0590
-      night_rate_eur_kwh: 0.0450
+    - name: "Caruna Espoo"
+      day_rate_eur_kwh: 0.0221
+      night_rate_eur_kwh: 0.0221
 
     - name: "Caruna North"
-      day_rate_eur_kwh: 0.0520
-      night_rate_eur_kwh: 0.0410
+      day_rate_eur_kwh: 0.0407
+      night_rate_eur_kwh: 0.0249
 
-    - name: "Helen (Helsinki)"
-      day_rate_eur_kwh: 0.0537
-      night_rate_eur_kwh: 0.0403
+    - name: "Helen"
+      day_rate_eur_kwh: 0.0354
+      night_rate_eur_kwh: 0.0354
 
   default_operator: "Elenia"
+
+# ============================================================================
+# Feature engineering parameters
+# ============================================================================
+# These thresholds define nonlinear feature transforms.
+# Derived from Finnish wind/price analysis but may need tuning for other regions.
+
+features:
+  # Wind nonlinear transforms
+  wind_log_scarcity_base: 8.0        # log1p(max(0, base - wind_speed))
+                                     # Captures price spike when wind drops below 8 m/s
+  wind_calm_threshold: 6.0           # max(0, threshold - wind_speed)
+                                     # Interaction with peak demand hours
+  wind_low_threshold: 5.0            # For nuclear x scarcity interaction (Tier 3)
+
+  # AR neighbor price normalization
+  ar_normalize_divisor: 100          # AR features divided by this to ~unit scale
+                                     # SE1/SE3/EE prices typically 0-80 EUR/MWh -> 0-0.8
+
+  # AR stability
+  ar_max_root: 0.95                  # Damp AR(2) roots if |root| > this
+                                     # Ensures stable 170h forecast horizon
+  ar_split_frac: 0.85                # Train/test split for AR model fitting
+
+  # Time cycles (derived from equations, not tunable)
+  # hour_sin/cos: sin/cos(2*pi*hour/24)  — fixed by definition
+  # month_sin/cos: sin/cos(2*pi*month/12) — fixed by definition
 
 # ============================================================================
 # Model training parameters
@@ -282,10 +286,53 @@ consumer_pricing:
 training:
   years: 4                           # Historical data window
   test_split: 0.15                   # 85/15 time-ordered split
-  half_life_days: 365                # Exponential time-decay half-life
+  half_life_days: 120                # Exponential time-decay half-life (optimized: 120d best MAE)
   ridge_alpha: 1.0                   # Ridge regularization strength
   batch_size: 512                    # Batch size for memory-efficient training
-  price_clip_max: 500                # Max price (EUR/MWh) to reduce outlier influence
-  piecewise_breakpoints: auto        # "auto" = derived from training data percentiles
-                                     # or explicit list like [5, 15, 50] (EUR/MWh)
+  log_offset: 55                     # Log-linear: log(price + offset), handles negative prices
+                                     # Must exceed |min_price|; Finnish min ≈ -50 EUR/MWh
+                                     # Power stretch fitted automatically via Nelder-Mead
   forecast_hours: 170                # Forecast window (7.08 days)
+
+  # Power stretch bounds (Nelder-Mead optimization)
+  power_scale_min: 0.0               # scale > 0 constraint
+  power_exp_min: 0.5                 # power exponent lower bound
+  power_exp_max: 3.0                 # power exponent upper bound
+  power_optim_maxiter: 1000          # Nelder-Mead max iterations
+  power_optim_tol: 0.001             # Nelder-Mead convergence tolerance
+
+# ============================================================================
+# Duration model parameters (D(k) = CVaR_{k/24})
+# ============================================================================
+# Segment-hierarchical Ridge regression predicting duration-sorted prices.
+# Each segment x level has its own Ridge model; PAVA enforces D(k) monotonicity.
+
+duration_model:
+  log_offset: 55                     # Same as hourly model: log(D(k) + offset)
+  lambda: 0.960                      # Forgetting factor; half-life = -ln(2)/ln(lambda)
+                                     # 0.960 -> 17 days; optimal from sweep [0.950, 1.000]
+                                     # Sweep result: 0.950-0.960 peak at mean rho=0.900
+  ridge_alpha: 1.0                   # Ridge regularization (same as hourly)
+  min_train_days: 180                # Minimum expanding window before evaluation
+  exp_cap: 20.0                      # Cap linear predictor: exp(20) ≈ 485M, prevents overflow
+
+  # Segment definitions: which hours belong to each segment
+  # Total must be 24 hours, segments must not overlap
+  segments:
+    night:   [22, 23, 0, 1, 2, 3, 4, 5]    # 8 hours
+    morning: [6, 7, 8, 9]                    # 4 hours
+    midday:  [10, 11, 12, 13, 14, 15]        # 6 hours
+    evening: [16, 17, 18, 19, 20, 21]        # 6 hours
+
+  # Features used per segment (aggregated as segment means)
+  features:
+    - wind_mean              # Mean wind speed in segment hours
+    - solar_mean             # Mean solar irradiance
+    - hdd_mean               # Mean heating degree days
+    - se3_mean               # Mean SE3 neighbor price (raw EUR/MWh)
+    - se1_mean               # Mean SE1 neighbor price (raw EUR/MWh)
+    - nuclear_deficit         # Nuclear capacity deficit (0-1)
+    - is_workday             # Binary: weekday and not holiday
+    - month_sin              # sin(2*pi*month/12)
+    - month_cos              # cos(2*pi*month/12)
+    - wind_log_scarcity      # log1p(max(0, base - wind_speed))

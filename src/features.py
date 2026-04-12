@@ -113,15 +113,20 @@ def _build_tier1(
     hdd = np.maximum(0.0, hdd_threshold - t)
     df["hdd_sq"] = hdd ** 2
 
-    # Wind features
+    # Wind features (thresholds from config)
+    feat_cfg = config.get("features", {})
+    wind_scarcity_base = feat_cfg.get("wind_log_scarcity_base", 8.0)
+    wind_calm_thresh = feat_cfg.get("wind_calm_threshold", 6.0)
+
     w = df["wind_speed_weighted"].to_numpy()
-    df["wind_log_scarcity"] = np.log1p(np.maximum(0.0, 8.0 - w))
-    wind_calm = np.maximum(0.0, 6.0 - w)
+    df["wind_log_scarcity"] = np.log1p(np.maximum(0.0, wind_scarcity_base - w))
+    wind_calm = np.maximum(0.0, wind_calm_thresh - w)
     df["wind_calm_x_peak_am"] = wind_calm * double_peak_am
     df["wind_calm_x_peak_pm"] = wind_calm * double_peak_pm
 
     # Scarcity indicator (intermediate for nuclear_x_scarcity in Tier 3)
-    low_wind = np.maximum(0.0, 5.0 - w)
+    wind_low_thresh = feat_cfg.get("wind_low_threshold", 5.0)
+    low_wind = np.maximum(0.0, wind_low_thresh - w)
     peak_demand_full = np.maximum(raw_am, raw_pm)
     df["_scarcity_indicator"] = low_wind * hdd * peak_demand_full
     df["_is_workday"] = is_workday
@@ -139,6 +144,7 @@ def build_ar_models(
     df_index: pd.DatetimeIndex,
     holidays: set[str],
     split_frac: float = 0.85,
+    ar_max_root: float = 0.95,
 ) -> dict[str, dict]:
     """Fit AR(2) models on deviation from hourly daytype profiles.
 
@@ -196,11 +202,11 @@ def build_ar_models(
         Xtr, ytr = X_ar[:split], y_ar[:split]
         ar_coefs, _, _, _ = np.linalg.lstsq(Xtr, ytr, rcond=None)
 
-        # Damp if max root > 0.95 for 170h stability
+        # Damp if max root exceeds stability threshold
         roots = np.roots([1, -ar_coefs[0], -ar_coefs[1]])
         max_root = float(np.max(np.abs(roots)))
-        if max_root > 0.95:
-            ar_coefs = ar_coefs * (0.95 / max_root)
+        if max_root > ar_max_root:
+            ar_coefs = ar_coefs * (ar_max_root / max_root)
 
         ar_models[prefix] = {
             "profile_wd": profile_wd.tolist(),
@@ -219,17 +225,24 @@ def _build_tier2(
     neighbor_prices: dict[str, pd.Series],
     holidays: set[str],
     window_days: int = 7,
+    config: dict[str, Any] | None = None,
 ) -> tuple[pd.DataFrame, list[str], dict]:
     """Build AR neighbor price features + export potential.
 
     Returns:
         Updated DataFrame, list of new feature column names, AR model params.
     """
+    config = config or {}
+    feat_cfg = config.get("features", {})
     new_features: list[str] = []
     window_hours = window_days * 24
 
     # Fit AR models
-    ar_models = build_ar_models(neighbor_prices, df.index, holidays)
+    ar_models = build_ar_models(
+        neighbor_prices, df.index, holidays,
+        split_frac=feat_cfg.get("ar_split_frac", 0.85),
+        ar_max_root=feat_cfg.get("ar_max_root", 0.95),
+    )
 
     hour_arr = df["_hour"].values if "_hour" in df.columns else None
     is_workday_arr = df["_is_workday"].values if "_is_workday" in df.columns else None
@@ -257,7 +270,8 @@ def _build_tier2(
             ar_pred[i] = ar_c[0] * deviation[i - 1] + ar_c[1] * deviation[i - 2]
 
         feature_name = f"ar_{prefix}"
-        df[feature_name] = (profile + ar_pred) / 100  # normalize
+        ar_divisor = feat_cfg.get("ar_normalize_divisor", 100)
+        df[feature_name] = (profile + ar_pred) / ar_divisor
         new_features.append(feature_name)
         logger.info("  Tier 2: added %s (AR neighbor price)", feature_name)
 
@@ -356,7 +370,7 @@ def build_features(
     ar_models = None
     if neighbor_prices:
         df, tier2_features, ar_models = _build_tier2(
-            df, prices, neighbor_prices, holidays, spread_window)
+            df, prices, neighbor_prices, holidays, spread_window, config=config)
         feature_cols.extend(tier2_features)
         logger.info("Tier 2: +%d features (total: %d)",
                      len(tier2_features), len(feature_cols))

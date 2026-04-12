@@ -52,6 +52,7 @@ async def async_setup_entry(
         ConsumerPriceSensor(coordinator, entry),
         CheapestHoursSensor(coordinator, entry),
         WeekStatsSensor(coordinator, entry),
+        DurationForecastSensor(coordinator, entry),
     ]
 
     # Add Nordpool-derived sensors if entity is configured
@@ -71,7 +72,7 @@ def _device_info(entry: ConfigEntry) -> dict[str, Any]:
         "name": "Spot Price Predictor",
         "manufacturer": "watti-matti",
         "model": "Spot Price Predictor",
-        "sw_version": "1.4.0",
+        "sw_version": "2.0.0",
     }
 
 
@@ -195,6 +196,7 @@ class CheapestHoursSensor(CoordinatorEntity, SensorEntity):
             return {}
         ch = self.coordinator.data.get("cheapest_hours", {})
         return {
+            # Spot EUR/MWh prices
             "cheapest_1h_start": ch.get("cheapest_1h_start"),
             "cheapest_1h_price": ch.get("cheapest_1h_price"),
             "cheapest_2h_start": ch.get("cheapest_2h_start"),
@@ -207,6 +209,15 @@ class CheapestHoursSensor(CoordinatorEntity, SensorEntity):
             "cheapest_6h_avg_price": ch.get("cheapest_6h_avg_price"),
             "cheapest_8h_start": ch.get("cheapest_8h_start"),
             "cheapest_8h_avg_price": ch.get("cheapest_8h_avg_price"),
+            # Consumer c/kWh prices (includes tariff, VAT, tax, margin)
+            "cheapest_1h_consumer_price": ch.get("cheapest_1h_consumer_price"),
+            "cheapest_2h_avg_consumer_price": ch.get("cheapest_2h_avg_consumer_price"),
+            "cheapest_3h_avg_consumer_price": ch.get("cheapest_3h_avg_consumer_price"),
+            "cheapest_4h_avg_consumer_price": ch.get("cheapest_4h_avg_consumer_price"),
+            "cheapest_6h_avg_consumer_price": ch.get("cheapest_6h_avg_consumer_price"),
+            "cheapest_8h_avg_consumer_price": ch.get("cheapest_8h_avg_consumer_price"),
+            "avg_consumer_in_window": ch.get("avg_consumer_in_window"),
+            # Window info
             "hours_below_avg": ch.get("hours_below_avg", []),
             "window_hours": ch.get("window_hours", 24),
             "avg_price_in_window": ch.get("avg_price_in_window"),
@@ -259,6 +270,72 @@ class WeekStatsSensor(CoordinatorEntity, SensorEntity):
             "operator": self._entry.data.get("operator", ""),
             **_status_attributes(self.coordinator.data),
         }
+
+    @property
+    def device_info(self) -> dict[str, Any]:
+        return _device_info(self._entry)
+
+
+class DurationForecastSensor(CoordinatorEntity, SensorEntity):
+    """D(k) duration curve forecast — daily cost by usage duration.
+
+    State: today's D(4) = average consumer price for cheapest 4 hours (c/kWh).
+    Attributes: 7-day daily D(k) curves with consumer c/kWh prices.
+    Use for: EV charging (D4), heat pumps (D8), daily averages (D24).
+    """
+
+    _attr_has_entity_name = True
+    _attr_name = "Duration Forecast"
+    _attr_native_unit_of_measurement = "c/kWh"
+    _attr_icon = "mdi:chart-timeline-variant-shimmer"
+    _attr_suggested_display_precision = 1
+
+    def __init__(self, coordinator: SpotPriceCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_duration_forecast"
+        self._entry = entry
+
+    def _today_dk(self) -> dict[str, Any] | None:
+        """Get today's D(k) entry."""
+        if not self.coordinator.data:
+            return None
+        dk_list = self.coordinator.data.get("duration_forecast", [])
+        if not dk_list:
+            return None
+        # Return first available day (today or earliest forecast day)
+        return dk_list[0] if dk_list else None
+
+    @property
+    def native_value(self) -> float | None:
+        """State = today's D(4) EV charge cost in c/kWh."""
+        dk = self._today_dk()
+        return dk.get("d4") if dk else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        if not self.coordinator.data:
+            return {}
+        dk_list = self.coordinator.data.get("duration_forecast", [])
+        if not dk_list:
+            return {}
+
+        today = self._today_dk()
+        attrs: dict[str, Any] = {
+            "unit": "c/kWh",
+            "forecast_days": len(dk_list),
+        }
+
+        # Today's key levels
+        if today:
+            attrs["today_d1"] = today.get("d1")
+            attrs["today_d4"] = today.get("d4")
+            attrs["today_d8"] = today.get("d8")
+            attrs["today_d24"] = today.get("d24")
+
+        # Full 7-day forecast for dashboard charts
+        attrs["daily_forecast"] = dk_list
+        attrs.update(_status_attributes(self.coordinator.data))
+        return attrs
 
     @property
     def device_info(self) -> dict[str, Any]:

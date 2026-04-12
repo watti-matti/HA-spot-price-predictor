@@ -13,6 +13,138 @@ _LOGGER = logging.getLogger(__name__)
 DEFAULT_COEFS_PATH = Path(__file__).parent / "data" / "model_coefs_default.json"
 
 
+# ---------------------------------------------------------------------------
+# PAVA: Pool Adjacent Violators Algorithm (pure Python)
+# ---------------------------------------------------------------------------
+
+def _pava_increasing(values: list[float]) -> list[float]:
+    """Enforce non-decreasing sequence via Pool Adjacent Violators.
+
+    Returns the monotone non-decreasing sequence that minimises
+    the sum of squared deviations from the input (equal weights).
+
+    Time complexity: O(n) amortised — trivial for n <= 8.
+    """
+    n = len(values)
+    if n <= 1:
+        return list(values)
+
+    # blocks: list of [sum, count]
+    blocks: list[list[float]] = [[v, 1] for v in values]
+
+    merged = True
+    while merged:
+        merged = False
+        new_blocks: list[list[float]] = [blocks[0]]
+        for j in range(1, len(blocks)):
+            prev_avg = new_blocks[-1][0] / new_blocks[-1][1]
+            curr_avg = blocks[j][0] / blocks[j][1]
+            if prev_avg > curr_avg:
+                # Violation — pool blocks
+                new_blocks[-1][0] += blocks[j][0]
+                new_blocks[-1][1] += blocks[j][1]
+                merged = True
+            else:
+                new_blocks.append(blocks[j])
+        blocks = new_blocks
+
+    # Expand blocks to full sequence
+    result: list[float] = []
+    for block_sum, block_count in blocks:
+        avg = block_sum / block_count
+        result.extend([avg] * int(block_count))
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Duration model: D(k) = avg price for cheapest k hours
+# ---------------------------------------------------------------------------
+
+class DurationModel:
+    """Duration curve model: Ridge per (segment, k) + PAVA.
+
+    Predicts D(k) = average spot price for the cheapest k hours in a day.
+    Each day-segment (night, morning, midday, evening) has independent
+    Ridge models per duration level, combined via PAVA isotonic correction.
+    Full-day D(k) is reconstructed by merging all segment sorted prices.
+    """
+
+    def __init__(self, config: dict[str, Any]) -> None:
+        self.log_offset: float = config.get("log_offset", 55)
+        self.exp_cap: float = config.get("exp_cap", 20.0)
+        self.feature_names: list[str] = config["feature_names"]
+        self.segments: dict[str, dict] = config["segments"]
+        _LOGGER.info(
+            "Duration model loaded: %d segments, %d features",
+            len(self.segments), len(self.feature_names),
+        )
+
+    def _predict_segment(
+        self, seg_name: str, features: dict[str, float]
+    ) -> list[float]:
+        """Predict raw D(k) for one segment, then apply PAVA."""
+        seg = self.segments[seg_name]
+        raw: list[float] = []
+
+        for model in seg["models"]:
+            linear = model["intercept"]
+            for i, fname in enumerate(self.feature_names):
+                linear += model["coefs"][i] * features.get(fname, 0.0)
+            # Back-transform from log; cap to prevent overflow
+            dk = max(0.0, math.exp(min(linear, self.exp_cap)) - self.log_offset)
+            raw.append(dk)
+
+        # PAVA: enforce D(1) <= D(2) <= ... <= D(n)
+        return _pava_increasing(raw)
+
+    def predict_day(
+        self, segment_features: dict[str, dict[str, float]]
+    ) -> dict[str, Any]:
+        """Predict full-day D(k) from segment feature dicts.
+
+        Args:
+            segment_features: {"night": {feat: val, ...}, "morning": {...}, ...}
+
+        Returns:
+            {"duration_curve": [N floats], "sorted_prices": [N floats],
+             "segment_curves": {"night": [...], ...}}
+        """
+        segment_curves: dict[str, list[float]] = {}
+        all_prices: list[float] = []
+
+        for seg_name in self.segments:
+            if seg_name not in segment_features:
+                continue
+
+            curve = self._predict_segment(seg_name, segment_features[seg_name])
+            segment_curves[seg_name] = curve
+
+            # Extract sorted prices: p(0)=D(0), p(k)=(k+1)*D(k)-k*D(k-1)
+            for i in range(len(curve)):
+                if i == 0:
+                    all_prices.append(curve[0])
+                else:
+                    p = (i + 1) * curve[i] - i * curve[i - 1]
+                    all_prices.append(max(0.0, p))
+
+        if not all_prices:
+            return {"duration_curve": [], "sorted_prices": [], "segment_curves": {}}
+
+        # Sort all extracted prices, compute full-day D(k)
+        all_prices.sort()
+        running_sum = 0.0
+        duration_curve: list[float] = []
+        for i, price in enumerate(all_prices):
+            running_sum += price
+            duration_curve.append(running_sum / (i + 1))
+
+        return {
+            "duration_curve": duration_curve,
+            "sorted_prices": all_prices,
+            "segment_curves": segment_curves,
+        }
+
+
 class SpotPriceModel:
     """Log-linear Ridge regression model.
 
@@ -29,8 +161,12 @@ class SpotPriceModel:
         self.log_offset: float = coefs.get("log_offset", 55)
         self.power_scale: float = coefs.get("power_scale", 1.0)
         self.power_exp: float = coefs.get("power_exp", 1.0)
-        self.model_type: str = coefs.get("model_type", "linear")
-        self.ar_models: dict | None = coefs.get("ar_models")
+
+        # Duration model (optional)
+        dur_data = coefs.get("duration_model")
+        self.duration_model: DurationModel | None = (
+            DurationModel(dur_data) if dur_data else None
+        )
 
     @classmethod
     async def async_load(cls, path: Path | None = None) -> "SpotPriceModel":
@@ -80,21 +216,17 @@ class SpotPriceModel:
     def predict_single(self, features: dict[str, float]) -> float:
         """Predict spot price for a single hour.
 
-        Softplus: a * log(1 + exp(x / a)) — floor at 0, no ceiling
-        Log-linear (legacy): exp(x) - offset
-        Linear (legacy): x
+        Log-linear: scale * max(0, exp(linear) - offset) ^ power
         """
         linear = self.intercept
         for feat in self.features:
             linear += features.get(feat["name"], 0.0) * feat["coef"]
 
-        if self.model_type == "log-linear":
-            raw = math.exp(min(linear, 20.0)) - self.log_offset
-            raw = max(0.0, raw)
-            if raw > 0:
-                return self.power_scale * raw ** self.power_exp
-            return 0.0
-        return linear
+        raw = math.exp(min(linear, 20.0)) - self.log_offset
+        raw = max(0.0, raw)
+        if raw > 0:
+            return self.power_scale * raw ** self.power_exp
+        return 0.0
 
     def predict_batch(self, feature_rows: list[dict[str, float]]) -> list[float]:
         """Predict for multiple hours."""
