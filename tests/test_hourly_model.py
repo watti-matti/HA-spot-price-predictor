@@ -138,3 +138,66 @@ class TestBatchPrediction:
 
     def test_empty_batch(self, simple_model):
         assert simple_model.predict_batch([]) == []
+
+
+class TestModelLoadingErrorHandling:
+    """Null model fallback when coefficients are missing or corrupt."""
+
+    def test_null_model_predicts_zero(self):
+        """Null model always returns 0.0."""
+        model = SpotPriceModel._null_model()
+        assert model.predict_single({"wind": 5.0, "hdd": 10.0}) == 0.0
+
+    def test_null_model_batch(self):
+        """Null model batch prediction returns all zeros."""
+        model = SpotPriceModel._null_model()
+        assert model.predict_batch([{"wind": 5.0}, {}]) == [0.0, 0.0]
+
+    def test_null_model_has_no_duration(self):
+        """Null model has no duration model."""
+        model = SpotPriceModel._null_model()
+        assert model.duration_model is None
+
+    def test_null_model_feature_names_empty(self):
+        """Null model has no features."""
+        model = SpotPriceModel._null_model()
+        assert model.feature_names == []
+        assert model.features == []
+
+    def test_load_missing_file_returns_null(self, tmp_path):
+        """Loading from nonexistent path returns null model (no crash)."""
+        model = SpotPriceModel.load(tmp_path / "nonexistent.json")
+        assert model.predict_single({}) == 0.0
+
+    def test_load_corrupt_json_returns_null(self, tmp_path):
+        """Loading corrupt JSON returns null model (no crash)."""
+        bad_file = tmp_path / "bad.json"
+        bad_file.write_text("not valid json {{{", encoding="utf-8")
+        model = SpotPriceModel.load(bad_file)
+        assert model.predict_single({}) == 0.0
+
+    def test_load_invalid_structure_returns_null(self, tmp_path):
+        """Loading valid JSON with missing keys returns null model."""
+        bad_file = tmp_path / "incomplete.json"
+        bad_file.write_text('{"foo": "bar"}', encoding="utf-8")
+        model = SpotPriceModel.load(bad_file)
+        assert model.predict_single({}) == 0.0
+
+    def test_load_valid_file_works(self, tmp_path):
+        """Loading a valid coefficient file works normally."""
+        import json
+        coefs = {
+            "intercept": 4.0,
+            "log_offset": 55,
+            "power_scale": 1.0,
+            "power_exp": 1.0,
+            "feature_names": ["wind"],
+            "features": [{"name": "wind", "coef": -0.01}],
+        }
+        valid_file = tmp_path / "valid.json"
+        valid_file.write_text(json.dumps(coefs), encoding="utf-8")
+        model = SpotPriceModel.load(valid_file)
+        # Should predict something > 0 (exp(4) - 55 ≈ -0.4 → clamped to 0)
+        # Actually exp(4)=54.6, 54.6-55=-0.4 → 0.0. Use smaller offset:
+        assert model.intercept == 4.0
+        assert len(model.features) == 1

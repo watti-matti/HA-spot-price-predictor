@@ -325,28 +325,28 @@ class TestProductionCoefficients:
 
 
 class TestConsumerPrice:
-    """Consumer price conversion: (max(0, spot)/1000 + transfer + tax) * VAT * 100."""
+    """Consumer price conversion: (max(0, spot)/1000 + transfer + tax) * VAT [EUR/kWh]."""
 
     TRANSFER = 0.0361   # EUR/kWh
     ENERGY_TAX = 0.02325  # EUR/kWh
     VAT = 1.255           # 25.5%
 
     def to_cons(self, spot_eur_mwh: float) -> float:
-        return (max(0.0, spot_eur_mwh) / 1000 + self.TRANSFER + self.ENERGY_TAX) * self.VAT * 100
+        return (max(0.0, spot_eur_mwh) / 1000 + self.TRANSFER + self.ENERGY_TAX) * self.VAT
 
     def test_zero_spot(self):
         """Zero spot price → transfer + tax only."""
         c = self.to_cons(0.0)
-        expected = (0.0 + 0.0361 + 0.02325) * 1.255 * 100
+        expected = (0.0 + 0.0361 + 0.02325) * 1.255
         assert c == pytest.approx(expected)
-        assert c == pytest.approx(7.448, abs=0.01)
+        assert c == pytest.approx(0.07448, abs=0.0001)
 
     def test_50_eur_mwh(self):
         """50 EUR/MWh spot price."""
         c = self.to_cons(50.0)
-        expected = (0.05 + 0.0361 + 0.02325) * 1.255 * 100
+        expected = (0.05 + 0.0361 + 0.02325) * 1.255
         assert c == pytest.approx(expected)
-        assert c == pytest.approx(13.723, abs=0.01)
+        assert c == pytest.approx(0.13723, abs=0.0001)
 
     def test_negative_spot_clamped(self):
         """Negative spot price → treated as 0 for consumer."""

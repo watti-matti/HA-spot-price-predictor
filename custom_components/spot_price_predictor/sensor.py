@@ -1,7 +1,7 @@
 """Sensor entities for Spot Price Predictor.
 
 Provides two forecast sensors:
-  - Price Forecast: 170h hourly price array (spot EUR/MWh + consumer c/kWh)
+  - Price Forecast: 170h hourly price array (spot EUR/MWh + consumer EUR/kWh)
   - Duration Forecast: 7-day D(k) duration curves (CVaR of daily prices)
 
 Optimization functions (cheapest hours, load scheduling) belong in a
@@ -101,15 +101,15 @@ def _status_attributes(data: dict[str, Any] | None) -> dict[str, Any]:
 class PriceForecastSensor(CoordinatorEntity, SensorEntity):
     """Electricity price forecast — 170 hours ahead.
 
-    State: current consumer price (c/kWh) including transfer tariff,
+    State: current consumer price (EUR/kWh) including transfer tariff,
     energy tax, seller margin, and VAT.
 
     Attributes:
-      forecast: 170h array [{timestamp, spot_eur_mwh, consumer_ckwh,
+      forecast: 170h array [{timestamp, spot_eur_mwh, consumer_eur_kwh,
                 wind, solar, temp}, ...]
       current_spot_eur_mwh: current hour spot price
       forecast_hours: number of forecast entries
-      week_min/avg/max_ckwh: statistics over forecast window
+      week_min/avg/max_eur_kwh: statistics over forecast window
       operator: configured operator name
 
     This sensor provides the raw forecast data. Optimization decisions
@@ -119,9 +119,11 @@ class PriceForecastSensor(CoordinatorEntity, SensorEntity):
 
     _attr_has_entity_name = True
     _attr_name = "Price Forecast"
-    _attr_native_unit_of_measurement = "c/kWh"
+    _attr_native_unit_of_measurement = "EUR/kWh"
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:chart-line"
-    _attr_suggested_display_precision = 1
+    _attr_suggested_display_precision = 4
 
     def __init__(self, coordinator: SpotPriceCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
@@ -131,7 +133,7 @@ class PriceForecastSensor(CoordinatorEntity, SensorEntity):
     @property
     def native_value(self) -> float | None:
         if self.coordinator.data:
-            return self.coordinator.data.get("current_consumer_ckwh")
+            return self.coordinator.data.get("current_consumer_eur_kwh")
         return None
 
     @property
@@ -147,14 +149,17 @@ class PriceForecastSensor(CoordinatorEntity, SensorEntity):
             "forecast": forecast,
             "forecast_hours": len(forecast),
             "operator": self._entry.data.get(CONF_OPERATOR, ""),
+            "week_min_eur_kwh": None,
+            "week_avg_eur_kwh": None,
+            "week_max_eur_kwh": None,
         }
 
         if forecast:
-            prices = [f["consumer_ckwh"] for f in forecast if "consumer_ckwh" in f]
+            prices = [f["consumer_eur_kwh"] for f in forecast if "consumer_eur_kwh" in f]
             if prices:
-                attrs["week_min_ckwh"] = round(min(prices), 2)
-                attrs["week_avg_ckwh"] = round(sum(prices) / len(prices), 2)
-                attrs["week_max_ckwh"] = round(max(prices), 2)
+                attrs["week_min_eur_kwh"] = round(min(prices), 4)
+                attrs["week_avg_eur_kwh"] = round(sum(prices) / len(prices), 4)
+                attrs["week_max_eur_kwh"] = round(max(prices), 4)
 
         attrs.update(_status_attributes(data))
         return attrs
@@ -168,25 +173,27 @@ class DurationForecastSensor(CoordinatorEntity, SensorEntity):
     """D(k) duration curve forecast — 7 days ahead.
 
     State: first forecast day's D(4) = average consumer price for the
-    cheapest 4 hours (c/kWh). D(k) = CVaR at level k/24.
+    cheapest 4 hours (EUR/kWh). D(k) = CVaR at level k/24.
 
     Attributes:
       daily_forecast: 7-day array, each entry:
-        {date, weekday, dk_consumer_cent_kwh[24], dk_spot_eur_mwh[24]}
-        dk_consumer_cent_kwh[k-1] = D(k) consumer price in c/kWh for k=1..24
+        {date, weekday, dk_consumer_eur_kwh[24], dk_spot_eur_mwh[24]}
+        dk_consumer_eur_kwh[k-1] = D(k) consumer price in EUR/kWh for k=1..24
         dk_spot_eur_mwh[k-1] = D(k) spot price in EUR/MWh for k=1..24
       forecast_days: number of forecast days
 
     All D(k) vectors are guaranteed length 24 (only complete days
     are included). Thermal optimization can read any D(k) directly
-    from the vector: dk_consumer_cent_kwh[k-1] for k=1..24.
+    from the vector: dk_consumer_eur_kwh[k-1] for k=1..24.
     """
 
     _attr_has_entity_name = True
     _attr_name = "Duration Forecast"
-    _attr_native_unit_of_measurement = "c/kWh"
+    _attr_native_unit_of_measurement = "EUR/kWh"
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:chart-timeline-variant-shimmer"
-    _attr_suggested_display_precision = 1
+    _attr_suggested_display_precision = 4
 
     def __init__(self, coordinator: SpotPriceCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
@@ -195,13 +202,13 @@ class DurationForecastSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self) -> float | None:
-        """State = first forecast day's D(4) in c/kWh."""
+        """State = first forecast day's D(4) in EUR/kWh."""
         if not self.coordinator.data:
             return None
         dk_list = self.coordinator.data.get("duration_forecast", [])
         if not dk_list:
             return None
-        dk_vec = dk_list[0].get("dk_consumer_cent_kwh", [])
+        dk_vec = dk_list[0].get("dk_consumer_eur_kwh", [])
         return dk_vec[3] if len(dk_vec) >= 4 else None
 
     @property
@@ -303,6 +310,8 @@ class SpotElectricityPriceSensor(CoordinatorEntity, SensorEntity):
     _attr_has_entity_name = True
     _attr_name = "Spot Electricity Price"
     _attr_native_unit_of_measurement = "EUR/kWh"
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:flash"
     _attr_suggested_display_precision = 4
 
@@ -369,6 +378,8 @@ class SpotElectricitySellingPriceSensor(CoordinatorEntity, SensorEntity):
     _attr_has_entity_name = True
     _attr_name = "Spot Electricity Selling Price"
     _attr_native_unit_of_measurement = "EUR/kWh"
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:solar-power"
     _attr_suggested_display_precision = 4
 

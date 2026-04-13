@@ -35,20 +35,20 @@ class _TariffHelper:
         self.energy_tax = energy_tax
         self.vat_multiplier = vat_multiplier
 
-    def spot_to_consumer_ckwh(self, spot_eur_mwh: float, is_night: bool) -> float:
-        """Exact copy of coordinator._spot_to_consumer_ckwh."""
+    def spot_to_consumer_eur_kwh(self, spot_eur_mwh: float, is_night: bool) -> float:
+        """Exact copy of coordinator._spot_to_consumer_eur_kwh."""
         transfer = self.night_rate if is_night else self.day_rate
         spot_kwh = max(0.0, spot_eur_mwh) / 1000.0
         return (spot_kwh + self.seller_margin + transfer + self.energy_tax) \
-            * self.vat_multiplier * 100
+            * self.vat_multiplier
 
 
 # ---------------------------------------------------------------------------
 # Consumer price conversion tests
 # ---------------------------------------------------------------------------
 
-class TestSpotToConsumerCkwh:
-    """Test coordinator._spot_to_consumer_ckwh logic."""
+class TestSpotToConsumerEurKwh:
+    """Test coordinator._spot_to_consumer_eur_kwh logic."""
 
     @pytest.fixture
     def elenia(self):
@@ -56,65 +56,65 @@ class TestSpotToConsumerCkwh:
 
     def test_zero_spot_day(self, elenia):
         """Zero spot price, day tariff → transfer + tax only."""
-        c = elenia.spot_to_consumer_ckwh(0.0, is_night=False)
-        expected = (0.0 + 0.0 + 0.0361 + 0.02325) * 1.255 * 100
-        assert c == pytest.approx(expected, abs=0.01)
+        c = elenia.spot_to_consumer_eur_kwh(0.0, is_night=False)
+        expected = (0.0 + 0.0 + 0.0361 + 0.02325) * 1.255
+        assert c == pytest.approx(expected, abs=0.0001)
 
     def test_zero_spot_night(self, elenia):
         """Zero spot, night tariff → lower transfer."""
-        c = elenia.spot_to_consumer_ckwh(0.0, is_night=True)
-        expected = (0.0 + 0.0 + 0.0220 + 0.02325) * 1.255 * 100
-        assert c == pytest.approx(expected, abs=0.01)
+        c = elenia.spot_to_consumer_eur_kwh(0.0, is_night=True)
+        expected = (0.0 + 0.0 + 0.0220 + 0.02325) * 1.255
+        assert c == pytest.approx(expected, abs=0.0001)
 
     def test_day_more_expensive_than_night(self, elenia):
         """Day consumer price must exceed night for same spot (Elenia)."""
         spot = 40.0
-        day = elenia.spot_to_consumer_ckwh(spot, is_night=False)
-        night = elenia.spot_to_consumer_ckwh(spot, is_night=True)
+        day = elenia.spot_to_consumer_eur_kwh(spot, is_night=False)
+        night = elenia.spot_to_consumer_eur_kwh(spot, is_night=True)
         assert day > night
 
     def test_equal_rates_same_price(self):
         """Helen has equal day/night rates → same consumer price."""
         helen = _TariffHelper(day_rate=0.0354, night_rate=0.0354)
         spot = 50.0
-        assert helen.spot_to_consumer_ckwh(spot, False) == pytest.approx(
-            helen.spot_to_consumer_ckwh(spot, True))
+        assert helen.spot_to_consumer_eur_kwh(spot, False) == pytest.approx(
+            helen.spot_to_consumer_eur_kwh(spot, True))
 
     def test_50_eur_mwh_day(self, elenia):
         """50 EUR/MWh spot, day rate: known value."""
-        c = elenia.spot_to_consumer_ckwh(50.0, is_night=False)
-        expected = (0.05 + 0.0 + 0.0361 + 0.02325) * 1.255 * 100
-        assert c == pytest.approx(expected, abs=0.01)
+        c = elenia.spot_to_consumer_eur_kwh(50.0, is_night=False)
+        expected = (0.05 + 0.0 + 0.0361 + 0.02325) * 1.255
+        assert c == pytest.approx(expected, abs=0.0001)
 
     def test_negative_spot_clamped(self, elenia):
         """Negative spot clamped to 0 → same as zero spot."""
-        c_neg = elenia.spot_to_consumer_ckwh(-20.0, is_night=False)
-        c_zero = elenia.spot_to_consumer_ckwh(0.0, is_night=False)
+        c_neg = elenia.spot_to_consumer_eur_kwh(-20.0, is_night=False)
+        c_zero = elenia.spot_to_consumer_eur_kwh(0.0, is_night=False)
         assert c_neg == pytest.approx(c_zero)
 
     def test_high_spot(self, elenia):
         """High spot price (200 EUR/MWh) gives reasonable consumer price."""
-        c = elenia.spot_to_consumer_ckwh(200.0, is_night=False)
-        # 200/1000 = 0.2 EUR/kWh + 0.0361 + 0.02325 = 0.25935 * 1.255 * 100
-        expected = (0.2 + 0.0 + 0.0361 + 0.02325) * 1.255 * 100
-        assert c == pytest.approx(expected, abs=0.01)
-        assert c > 30  # should be around 32.5 c/kWh
+        c = elenia.spot_to_consumer_eur_kwh(200.0, is_night=False)
+        # 200/1000 = 0.2 EUR/kWh + 0.0361 + 0.02325 = 0.25935 * 1.255
+        expected = (0.2 + 0.0 + 0.0361 + 0.02325) * 1.255
+        assert c == pytest.approx(expected, abs=0.0001)
+        assert c > 0.30  # should be around 0.325 EUR/kWh
 
     def test_seller_margin_adds(self):
         """Non-zero seller margin increases consumer price."""
         base = _TariffHelper(seller_margin=0.0)
         with_margin = _TariffHelper(seller_margin=0.005)
         spot = 40.0
-        assert with_margin.spot_to_consumer_ckwh(spot, False) > \
-            base.spot_to_consumer_ckwh(spot, False)
-        # Margin should add exactly 0.005 * VAT * 100 c/kWh
-        diff = with_margin.spot_to_consumer_ckwh(spot, False) - \
-            base.spot_to_consumer_ckwh(spot, False)
-        assert diff == pytest.approx(0.005 * 1.255 * 100, abs=0.001)
+        assert with_margin.spot_to_consumer_eur_kwh(spot, False) > \
+            base.spot_to_consumer_eur_kwh(spot, False)
+        # Margin should add exactly 0.005 * VAT EUR/kWh
+        diff = with_margin.spot_to_consumer_eur_kwh(spot, False) - \
+            base.spot_to_consumer_eur_kwh(spot, False)
+        assert diff == pytest.approx(0.005 * 1.255, abs=0.00001)
 
     def test_monotone_increasing(self, elenia):
         """Consumer price is monotone increasing with spot (for spot >= 0)."""
-        prices = [elenia.spot_to_consumer_ckwh(s, False) for s in range(0, 300, 10)]
+        prices = [elenia.spot_to_consumer_eur_kwh(s, False) for s in range(0, 300, 10)]
         for i in range(1, len(prices)):
             assert prices[i] >= prices[i - 1]
 
@@ -231,7 +231,7 @@ class TestPerSegmentDkConsumerConversion:
     """Test that D(k) consumer prices use correct per-segment tariffs.
 
     The coordinator extracts sorted prices from each segment's D(k) curve,
-    converts each to consumer c/kWh using the segment's tariff (night vs day),
+    converts each to consumer EUR/kWh using the segment's tariff (night vs day),
     then re-sorts and recomputes the consumer D(k).
     """
 
@@ -263,7 +263,7 @@ class TestPerSegmentDkConsumerConversion:
             prices = self._extract_sorted_prices(curve)
             for p in prices:
                 consumer_sorted.append(
-                    helper.spot_to_consumer_ckwh(p, is_night))
+                    helper.spot_to_consumer_eur_kwh(p, is_night))
         consumer_sorted.sort()
         dk = []
         running = 0.0
@@ -285,7 +285,7 @@ class TestPerSegmentDkConsumerConversion:
         dk = self._compute_consumer_dk(
             segment_curves, helper, night_segments=set())
 
-        # All use day rate, so consumer = (spot/1000 + margin + day_rate + tax) * vat * 100
+        # All use day rate, so consumer = (spot/1000 + margin + day_rate + tax) * vat
         # Since all prices identical per segment, sorted prices are all the same
         assert len(dk) == 24
 
@@ -296,8 +296,8 @@ class TestPerSegmentDkConsumerConversion:
         night_curve = [spot]  # 1 hour night segment
         day_curve = [spot]    # 1 hour day segment
 
-        c_night = helper.spot_to_consumer_ckwh(spot, is_night=True)
-        c_day = helper.spot_to_consumer_ckwh(spot, is_night=False)
+        c_night = helper.spot_to_consumer_eur_kwh(spot, is_night=True)
+        c_day = helper.spot_to_consumer_eur_kwh(spot, is_night=False)
 
         assert c_night < c_day  # night transfer < day transfer
 
@@ -592,11 +592,11 @@ class TestForecastAssembly:
         aware = ts_utc.replace(tzinfo=ZoneInfo("UTC"))
         local_hour = aware.astimezone(tz).hour
         is_night = local_hour < 7 or local_hour >= 22
-        consumer = helper.spot_to_consumer_ckwh(spot, is_night)
+        consumer = helper.spot_to_consumer_eur_kwh(spot, is_night)
         return {
             "timestamp": ts_utc.isoformat(),
             "spot_eur_mwh": round(spot, 2),
-            "consumer_ckwh": round(consumer, 2),
+            "consumer_eur_kwh": round(consumer, 4),
             "wind": round(wind, 1),
             "solar": round(solar, 0),
             "temp": round(temp, 1),
@@ -608,10 +608,29 @@ class TestForecastAssembly:
         entry = self._make_forecast_entry(ts, 40.0, helper)
         assert "timestamp" in entry
         assert "spot_eur_mwh" in entry
-        assert "consumer_ckwh" in entry
+        assert "consumer_eur_kwh" in entry
         assert "wind" in entry
         assert "solar" in entry
         assert "temp" in entry
+
+    def test_entry_weather_fields_none_when_missing(self):
+        """Forecast entries always include wind/solar/temp, None when unavailable."""
+        # Simulates entry built when i >= len(weather) — the coordinator
+        # now always includes the keys with None as fallback.
+        entry = {
+            "timestamp": "2026-04-12T12:00:00",
+            "spot_eur_mwh": 40.0,
+            "consumer_eur_kwh": 0.08,
+            "wind": None,
+            "solar": None,
+            "temp": None,
+        }
+        assert "wind" in entry
+        assert "solar" in entry
+        assert "temp" in entry
+        assert entry["wind"] is None
+        assert entry["solar"] is None
+        assert entry["temp"] is None
 
     def test_week_stats_from_forecast(self):
         """Week min/avg/max computed correctly from forecast array."""
@@ -624,21 +643,53 @@ class TestForecastAssembly:
                 now + timedelta(hours=i), float(spot), helper)
             forecast.append(entry)
 
-        prices = [f["consumer_ckwh"] for f in forecast]
+        prices = [f["consumer_eur_kwh"] for f in forecast]
         week_min = min(prices)
         week_avg = sum(prices) / len(prices)
         week_max = max(prices)
 
         assert week_min < week_avg < week_max
-        assert week_min == forecast[0]["consumer_ckwh"]  # lowest spot = first
-        assert week_max == forecast[-1]["consumer_ckwh"]  # highest spot = last
+        assert week_min == forecast[0]["consumer_eur_kwh"]  # lowest spot = first
+        assert week_max == forecast[-1]["consumer_eur_kwh"]  # highest spot = last
 
-    def test_consumer_ckwh_positive(self):
+    def test_consumer_eur_kwh_positive(self):
         """Consumer price is always positive even for zero spot."""
         helper = _TariffHelper()
         ts = datetime(2026, 4, 12, 12, 0, 0)
         entry = self._make_forecast_entry(ts, 0.0, helper)
-        assert entry["consumer_ckwh"] > 0
+        assert entry["consumer_eur_kwh"] > 0
+
+    def test_week_stats_always_present(self):
+        """week_min/avg/max_eur_kwh must always be present in attributes."""
+        # With data
+        forecast = [{"consumer_eur_kwh": 0.05}, {"consumer_eur_kwh": 0.10}]
+        attrs = {"week_min_eur_kwh": None, "week_avg_eur_kwh": None, "week_max_eur_kwh": None}
+        if forecast:
+            prices = [f["consumer_eur_kwh"] for f in forecast if "consumer_eur_kwh" in f]
+            if prices:
+                attrs["week_min_eur_kwh"] = round(min(prices), 4)
+                attrs["week_avg_eur_kwh"] = round(sum(prices) / len(prices), 4)
+                attrs["week_max_eur_kwh"] = round(max(prices), 4)
+        assert attrs["week_min_eur_kwh"] == 0.05
+        assert attrs["week_avg_eur_kwh"] == 0.075
+        assert attrs["week_max_eur_kwh"] == 0.10
+
+    def test_week_stats_none_when_empty_forecast(self):
+        """week_min/avg/max_eur_kwh present as None when forecast is empty."""
+        forecast = []
+        attrs = {"week_min_eur_kwh": None, "week_avg_eur_kwh": None, "week_max_eur_kwh": None}
+        if forecast:
+            prices = [f["consumer_eur_kwh"] for f in forecast if "consumer_eur_kwh" in f]
+            if prices:
+                attrs["week_min_eur_kwh"] = round(min(prices), 4)
+                attrs["week_avg_eur_kwh"] = round(sum(prices) / len(prices), 4)
+                attrs["week_max_eur_kwh"] = round(max(prices), 4)
+        assert "week_min_eur_kwh" in attrs
+        assert "week_avg_eur_kwh" in attrs
+        assert "week_max_eur_kwh" in attrs
+        assert attrs["week_min_eur_kwh"] is None
+        assert attrs["week_avg_eur_kwh"] is None
+        assert attrs["week_max_eur_kwh"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -649,24 +700,24 @@ class TestDurationForecastSensorLogic:
     """Test DurationForecastSensor state = D(4) from first day."""
 
     def test_state_is_d4(self):
-        """Sensor state reads dk_consumer_cent_kwh[3] (D(4))."""
-        dk_vec = [5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
-                  13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0, 20.0,
-                  21.0, 22.0, 23.0, 24.0, 25.0, 26.0, 27.0, 28.0]
-        dk_list = [{"dk_consumer_cent_kwh": dk_vec}]
-        # Sensor logic: dk_list[0].get("dk_consumer_cent_kwh", [])[3]
-        result = dk_list[0]["dk_consumer_cent_kwh"][3]
-        assert result == 8.0  # D(4) = index 3
+        """Sensor state reads dk_consumer_eur_kwh[3] (D(4))."""
+        dk_vec = [0.05, 0.06, 0.07, 0.08, 0.09, 0.10, 0.11, 0.12,
+                  0.13, 0.14, 0.15, 0.16, 0.17, 0.18, 0.19, 0.20,
+                  0.21, 0.22, 0.23, 0.24, 0.25, 0.26, 0.27, 0.28]
+        dk_list = [{"dk_consumer_eur_kwh": dk_vec}]
+        # Sensor logic: dk_list[0].get("dk_consumer_eur_kwh", [])[3]
+        result = dk_list[0]["dk_consumer_eur_kwh"][3]
+        assert result == 0.08  # D(4) = index 3
 
     def test_empty_forecast_returns_none(self):
         """No duration forecast → None state."""
         dk_list = []
-        result = dk_list[0]["dk_consumer_cent_kwh"][3] if dk_list else None
+        result = dk_list[0]["dk_consumer_eur_kwh"][3] if dk_list else None
         assert result is None
 
     def test_short_vector_returns_none(self):
         """D(k) vector shorter than 4 → None state."""
-        dk_vec = [5.0, 6.0, 7.0]  # only 3 elements
+        dk_vec = [0.05, 0.06, 0.07]  # only 3 elements
         result = dk_vec[3] if len(dk_vec) >= 4 else None
         assert result is None
 

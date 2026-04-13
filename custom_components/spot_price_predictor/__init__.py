@@ -37,7 +37,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Spot Price Predictor from a config entry."""
     hass.data.setdefault(DOMAIN, {})
 
-    model = await SpotPriceModel.async_load()
+    try:
+        model = await SpotPriceModel.async_load()
+    except Exception as err:
+        _LOGGER.error("Unexpected error loading model: %s. Using null model.", err)
+        model = SpotPriceModel._null_model()
     coordinator = SpotPriceCoordinator(hass, entry, model=model)
     await coordinator.async_config_entry_first_refresh()
 

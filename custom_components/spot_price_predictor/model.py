@@ -169,6 +169,23 @@ class SpotPriceModel:
         )
 
     @classmethod
+    def _null_model(cls) -> "SpotPriceModel":
+        """Return a minimal model that predicts 0.0 for all hours.
+
+        Used as a safe fallback when model coefficients cannot be loaded.
+        The integration remains functional and can be fixed by uploading
+        valid coefficients via the upload_coefficients service.
+        """
+        return cls({
+            "intercept": 0.0,
+            "features": [],
+            "feature_names": [],
+            "log_offset": 0.0,
+            "power_scale": 0.0,
+            "power_exp": 1.0,
+        })
+
+    @classmethod
     async def async_load(cls, path: Path | None = None) -> "SpotPriceModel":
         """Load model from JSON coefficients file (async-safe)."""
         import asyncio
@@ -188,14 +205,37 @@ class SpotPriceModel:
             with open(p, "r", encoding="utf-8") as f:
                 return json.load(f)
 
-        coefs = await asyncio.get_event_loop().run_in_executor(None, _read)
-        _LOGGER.info(
-            "Loaded model %s (%s) with %d features",
-            coefs.get("model_version"),
-            coefs.get("model_type", "linear"),
-            coefs.get("feature_count"),
-        )
-        return cls(coefs)
+        try:
+            coefs = await asyncio.get_event_loop().run_in_executor(None, _read)
+        except FileNotFoundError:
+            _LOGGER.error(
+                "Model coefficients file not found: %s. "
+                "Using null model (predictions will be 0). "
+                "Upload coefficients via the upload_coefficients service.",
+                p,
+            )
+            return cls._null_model()
+        except (json.JSONDecodeError, OSError) as err:
+            _LOGGER.error(
+                "Failed to read model coefficients from %s: %s. "
+                "Using null model.", p, err,
+            )
+            return cls._null_model()
+
+        try:
+            _LOGGER.info(
+                "Loaded model %s (%s) with %d features",
+                coefs.get("model_version"),
+                coefs.get("model_type", "linear"),
+                coefs.get("feature_count"),
+            )
+            return cls(coefs)
+        except (KeyError, TypeError) as err:
+            _LOGGER.error(
+                "Invalid model coefficients structure in %s: %s. "
+                "Using null model.", p, err,
+            )
+            return cls._null_model()
 
     @classmethod
     def load(cls, path: Path | None = None) -> "SpotPriceModel":
@@ -209,9 +249,17 @@ class SpotPriceModel:
             else:
                 p = DEFAULT_COEFS_PATH
 
-        with open(p, "r", encoding="utf-8") as f:
-            coefs = json.load(f)
-        return cls(coefs)
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                coefs = json.load(f)
+            return cls(coefs)
+        except (FileNotFoundError, json.JSONDecodeError, OSError,
+                KeyError, TypeError) as err:
+            _LOGGER.error(
+                "Failed to load model from %s: %s. Using null model.",
+                p, err,
+            )
+            return cls._null_model()
 
     def predict_single(self, features: dict[str, float]) -> float:
         """Predict spot price for a single hour.

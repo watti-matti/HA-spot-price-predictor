@@ -45,7 +45,7 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
     """Coordinator that fetches data and runs model inference.
 
     Produces a unified forecast array with both spot (EUR/MWh) and
-    consumer (c/kWh) prices for each hour, plus D(k) duration curves.
+    consumer (EUR/kWh) prices for each hour, plus D(k) duration curves.
     Optimization functions (cheapest hours, load scheduling) are NOT
     included — they belong in a separate thermal optimization layer.
     """
@@ -112,12 +112,12 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
         # Fallback: UTC+3 (Finland without DST)
         return (ts_utc.hour + 3) % 24
 
-    def _spot_to_consumer_ckwh(self, spot_eur_mwh: float, is_night: bool) -> float:
-        """Convert spot EUR/MWh to consumer c/kWh using configured tariffs."""
+    def _spot_to_consumer_eur_kwh(self, spot_eur_mwh: float, is_night: bool) -> float:
+        """Convert spot EUR/MWh to consumer EUR/kWh using configured tariffs."""
         transfer = self.night_rate if is_night else self.day_rate
         spot_kwh = max(0.0, spot_eur_mwh) / 1000.0
         return (spot_kwh + self.seller_margin + transfer + self.energy_tax) \
-            * self.vat_multiplier * 100
+            * self.vat_multiplier
 
     def _return_cached_or_fail(self, err: Exception) -> dict[str, Any]:
         """Return cached data on failure, or raise UpdateFailed if no cache."""
@@ -261,17 +261,16 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                 ts = now + timedelta(hours=i)
                 local_hour = self._get_local_hour(ts)
                 is_night = local_hour < 7 or local_hour >= 22
-                consumer = self._spot_to_consumer_ckwh(pred, is_night)
+                consumer = self._spot_to_consumer_eur_kwh(pred, is_night)
 
                 entry: dict[str, Any] = {
                     "timestamp": ts.isoformat(),
                     "spot_eur_mwh": round(pred, 2),
-                    "consumer_ckwh": round(consumer, 2),
+                    "consumer_eur_kwh": round(consumer, 4),
+                    "wind": round(weather[i].get("wind_weighted", 0), 1) if i < len(weather) else None,
+                    "solar": round(weather[i].get("solar_weighted", 0), 0) if i < len(weather) else None,
+                    "temp": round(weather[i].get("temp_weighted", 0), 1) if i < len(weather) else None,
                 }
-                if i < len(weather):
-                    entry["wind"] = round(weather[i].get("wind_weighted", 0), 1)
-                    entry["solar"] = round(weather[i].get("solar_weighted", 0), 0)
-                    entry["temp"] = round(weather[i].get("temp_weighted", 0), 1)
                 forecast.append(entry)
 
             # D(k) duration curve forecast (7-day daily curves)
@@ -302,7 +301,7 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                 sources.append("nuclear")
 
             result = {
-                "current_consumer_ckwh": forecast[0]["consumer_ckwh"] if forecast else 0.0,
+                "current_consumer_eur_kwh": forecast[0]["consumer_eur_kwh"] if forecast else 0.0,
                 "current_spot_eur_mwh": forecast[0]["spot_eur_mwh"] if forecast else 0.0,
                 "forecast": combined_forecast,
                 "duration_forecast": duration_forecast,
@@ -340,8 +339,8 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
 
         Returns list of daily entries (only complete 24h days):
         [{"date": "2026-04-13", "weekday": "Mon",
-          "dk_consumer_cent_kwh": [24 floats], "dk_spot_eur_mwh": [24 floats]}, ...]
-        dk_consumer_cent_kwh[k-1] = D(k) consumer price in c/kWh, k=1..24
+          "dk_consumer_eur_kwh": [24 floats], "dk_spot_eur_mwh": [24 floats]}, ...]
+        dk_consumer_eur_kwh[k-1] = D(k) consumer price in EUR/kWh, k=1..24
         dk_spot_eur_mwh[k-1] = D(k) spot price in EUR/MWh, k=1..24
         """
         if not self.model.duration_model:
@@ -454,7 +453,7 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                 )
                 continue
 
-            # Convert to consumer c/kWh with per-segment tariff:
+            # Convert to consumer EUR/kWh with per-segment tariff:
             # Extract sorted prices from each segment, convert using
             # the segment's correct day/night rate, then merge and
             # recompute consumer D(k).
@@ -470,13 +469,13 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                         p = (i + 1) * curve[i] - i * curve[i - 1]
                         p = max(0.0, p)
                     consumer_sorted_prices.append(
-                        self._spot_to_consumer_ckwh(p, is_night))
+                        self._spot_to_consumer_eur_kwh(p, is_night))
             consumer_sorted_prices.sort()
             running_sum = 0.0
             dk_consumer: list[float] = []
             for i, cp in enumerate(consumer_sorted_prices):
                 running_sum += cp
-                dk_consumer.append(round(running_sum / (i + 1), 2))
+                dk_consumer.append(round(running_sum / (i + 1), 4))
 
             if len(dk_consumer) != 24:
                 _LOGGER.warning(
@@ -488,7 +487,7 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
             day_entry: dict[str, Any] = {
                 "date": date_str,
                 "weekday": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][dow],
-                "dk_consumer_cent_kwh": dk_consumer,
+                "dk_consumer_eur_kwh": dk_consumer,
                 "dk_spot_eur_mwh": [round(v, 2) for v in dk_spot],
             }
             result.append(day_entry)
