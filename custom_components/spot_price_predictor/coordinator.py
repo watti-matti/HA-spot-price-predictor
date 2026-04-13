@@ -248,7 +248,7 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                 demand=DEMAND_DEFAULTS,
                 neighbor_spreads=neighbor_spreads,
                 nuclear_data=nuclear_data,
-                nuclear_hourly_data=nuclear_hourly_data,
+                nuclear_hourly=nuclear_hourly_data,
                 ar_neighbor_hourly=ar_neighbor_hourly,
             )
 
