@@ -1,6 +1,6 @@
 # Documentation: HA-spot-price-predictor
 
-Finnish electricity spot price forecasting for Home Assistant using log-linear Ridge regression with physics-based features, duration curve prediction, and multi-source data integration.
+Consumer electricity price and D(k) = CVaR duration cost forecasting for Home Assistant. Produces 170-hour consumer price forecasts (EUR/kWh) and 7-day × 24-level D(k) duration matrices for cost-optimal load scheduling, using log-linear Ridge regression with physics-based features and multi-source data integration.
 
 ## Architecture
 
@@ -190,16 +190,50 @@ All tunable parameters are centralized in `config/regions/finland.yaml`. The con
 
 ## Consumer Price Calculation
 
-**Formula:** `(max(0, spot_EUR_MWh) / 1000 + seller_margin + transfer_rate + energy_tax) × VAT × 100` [c/kWh]
+**Formula:** `(max(0, spot_EUR_MWh) / 1000 + seller_margin + transfer_rate + energy_tax) × VAT` [EUR/kWh]
 
 Configurable per operator in `finland.yaml`. Default: Elenia (day 3.61, night 2.20 c/kWh), VAT 25.5%, energy tax 2.325 c/kWh, seller margin 0.00 c/kWh (set from your electricity contract).
 
 ### Forecast sensors (always created)
 
-| Sensor | State | Attributes |
-|--------|-------|------------|
-| Price Forecast | Consumer c/kWh | `forecast` (170h array: spot_eur_mwh, consumer_ckwh, wind, solar, temp), `week_min/avg/max_ckwh` |
-| Duration Forecast | D(4) c/kWh | `daily_forecast` (7-day array: dk_consumer_cent_kwh[24], dk_spot_eur_mwh[24] per day) |
+| Sensor | State | Unit | Description |
+|--------|-------|------|-------------|
+| Price Forecast | Current consumer price | EUR/kWh | 170h hourly forecast with spot, consumer, weather per hour |
+| Duration Forecast | Today's D(4) | EUR/kWh | 7-day × 24-level D(k) = CVaR duration matrix |
+
+#### Price Forecast attributes
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `forecast` | array[170] | `{timestamp, spot_eur_mwh, consumer_eur_kwh, wind, solar, temp}` per hour |
+| `current_spot_eur_mwh` | float | Current hour spot price (EUR/MWh) |
+| `week_min_eur_kwh` | float | Minimum consumer price in forecast window |
+| `week_avg_eur_kwh` | float | Average consumer price in forecast window |
+| `week_max_eur_kwh` | float | Maximum consumer price in forecast window |
+| `operator` | string | Configured distribution operator |
+| `last_update` | datetime | Last successful data refresh |
+| `data_sources_active` | string | Currently active data sources |
+| `stale` | bool | True if data is older than threshold |
+| `data_age_minutes` | int | Minutes since last successful fetch |
+
+#### Duration Forecast attributes — D(k) matrix
+
+D(k) = average consumer price for the cheapest k hours in a day = Conditional Value-at-Risk (CVaR) at α = k/24. The `daily_forecast` attribute provides a 7-day × 24-level matrix in day-per-row orientation.
+
+| Attribute | Shape | Unit | Description |
+|-----------|-------|------|-------------|
+| `daily_forecast` | array[7] | — | D(k) matrix, one entry per day |
+| `daily_forecast[i].date` | string | — | ISO date (YYYY-MM-DD) |
+| `daily_forecast[i].weekday` | string | — | Mon–Sun |
+| `daily_forecast[i].dk_consumer_eur_kwh` | float[24] | EUR/kWh | D(1)…D(24) consumer price, index k−1 |
+| `daily_forecast[i].dk_spot_eur_mwh` | float[24] | EUR/MWh | D(1)…D(24) spot price, index k−1 |
+| `forecast_days` | int | — | Number of days in matrix (up to 7) |
+
+**Matrix access patterns:**
+- Single value: `daily_forecast[day].dk_consumer_eur_kwh[k-1]` → D(k) for one day
+- Consumer transposes to k-per-row: `dk_matrix[k-1][day]` for D(k) trajectory across days
+- All vectors guaranteed length 24; only complete days included
+- Consumer D(k) includes per-segment tariff conversion: night hours use night transfer rate, day hours use day rate, then merged and re-sorted
 
 ### Actual price sensors (optional, Nordpool)
 
@@ -210,11 +244,11 @@ Configurable per operator in `finland.yaml`. Default: Elenia (day 3.61, night 2.
 
 ### Design principle
 
-This integration provides **forecasts only**. Optimization functions (cheapest hours, load scheduling, heat pump control) belong in a separate thermal optimization layer that consumes the forecast data. This clean separation allows either component to be replaced independently.
+This integration provides **forecasts only**. The D(k) = CVaR duration matrix is the primary API for downstream systems — thermal optimization and load scheduling consume D(k) to answer "what does it cost per kWh to run for k hours today?" This clean separation allows either component to be replaced independently.
 
-The **Price Forecast** sensor provides a unified 170-hour forecast array in its `forecast` attribute. Each entry contains `{timestamp, spot_eur_mwh, consumer_ckwh, wind, solar, temp}`. Week statistics (`week_min/avg/max_ckwh`) are included as convenience attributes. The state is the current hour's consumer price in c/kWh.
+The **Price Forecast** sensor provides a unified 170-hour forecast array for visualization and hourly price display. The state is the current hour's consumer price in EUR/kWh.
 
-The **Duration Forecast** sensor provides D(k) = CVaR of the intra-day price distribution. The `daily_forecast` attribute contains 7 days, each with `dk_consumer_cent_kwh[24]` (c/kWh) and `dk_spot_eur_mwh[24]` (EUR/MWh). Access any level as `dk_consumer_cent_kwh[k-1]` for k=1..24. All vectors are guaranteed length 24 — only complete days are included. All consumer prices use the configured tariffs — no hardcoded rates.
+The **Duration Forecast** sensor provides the D(k) matrix for optimization decisions. The state is today's D(4) — the average cost of running during the cheapest 4 hours — serving as a quick-glance cost indicator.
 
 ---
 
@@ -342,7 +376,7 @@ HA-spot-price-predictor/
 │   ├── train_model.py           # Training pipeline
 │   ├── features.py              # Feature engineering (training)
 │   ├── data_sources.py          # API clients (training)
-│   └���─ holidays.py              # Holiday calculator
+│   └── holidays.py              # Holiday calculator
 ├── custom_components/
 │   └── spot_price_predictor/    # HA HACS integration
 │       ├── model.py             # Pure Python inference (hourly + duration)
@@ -353,12 +387,12 @@ HA-spot-price-predictor/
 │       ├── const.py             # Constants and defaults
 │       └── data/
 │           ├── model_coefs_default.json  # Bundled model
-���           └── finland.yaml              # Bundled config
+│           └── finland.yaml              # Bundled config
 ├── ha_dashboard.yaml            # Home Assistant Lovelace dashboard (ApexCharts + Mushroom)
 ├── model_dashboard.py           # Model monitoring dashboard generator
 ├── forecast_dashboard.py        # Live forecast dashboard generator
 ├── studies/                     # Archived analysis scripts
-├���─ tests/                       # 98 unit tests
+├── tests/                       # 164 unit tests
 └── output/                      # Generated artifacts
     ├── model_coefs.json
     ├── model_dashboard.html

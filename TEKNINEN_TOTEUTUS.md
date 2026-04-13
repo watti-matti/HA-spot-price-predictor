@@ -1,6 +1,6 @@
 # Tekninen toteutus: HA-spot-price-predictor
 
-Suomen pörssisähkön spot-hinnan ennustaminen tunnin tarkkuudella Home Assistantiin log-lineaarisella Ridge-regressiolla käyttäen fysiikkapohjaisia piirteitä, kestokäyräennustetta ja useiden datalähteiden integrointia.
+Sähkön kuluttajahinnan ja D(k) = CVaR -kestokustannusten ennustaminen Home Assistantiin. Tuottaa 170 tunnin kuluttajahintaennusteen (EUR/kWh) ja 7 vrk × 24 tason D(k)-kestomatriisin kuormanohjauksen kustannusoptimointiin, käyttäen log-lineaarista Ridge-regressiota fysiikkapohjaisilla piirteillä ja useiden datalähteiden integrointia.
 
 ## Arkkitehtuuri
 
@@ -190,16 +190,50 @@ Kaikki säädettävät parametrit on keskitetty tiedostoon `config/regions/finla
 
 ## Kuluttajahinnan laskenta
 
-**Kaava:** `(max(0, spot_EUR_MWh) / 1000 + marginaali + siirtohinta + energiavero) × ALV × 100` [c/kWh]
+**Kaava:** `(max(0, spot_EUR_MWh) / 1000 + marginaali + siirtohinta + energiavero) × ALV` [EUR/kWh]
 
 Konfiguroitavissa operaattorikohtaisesti tiedostossa `finland.yaml`. Oletus: Elenia (päivä 3,61, yö 2,20 c/kWh), ALV 25,5%, energiavero 2,325 c/kWh, myyjän marginaali 0,00 c/kWh (aseta sähkösopimuksesi mukaan).
 
 ### Ennustesensorit (luodaan aina)
 
-| Sensori | Tila | Attribuutit |
-|---------|------|-------------|
-| Price Forecast | Kuluttajahinta c/kWh | `forecast` (170h taulukko: spot_eur_mwh, consumer_ckwh, wind, solar, temp), `week_min/avg/max_ckwh` |
-| Duration Forecast | D(4) c/kWh | `daily_forecast` (7 vrk taulukko: dk_consumer_cent_kwh[24], dk_spot_eur_mwh[24] per päivä) |
+| Sensori | Tila | Yksikkö | Kuvaus |
+|---------|------|---------|--------|
+| Price Forecast | Nykyinen kuluttajahinta | EUR/kWh | 170h tuntiennuste: spot, kuluttajahinta, sää per tunti |
+| Duration Forecast | Tämän päivän D(4) | EUR/kWh | 7 vrk × 24 tason D(k) = CVaR -kestomatriisi |
+
+#### Price Forecast -attribuutit
+
+| Attribuutti | Tyyppi | Kuvaus |
+|-------------|--------|--------|
+| `forecast` | array[170] | `{timestamp, spot_eur_mwh, consumer_eur_kwh, wind, solar, temp}` per tunti |
+| `current_spot_eur_mwh` | float | Nykyisen tunnin spot-hinta (EUR/MWh) |
+| `week_min_eur_kwh` | float | Ennusteikkunan minimi kuluttajahinta |
+| `week_avg_eur_kwh` | float | Ennusteikkunan keskimääräinen kuluttajahinta |
+| `week_max_eur_kwh` | float | Ennusteikkunan maksimi kuluttajahinta |
+| `operator` | string | Konfiguroitu jakeluverkko-operaattori |
+| `last_update` | datetime | Viimeisin onnistunut datapäivitys |
+| `data_sources_active` | string | Aktiiviset datalähteet |
+| `stale` | bool | True jos data on vanhempaa kuin kynnysarvo |
+| `data_age_minutes` | int | Minuutteja viimeisimmästä onnistuneesta hausta |
+
+#### Duration Forecast -attribuutit — D(k)-matriisi
+
+D(k) = keskimääräinen kuluttajahinta halvimmille k tunnille päivässä = ehdollinen riskiarvo (CVaR, Conditional Value-at-Risk) tasolla α = k/24. `daily_forecast`-attribuutti sisältää 7 vrk × 24 tason matriisin päivä-per-rivi -muodossa.
+
+| Attribuutti | Muoto | Yksikkö | Kuvaus |
+|-------------|-------|---------|--------|
+| `daily_forecast` | array[7] | — | D(k)-matriisi, yksi rivi per päivä |
+| `daily_forecast[i].date` | string | — | ISO-päivämäärä (VVVV-KK-PP) |
+| `daily_forecast[i].weekday` | string | — | Mon–Sun |
+| `daily_forecast[i].dk_consumer_eur_kwh` | float[24] | EUR/kWh | D(1)…D(24) kuluttajahinta, indeksi k−1 |
+| `daily_forecast[i].dk_spot_eur_mwh` | float[24] | EUR/MWh | D(1)…D(24) spot-hinta, indeksi k−1 |
+| `forecast_days` | int | — | Päivien lukumäärä matriisissa (enintään 7) |
+
+**Matriisin käyttötavat:**
+- Yksittäinen arvo: `daily_forecast[day].dk_consumer_eur_kwh[k-1]` → D(k) yhdelle päivälle
+- Kuluttajapuoli transponoi k-per-rivi -muotoon: `dk_matrix[k-1][day]` D(k)-trajektorian seuraamiseen päivien yli
+- Kaikki vektorit taattu pituudeltaan 24; vain täydelliset päivät sisällytetään
+- Kuluttaja-D(k) sisältää segmenttikohtaisen tariffimuunnoksen: yötunnit yösiirtotariffilla, päivätunnit päivätariffilla, yhdistetty ja uudelleenlajiteltu
 
 ### Todellinen hinta -sensorit (valinnainen, Nordpool)
 
@@ -210,11 +244,11 @@ Konfiguroitavissa operaattorikohtaisesti tiedostossa `finland.yaml`. Oletus: Ele
 
 ### Suunnitteluperiaate
 
-Tämä integraatio tuottaa **ainoastaan ennusteita**. Optimointitoiminnot (halvimmat tunnit, kuormanohjaus, lämpöpumppuohjaus) kuuluvat erilliseen lämpöoptimointi-kerrokseen, joka kuluttaa ennustedataa. Tämä selkeä erottelu mahdollistaa kummankin komponentin itsenäisen korvaamisen.
+Tämä integraatio tuottaa **ainoastaan ennusteita**. D(k) = CVaR -kestomatriisi on ensisijainen rajapinta alavirtajärjestelmille — lämpöoptimointi ja kuormanohjaus käyttävät D(k)-arvoja vastatakseen kysymykseen "paljonko k tunnin käyttö maksaa tänään per kWh?" Tämä selkeä erottelu mahdollistaa kummankin komponentin itsenäisen korvaamisen.
 
-**Price Forecast** -sensori tarjoaa yhtenäisen 170 tunnin ennustetaulukon `forecast`-attribuutissa. Jokainen rivi sisältää `{timestamp, spot_eur_mwh, consumer_ckwh, wind, solar, temp}`. Viikkotilastot (`week_min/avg/max_ckwh`) sisältyvät attribuutteihin. Tila on nykyisen tunnin kuluttajahinta c/kWh.
+**Price Forecast** -sensori tarjoaa yhtenäisen 170 tunnin tuntiennusteen visualisointiin ja hintanäyttöön. Tila on nykyisen tunnin kuluttajahinta EUR/kWh.
 
-**Duration Forecast** -sensori tarjoaa D(k) = CVaR päivänsisäisestä hintajakaumasta. `daily_forecast`-attribuutti sisältää 7 päivää, joissa jokaisessa on `dk_consumer_cent_kwh[24]` (c/kWh) ja `dk_spot_eur_mwh[24]` (EUR/MWh). Mikä tahansa taso luetaan `dk_consumer_cent_kwh[k-1]` missä k=1..24. Kaikki vektorit ovat taattu pituudeltaan 24 — vain täydelliset päivät sisällytetään. Kaikki kuluttajahinnat käyttävät konfiguroituja tariffeja — ei kovakoodattuja arvoja.
+**Duration Forecast** -sensori tarjoaa D(k)-matriisin optimointipäätöksiin. Tila on tämän päivän D(4) — keskimääräinen kustannus halvimmille 4 tunnille — nopeana kustannusindikaattorina.
 
 ---
 
@@ -337,7 +371,7 @@ HA-spot-price-predictor/
 ├── model_dashboard.py           # Seurantakojelauta
 ├── forecast_dashboard.py        # Ennustekojelauta
 ├── studies/                     # Arkistoidut analyysiskriptit
-├── tests/                       # 98 yksikkötestiä
+├── tests/                       # 164 yksikkötestiä
 └── output/                      # Tuotetut artefaktit
     ├── model_coefs.json
     ├── model_dashboard.html

@@ -152,7 +152,7 @@ series:
       if (!forecast) return [];
       return forecast.map(f => [
         new Date(f.timestamp).getTime(),
-        f.consumer_ckwh
+        f.consumer_eur_kwh * 100
       ]);
 
   # ── PV Selling Price (optional, only if sensor exists) ─────────
@@ -204,7 +204,7 @@ series:
       extremas: false
       datalabels: false
     data_generator: >
-      const avg = entity.attributes.week_avg_ckwh;
+      const avg = entity.attributes.week_avg_eur_kwh * 100;
 
       if (!avg) return [];
 

@@ -3,32 +3,37 @@
 [![HACS Integration](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**Predict electricity spot prices up to 7 days ahead** using machine learning with physics-based weather features, cross-border trade analysis, and nuclear outage awareness.
+**Forecast consumer electricity costs and D(k) duration curves up to 7 days ahead** using machine learning with physics-based weather features, cross-border trade analysis, and nuclear outage awareness.
 
 [Suomenkieliset ohjeet (Finnish)](TEKNINEN_TOTEUTUS.md)
 
 ## Key Features
 
-- **170-hour price forecast** — predict Nord Pool day-ahead prices a full week into the future
-- **Works out-of-the-box** — pre-trained model included, no setup beyond choosing your operator
+- **170-hour consumer price forecast** — predict your electricity cost (EUR/kWh) for the next 7 days, including spot price, transfer tariff, seller margin, energy tax, and VAT
+- **D(k) duration curves (CVaR)** — 7-day × 24-level matrix predicting cost-optimal load scheduling: D(k) = average consumer price for the cheapest k hours per day, mathematically equivalent to CVaR at α = k/24
+- **Works out-of-the-box** — pre-trained model included, no setup beyond choosing your distribution operator
 - **Modular data sources** — starts with free weather data, optionally adds cross-border prices and Fingrid nuclear data for improved accuracy
 - **Sign-validated features** — all model coefficients match economic theory (more wind = lower price, more scarcity = higher price)
-- **Nuclear outage awareness** — planned outage schedules from Nord Pool UMM enable forward-looking nuclear impact
-- **D(k) duration forecast** — predict daily cost by usage duration (CVaR of intra-day price distribution)
-- **Consumer price calculation** — adds your energy seller's margin, operator's transfer tariff, energy tax, and VAT automatically
-- **Clean API for optimization** — forecast-only sensor interface, ready for downstream thermal optimization
+- **Nuclear outage awareness** — planned outage schedules from Nord Pool UMM enable forward-looking nuclear capacity prediction
+- **Clean API for optimization** — forecast-only sensor interface with structured D(k) matrix, ready for downstream thermal optimization
 - **Retrainable** — advanced users can retrain the model with local data for better personalization
 - **Localizable** — region configuration files allow adaptation to other Nordic/European countries
 
 ## How It Works
 
-The system uses a **log-linear Ridge regression** model trained on 4 years of historical data. The log transform naturally handles the nonlinear price-scarcity relationship: nearly linear at low prices, exponential amplification at high prices. Features are selected via greedy forward selection with sign constraints and bootstrap stability analysis. The model combines:
+The system produces two complementary forecasts from a single model coefficients file:
+
+**Hourly price model** — a log-linear Ridge regression trained on 4 years of historical data predicts spot price (EUR/MWh) for each of the next 170 hours. The coordinator converts each hour to consumer price (EUR/kWh) using your configured tariffs (transfer, margin, tax, VAT). The log transform naturally handles the nonlinear price-scarcity relationship: nearly linear at low prices, exponential amplification at high prices. Features are selected via greedy forward selection with sign constraints and bootstrap stability analysis. Key drivers:
 
 - **Wind speed at 120m** from 7 Finnish locations weighted by installed wind capacity — the dominant price driver
-- **Nonlinear wind scarcity** — logarithmic scarcity and calm-wind x demand-peak interactions
-- **AR neighbor price models** — autoregressive forecasts for Sweden (SE1, SE3) and Estonia (EE) with workday/weekend hourly profiles, capturing European market coupling
+- **Nonlinear wind scarcity** — logarithmic scarcity and calm-wind × demand-peak interactions
+- **AR neighbor price models** — autoregressive forecasts for Sweden (SE1, SE3) and Estonia (EE) capturing European market coupling
 - **Thermal demand** — squared heating degree days for nonlinear cold amplification
-- **Nuclear deficit** (optional, Fingrid API) — standalone nuclear availability + scarcity interaction
+- **Nuclear deficit** (optional, Fingrid API) — nuclear availability + scarcity interaction
+
+**Duration model (D(k) = CVaR)** — a segment-hierarchical Ridge model predicts D(k) for each of the next 7 days. D(k) is the average consumer price for the cheapest k hours in a day, mathematically equivalent to Conditional Value-at-Risk (CVaR) at level α = k/24. This makes D(k) the natural cost metric for load scheduling: "run your appliance during the cheapest k hours" costs exactly D(k) per kWh.
+
+The duration model splits each day into 4 tariff-aligned segments (night 22–07, morning 07–12, midday 12–18, evening 18–22), predicts D(k) independently per segment using Ridge regression, enforces monotonicity via PAVA (Pool Adjacent Violators Algorithm), converts each extracted sorted price to consumer EUR/kWh using segment-appropriate transfer tariffs (day/night rate), then merges all segments into a full 24-level D(k) curve.
 
 All data sources are **free**. The optional Fingrid API key is also free (email registration at [data.fingrid.fi](https://data.fingrid.fi)).
 
@@ -36,16 +41,43 @@ All data sources are **free**. The optional Fingrid API key is also free (email 
 
 ### Forecast Sensors (always created)
 
-| Sensor | State | Description |
-|--------|-------|-------------|
-| `sensor.price_forecast` | Consumer price (c/kWh) | 170h forecast array with spot EUR/MWh, consumer c/kWh, wind, solar, temperature per hour |
-| `sensor.duration_forecast` | D(4) (c/kWh) | 7-day D(k) duration curves — `dk_consumer_cent_kwh[24]` and `dk_spot_eur_mwh[24]` per day |
+| Sensor | State | Unit | Description |
+|--------|-------|------|-------------|
+| `sensor.price_forecast` | Current consumer price | EUR/kWh | 170h hourly forecast with spot, consumer, weather per hour |
+| `sensor.duration_forecast` | Today's D(4) | EUR/kWh | 7-day × 24-level D(k) = CVaR duration matrix |
 
-The **Price Forecast** sensor provides the complete hourly forecast as a `forecast` attribute array. Each entry contains `{timestamp, spot_eur_mwh, consumer_ckwh, wind, solar, temp}`. Week statistics (`week_min/avg/max_ckwh`) are included as attributes. This is the primary data interface — downstream systems (thermal optimization, load scheduling) consume this forecast to make control decisions.
+#### Price Forecast attributes
 
-The **Duration Forecast** sensor provides D(k) = CVaR of the intra-day price distribution at level k/24. The `daily_forecast` attribute contains 7 days, each with `dk_consumer_cent_kwh[24]` (c/kWh) and `dk_spot_eur_mwh[24]` (EUR/MWh). Access any level as `dk_consumer_cent_kwh[k-1]` for k=1..24. All vectors are guaranteed length 24 — only complete days are included.
+The **Price Forecast** sensor provides the complete hourly forecast as its `forecast` attribute. Each entry contains `{timestamp, spot_eur_mwh, consumer_eur_kwh, wind, solar, temp}`. The state is the current hour's consumer price in EUR/kWh.
 
-**Design principle:** This integration provides *forecasts only*. Optimization functions (cheapest hours, load scheduling, heat pump control) belong in a separate thermal optimization layer that consumes these forecasts. This clean separation means either component can be replaced independently.
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `forecast` | array[170] | Hourly entries: `{timestamp, spot_eur_mwh, consumer_eur_kwh, wind, solar, temp}` |
+| `current_spot_eur_mwh` | float | Current hour spot price (EUR/MWh) |
+| `week_min_eur_kwh` | float | Minimum consumer price in forecast window |
+| `week_avg_eur_kwh` | float | Average consumer price in forecast window |
+| `week_max_eur_kwh` | float | Maximum consumer price in forecast window |
+| `operator` | string | Configured distribution operator |
+
+#### Duration Forecast attributes — D(k) matrix
+
+The **Duration Forecast** sensor provides D(k) = CVaR of the intra-day price distribution at level α = k/24. The `daily_forecast` attribute contains a 7-day × 24-level D(k) matrix in day-per-row orientation. The state is today's D(4) in EUR/kWh.
+
+| Attribute | Shape | Unit | Description |
+|-----------|-------|------|-------------|
+| `daily_forecast` | array[7] | — | D(k) matrix, one entry per day |
+| `daily_forecast[i].date` | string | — | ISO date (YYYY-MM-DD) |
+| `daily_forecast[i].weekday` | string | — | Mon–Sun |
+| `daily_forecast[i].dk_consumer_eur_kwh` | float[24] | EUR/kWh | D(1)…D(24) consumer price, index k−1 |
+| `daily_forecast[i].dk_spot_eur_mwh` | float[24] | EUR/MWh | D(1)…D(24) spot price, index k−1 |
+
+**Matrix access patterns:**
+- Single value: `daily_forecast[day].dk_consumer_eur_kwh[k-1]` → D(k) for one day
+- Consumer transposes to k-per-row: `dk_matrix[k-1][day]` for D(k) trajectory across days
+- All vectors guaranteed length 24; only complete days included
+- Consumer prices include configured tariffs (day/night transfer rate, seller margin, energy tax, VAT)
+
+**Design principle:** This integration provides *forecasts only*. The D(k) matrix is the primary API for downstream systems — thermal optimization, load scheduling, and heat pump control consume D(k) to answer "what does it cost to run k hours today?" This clean separation means either component can be replaced independently.
 
 ### Actual Price Sensors (optional, when Nordpool entity is configured)
 
@@ -60,13 +92,15 @@ If you have a Nordpool integration installed (e.g., [custom-components/nordpool]
 
 ### Dashboard
 
-An [ApexCharts dashboard example](docs/yaml_examples/apexcharts_dashboard.yaml) is included showing:
-- **Actual consumer price** from Nordpool (step-line, color-coded) — ground truth
-- **Forecast consumer price** from the predictor (smooth line) — prediction
-- **Weekly average** reference line
-- **Wind speed forecast** on secondary axis (key price driver)
+A complete [Lovelace dashboard](ha_dashboard.yaml) is included (ApexCharts + Mushroom cards) with:
+- **48h consumer price bar chart** — color-coded hourly bars with extrema markers
+- **7-day hourly price trend** — area chart of consumer prices across the full forecast window
+- **D(k) duration curves** — multi-line chart showing D(1), D(4), D(8), D(24) trajectories across 7 days
+- **Current price + D(4) chips** — at-a-glance status with color-coded icons
+- **Week statistics** — min/avg/max consumer price summary
+- **Data status** — active sources, forecast horizon, staleness indicator
 
-This allows visual comparison of how well the forecast matches reality. Requires the [apexcharts-card](https://github.com/RomRider/apexcharts-card) custom card (install via HACS Frontend).
+An additional [ApexCharts-only dashboard](docs/yaml_examples/apexcharts_dashboard.yaml) provides actual vs forecast comparison with wind overlay. Both require the [apexcharts-card](https://github.com/RomRider/apexcharts-card) custom card (install via HACS Frontend).
 
 ## Data Sources & Features
 
