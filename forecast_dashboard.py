@@ -173,6 +173,76 @@ except Exception as e:
     print(f"  EE failed: {e}")
 
 # ================================================================
+# FETCH ACTUAL SPOT PRICES (Sahkotin, 72h) & COMPUTE ACTUAL D(k)
+# ================================================================
+print("Fetching actual spot prices from Sahkotin...")
+actual_dk = []
+try:
+    # Fetch past 3 days using start/end (hours= is forward-looking only)
+    # Extra day needed because UTC→local timezone shift can drop first day
+    _hist_start = (datetime.now(tz=timezone.utc) - timedelta(days=3)).strftime("%Y-%m-%dT00:00:00.000Z")
+    _hist_end = datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT00:00:00.000Z")
+    r = requests.get("https://sahkotin.fi/prices",
+                      params={"start": _hist_start, "end": _hist_end}, timeout=15)
+    r.raise_for_status()
+    raw_prices = r.json()
+    if isinstance(raw_prices, dict) and "prices" in raw_prices:
+        raw_prices = raw_prices["prices"]
+
+    # Group by local date
+    actual_by_date = {}
+    for entry in raw_prices:
+        ts_str = entry.get("date") or entry.get("timestamp", "")
+        price_eur_mwh = float(entry.get("value", 0.0)) / 10.0
+        try:
+            ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            local_dt = ts.astimezone(TZ)
+            date_str = local_dt.strftime("%Y-%m-%d")
+            if date_str not in actual_by_date:
+                actual_by_date[date_str] = {}
+            actual_by_date[date_str][local_dt.hour] = price_eur_mwh
+        except Exception:
+            pass
+
+    # Compute D(k) for each complete day (24 hours)
+    today_str = datetime.now(tz=TZ).strftime("%Y-%m-%d")
+    for date_str in sorted(actual_by_date.keys()):
+        hours_map = actual_by_date[date_str]
+        if len(hours_map) < 24:
+            continue
+        # Skip today (incomplete until midnight) and future
+        if date_str >= today_str:
+            continue
+
+        # Sort 24 hourly prices ascending
+        sorted_prices = sorted(hours_map[h] for h in range(24))
+        running = 0.0
+        dk_curve = []
+        for i, p in enumerate(sorted_prices):
+            running += p
+            dk_curve.append(running / (i + 1))
+
+        # Also compute sorted consumer prices for comparison
+        sorted_cons = sorted(to_cons(hours_map[h]) for h in range(24))
+
+        dow = datetime.strptime(date_str, "%Y-%m-%d").weekday()
+        actual_dk.append({
+            "date": date_str,
+            "dow": dow,
+            "source": "actual",
+            "dk": [round(v, 2) for v in dk_curve],
+            "dk_cons": [round(to_cons(v), 2) for v in dk_curve],
+            "hourly_sorted_cons": [round(v, 2) for v in sorted_cons],
+            "d1": round(to_cons(dk_curve[0]), 2),
+            "d4": round(to_cons(dk_curve[3]), 2) if len(dk_curve) > 3 else 0,
+            "d8": round(to_cons(dk_curve[7]), 2) if len(dk_curve) > 7 else 0,
+            "d24": round(to_cons(dk_curve[23]), 2) if len(dk_curve) > 23 else 0,
+        })
+    print(f"  {len(actual_dk)} actual D(k) days: {[d['date'] for d in actual_dk]}")
+except Exception as e:
+    print(f"  Sahkotin fetch failed: {e}")
+
+# ================================================================
 # LOAD MODEL & BUILD AR FORECASTS
 # ================================================================
 print("Loading model...")
@@ -376,7 +446,46 @@ for i in range(min(FORECAST_HOURS, len(weather_hours))):
         "temp": round(w["temp"], 1),
     })
 
-print(f"  {len(hourly_forecast)} hourly predictions")
+# Mark forecast entries
+for hf in hourly_forecast:
+    hf["source"] = "forecast"
+
+# Prepend actual hourly prices from Sahkotin (already fetched in actual_by_date)
+actual_hourly = []
+if actual_by_date:
+    for date_str in sorted(actual_by_date.keys()):
+        hours_map = actual_by_date[date_str]
+        if len(hours_map) < 24:
+            continue
+        today_str = datetime.now(tz=TZ).strftime("%Y-%m-%d")
+        if date_str >= today_str:
+            continue
+        for h in range(24):
+            spot = hours_map.get(h, 0.0)
+            local_dt = datetime.strptime(f"{date_str} {h:02d}:00", "%Y-%m-%d %H:%M")
+            local_dt = local_dt.replace(tzinfo=TZ)
+            utc_dt = local_dt.astimezone(timezone.utc)
+            actual_hourly.append({
+                "utc": utc_dt.isoformat(),
+                "local": local_dt.strftime("%Y-%m-%d %H:%M"),
+                "local_date": date_str,
+                "local_hour": h,
+                "dow": local_dt.weekday(),
+                "price_eur_mwh": round(spot, 2),
+                "price_cons": round(to_cons(spot), 2),
+                "wind": 0,
+                "solar": 0,
+                "temp": 0,
+                "source": "actual",
+            })
+
+if actual_hourly:
+    # Remove any forecast entries that overlap with actual dates
+    actual_dates = {h["local_date"] for h in actual_hourly}
+    hourly_forecast = [h for h in hourly_forecast if h["local_date"] not in actual_dates]
+    hourly_forecast = actual_hourly + hourly_forecast
+
+print(f"  {len(hourly_forecast)} total hourly entries ({len(actual_hourly)} actual + {len(hourly_forecast) - len(actual_hourly)} forecast)")
 
 # ================================================================
 # BUILD DAILY D(k) DURATION CURVES
@@ -406,7 +515,14 @@ if dur_data:
             by_date[d] = []
         by_date[d].append(fh)
 
+    # Dates with actual D(k) — skip these in forecast D(k) computation
+    actual_dk_dates = {d["date"] for d in actual_dk}
+
     for date_str in sorted(by_date.keys()):
+        # Skip dates that have actual D(k) from Sahkotin
+        if date_str in actual_dk_dates:
+            continue
+
         day_hours = by_date[date_str]
         if len(day_hours) < 20:
             continue
@@ -515,6 +631,7 @@ if dur_data:
         daily_dk.append({
             "date": date_str,
             "dow": day_hours[0]["dow"],
+            "source": "forecast",
             "dk": [round(v, 2) for v in dk_curve],
             "dk_cons": [round(to_cons(v), 2) for v in dk_curve],
             "hourly_sorted_cons": [round(to_cons(v), 2) for v in hourly_prices],
@@ -524,9 +641,16 @@ if dur_data:
             "d24": round(to_cons(dk_curve[min(23, len(dk_curve) - 1)]), 2),
         })
 
-    print(f"  {len(daily_dk)} daily D(k) curves")
+    print(f"  {len(daily_dk)} forecast D(k) curves")
 else:
     print("  WARNING: No duration model in model_coefs.json")
+
+# Prepend actual D(k) before forecast, avoiding duplicate dates
+forecast_dates = {d["date"] for d in daily_dk}
+actual_to_prepend = [d for d in actual_dk if d["date"] not in forecast_dates]
+if actual_to_prepend:
+    daily_dk = actual_to_prepend + daily_dk
+    print(f"  Prepended {len(actual_to_prepend)} actual D(k) days -> {len(daily_dk)} total")
 
 # ================================================================
 # BUILD HTML
@@ -568,6 +692,7 @@ canvas { width:100%!important; }
 .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:10px; margin:10px 0; }
 .card { background:#1e293b; border-radius:8px; padding:12px; text-align:center; }
 .card.weekend { border:1px solid #475569; }
+.card.actual { border:2px solid #22d3ee; background:#1a2535; }
 .card .day { font-size:12px; color:#94a3b8; font-weight:600; }
 .card .date { font-size:10px; color:#64748b; }
 .card .price { font-size:22px; font-weight:700; margin:6px 0 2px; }
@@ -599,8 +724,8 @@ footer a { color:#60a5fa; text-decoration:none; }
 D(4) = cheapest 4h, D(8) = cheapest 8h, D(24) = daily average.</p>
 <div class="cards" id="day-cards"></div>
 
-<h2>7-Day D(k) Forecast (Consumer c/kWh)</h2>
-<p class="sub">Duration curve cost forecast per day.
+<h2>D(k) Duration Costs (Consumer c/kWh)</h2>
+<p class="sub">Actual (filled) + forecast (open) duration curve costs per day.
 Lower = cheaper electricity for that usage pattern.</p>
 <div class="box"><canvas id="dkChart" height="280"></canvas></div>
 
@@ -648,12 +773,13 @@ document.getElementById('gen-time').textContent = F.generated;
   const el=document.getElementById('day-cards');
   DK.forEach((d,i)=>{
     const isWe=d.dow>=5;
+    const isActual=d.source==='actual';
     const dayName=F.day_names[d.dow];
     const dateShort=d.date.substring(5);
-    const cls=isWe?'card weekend':'card';
+    const cls=(isWe?'card weekend':'card')+(isActual?' actual':'');
     el.innerHTML+=
       '<div class="'+cls+'" onclick="showDay('+i+')" style="cursor:pointer">'+
-      '<div class="day">'+dayName+'</div>'+
+      '<div class="day">'+dayName+(isActual?' &#9679;':'')+'</div>'+
       '<div class="date">'+dateShort+'</div>'+
       '<div class="price '+priceClass(d.d4)+'">'+d.d4.toFixed(1)+'</div>'+
       '<div class="label">D(4) 4h c/kWh</div>'+
@@ -665,20 +791,25 @@ document.getElementById('gen-time').textContent = F.generated;
   });
 })();
 
-// ── D(k) line chart (7 days) ──
+// ── D(k) line chart (actual + forecast) ──
 (function(){
   if(!DK.length) return;
-  const labels=DK.map(d=>F.day_names[d.dow]+'\\n'+d.date.substring(5));
+  const labels=DK.map(d=>(d.source==='actual'?'\\u2588 ':'')+F.day_names[d.dow]+'\\n'+d.date.substring(5));
+  // Point styles: filled circle for actual, open circle for forecast
+  const ptStyle=DK.map(d=>d.source==='actual'?'circle':'circle');
+  const ptBg=(color)=>DK.map(d=>d.source==='actual'?color:'transparent');
+  const ptBorder=(color)=>DK.map(d=>color);
+  const ptBw=DK.map(d=>d.source==='actual'?0:2);
   new Chart(document.getElementById('dkChart').getContext('2d'),{type:'line',
     data:{labels,datasets:[
       {label:'D(1) Cheapest 1h',data:DK.map(d=>d.d1),borderColor:'#22d3ee',borderWidth:2,pointRadius:5,
-       pointBackgroundColor:'#22d3ee',fill:false,tension:0.3},
+       pointBackgroundColor:ptBg('#22d3ee'),pointBorderColor:ptBorder('#22d3ee'),pointBorderWidth:ptBw,fill:false,tension:0.3},
       {label:'D(4) Cheapest 4h',data:DK.map(d=>d.d4),borderColor:'#facc15',borderWidth:2.5,pointRadius:6,
-       pointBackgroundColor:'#facc15',fill:false,tension:0.3},
+       pointBackgroundColor:ptBg('#facc15'),pointBorderColor:ptBorder('#facc15'),pointBorderWidth:ptBw,fill:false,tension:0.3},
       {label:'D(8) Cheapest 8h',data:DK.map(d=>d.d8),borderColor:'#f97316',borderWidth:2,pointRadius:5,
-       pointBackgroundColor:'#f97316',fill:false,tension:0.3},
+       pointBackgroundColor:ptBg('#f97316'),pointBorderColor:ptBorder('#f97316'),pointBorderWidth:ptBw,fill:false,tension:0.3},
       {label:'D(24) Daily Average',data:DK.map(d=>d.d24),borderColor:'#ef4444',borderWidth:2,pointRadius:5,
-       pointBackgroundColor:'#ef4444',fill:false,tension:0.3},
+       pointBackgroundColor:ptBg('#ef4444'),pointBorderColor:ptBorder('#ef4444'),pointBorderWidth:ptBw,fill:false,tension:0.3},
     ]},
     options:{responsive:true,animation:false,
       interaction:{mode:'index',intersect:false},

@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "dashboard-preview",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "8787", "-d", "output"],
+      "port": 8787
+    }
+  ]
+}

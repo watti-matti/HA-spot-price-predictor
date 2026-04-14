@@ -278,6 +278,23 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                 forecast, weather, ar_neighbor_hourly, nuclear_data, now,
             )
 
+            # Prepend actual D(k) from historical spot prices (yesterday + day before)
+            try:
+                historical_prices = await self.api.fetch_spot_prices_historical(days=2)
+            except Exception:
+                historical_prices = []
+            actual_dk = self._compute_actual_duration_curves(
+                historical_prices or spot_prices, now)
+            if actual_dk:
+                forecast_dates = {d["date"] for d in duration_forecast}
+                to_prepend = [d for d in actual_dk if d["date"] not in forecast_dates]
+                if to_prepend:
+                    duration_forecast = to_prepend + duration_forecast
+                    _LOGGER.info(
+                        "Prepended %d actual D(k) days: %s",
+                        len(to_prepend), [d["date"] for d in to_prepend],
+                    )
+
             # Merge into rolling history (keeps past predictions for charts)
             for f in forecast:
                 self._forecast_history[f["timestamp"]] = f
@@ -487,10 +504,94 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
             day_entry: dict[str, Any] = {
                 "date": date_str,
                 "weekday": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][dow],
+                "source": "forecast",
                 "dk_consumer_eur_kwh": dk_consumer,
                 "dk_spot_eur_mwh": [round(v, 2) for v in dk_spot],
             }
             result.append(day_entry)
 
         _LOGGER.info("Duration forecast computed: %d days", len(result))
+        return result
+
+    def _compute_actual_duration_curves(
+        self,
+        spot_prices: list[dict[str, Any]],
+        now: datetime,
+    ) -> list[dict[str, Any]]:
+        """Compute D(k) from actual spot prices for completed past days.
+
+        Returns up to 2 days of actual D(k) curves (yesterday + day before).
+        Each entry matches the duration_forecast format with an extra
+        'source': 'actual' field.
+        """
+        if not spot_prices:
+            return []
+
+        # Group spot prices by local date
+        by_date: dict[str, dict[int, float]] = {}
+        for entry in spot_prices:
+            ts_str = entry.get("timestamp", "")
+            if not ts_str:
+                continue
+            try:
+                ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                if self._tz:
+                    from zoneinfo import ZoneInfo
+                    aware = ts.replace(tzinfo=ZoneInfo("UTC")) if ts.tzinfo is None else ts
+                    local = aware.astimezone(self._tz)
+                else:
+                    local = ts + timedelta(hours=3)
+                date_str = local.strftime("%Y-%m-%d")
+                if date_str not in by_date:
+                    by_date[date_str] = {}
+                by_date[date_str][local.hour] = entry.get("price_eur_mwh", 0.0)
+            except Exception:
+                continue
+
+        # Only use completed past days (not today)
+        today_str = now.strftime("%Y-%m-%d")
+        if self._tz:
+            from zoneinfo import ZoneInfo
+            today_str = now.replace(
+                tzinfo=ZoneInfo("UTC")).astimezone(self._tz).strftime("%Y-%m-%d")
+
+        result: list[dict[str, Any]] = []
+        for date_str in sorted(by_date.keys()):
+            if date_str >= today_str:
+                continue
+            hours_map = by_date[date_str]
+            if len(hours_map) < 24:
+                continue
+
+            # Sort 24 hourly spot prices ascending, compute D(k)
+            sorted_spot = sorted(hours_map[h] for h in range(24))
+            running_spot = 0.0
+            dk_spot: list[float] = []
+            for i, p in enumerate(sorted_spot):
+                running_spot += p
+                dk_spot.append(round(running_spot / (i + 1), 2))
+
+            # Convert to consumer EUR/kWh with day/night tariffs
+            consumer_prices: list[float] = []
+            for h in range(24):
+                is_night = h < 7 or h >= 22
+                consumer_prices.append(
+                    self._spot_to_consumer_eur_kwh(hours_map[h], is_night))
+            consumer_prices.sort()
+            running_cons = 0.0
+            dk_consumer: list[float] = []
+            for i, cp in enumerate(consumer_prices):
+                running_cons += cp
+                dk_consumer.append(round(running_cons / (i + 1), 4))
+
+            dow = datetime.strptime(date_str, "%Y-%m-%d").weekday()
+            result.append({
+                "date": date_str,
+                "weekday": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][dow],
+                "source": "actual",
+                "dk_consumer_eur_kwh": dk_consumer,
+                "dk_spot_eur_mwh": dk_spot,
+            })
+
+        _LOGGER.info("Actual D(k) computed: %d days", len(result))
         return result
