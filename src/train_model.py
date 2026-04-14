@@ -266,10 +266,10 @@ def train(
 # ---------------------------------------------------------------------------
 _DURATION_DEFAULTS = {
     "segments": {
-        "night":   [22, 23, 0, 1, 2, 3, 4, 5],
-        "morning": [6, 7, 8, 9],
-        "midday":  [10, 11, 12, 13, 14, 15],
-        "evening": [16, 17, 18, 19, 20, 21],
+        "night":   [22, 23, 0, 1, 2, 3, 4, 5, 6],  # 9h aligned with night tariff 22-07
+        "morning": [7, 8, 9, 10, 11],                # 5h day tariff
+        "midday":  [12, 13, 14, 15, 16, 17],          # 6h day tariff
+        "evening": [18, 19, 20, 21],                   # 4h day tariff 18-22
     },
     "features": [
         "wind_mean", "solar_mean", "hdd_mean", "se3_mean", "se1_mean",

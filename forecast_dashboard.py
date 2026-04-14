@@ -51,12 +51,14 @@ _tax = cons_cfg.get("energy_tax_eur_kwh", 0.02325)
 _seller = cons_cfg.get("seller_margin_eur_kwh", 0.0)
 _default_op = cons_cfg.get("default_operator", "Elenia")
 _operators = {op["name"]: op for op in cons_cfg.get("operators", [])}
-_transfer = _operators.get(_default_op, {}).get("day_rate_eur_kwh", 0.0361)
+_day_transfer = _operators.get(_default_op, {}).get("day_rate_eur_kwh", 0.0361)
+_night_transfer = _operators.get(_default_op, {}).get("night_rate_eur_kwh", _day_transfer)
 
 
-def to_cons(spot_eur_mwh):
-    """Convert spot EUR/MWh to consumer c/kWh."""
-    return (max(0.0, spot_eur_mwh) / 1000 + _transfer + _tax + _seller) * _vat * 100
+def to_cons(spot_eur_mwh, is_night=False):
+    """Convert spot EUR/MWh to consumer c/kWh with day/night transfer rate."""
+    transfer = _night_transfer if is_night else _day_transfer
+    return (max(0.0, spot_eur_mwh) / 1000 + transfer + _tax + _seller) * _vat * 100
 
 
 # Weather locations from config
@@ -222,8 +224,14 @@ try:
             running += p
             dk_curve.append(running / (i + 1))
 
-        # Also compute sorted consumer prices for comparison
-        sorted_cons = sorted(to_cons(hours_map[h]) for h in range(24))
+        # Compute consumer D(k) directly from hourly consumer prices (with day/night tariff)
+        consumer_by_hour = [to_cons(hours_map[h], is_night=(h < 7 or h >= 22)) for h in range(24)]
+        sorted_cons = sorted(consumer_by_hour)
+        running_cons = 0.0
+        dk_cons_curve = []
+        for i, cp in enumerate(sorted_cons):
+            running_cons += cp
+            dk_cons_curve.append(running_cons / (i + 1))
 
         dow = datetime.strptime(date_str, "%Y-%m-%d").weekday()
         actual_dk.append({
@@ -231,12 +239,12 @@ try:
             "dow": dow,
             "source": "actual",
             "dk": [round(v, 2) for v in dk_curve],
-            "dk_cons": [round(to_cons(v), 2) for v in dk_curve],
+            "dk_cons": [round(v, 2) for v in dk_cons_curve],
             "hourly_sorted_cons": [round(v, 2) for v in sorted_cons],
-            "d1": round(to_cons(dk_curve[0]), 2),
-            "d4": round(to_cons(dk_curve[3]), 2) if len(dk_curve) > 3 else 0,
-            "d8": round(to_cons(dk_curve[7]), 2) if len(dk_curve) > 7 else 0,
-            "d24": round(to_cons(dk_curve[23]), 2) if len(dk_curve) > 23 else 0,
+            "d1": round(dk_cons_curve[0], 2),
+            "d4": round(dk_cons_curve[3], 2) if len(dk_cons_curve) > 3 else 0,
+            "d8": round(dk_cons_curve[7], 2) if len(dk_cons_curve) > 7 else 0,
+            "d24": round(dk_cons_curve[23], 2) if len(dk_cons_curve) > 23 else 0,
         })
     print(f"  {len(actual_dk)} actual D(k) days: {[d['date'] for d in actual_dk]}")
 except Exception as e:
@@ -440,7 +448,7 @@ for i in range(min(FORECAST_HOURS, len(weather_hours))):
         "local_hour": local_dt.hour,
         "dow": local_dt.weekday(),
         "price_eur_mwh": round(price, 2),
-        "price_cons": round(to_cons(price), 2),
+        "price_cons": round(to_cons(price, is_night=(local_dt.hour < 7 or local_dt.hour >= 22)), 2),
         "wind": round(w["wind"], 1),
         "solar": round(w["solar"], 0),
         "temp": round(w["temp"], 1),
@@ -472,7 +480,7 @@ if actual_by_date:
                 "local_hour": h,
                 "dow": local_dt.weekday(),
                 "price_eur_mwh": round(spot, 2),
-                "price_cons": round(to_cons(spot), 2),
+                "price_cons": round(to_cons(spot, is_night=(h < 7 or h >= 22)), 2),
                 "wind": 0,
                 "solar": 0,
                 "temp": 0,
@@ -501,10 +509,10 @@ if dur_data:
     dur_log_offset = dur_data.get("log_offset", 55)
     dur_exp_cap = dur_data.get("exp_cap", 20.0)
     seg_defs = dur_cfg.get("segments", {
-        "night": [22, 23, 0, 1, 2, 3, 4, 5],
-        "morning": [6, 7, 8, 9],
-        "midday": [10, 11, 12, 13, 14, 15],
-        "evening": [16, 17, 18, 19, 20, 21],
+        "night":   [22, 23, 0, 1, 2, 3, 4, 5, 6],  # aligned with night tariff 22-07
+        "morning": [7, 8, 9, 10, 11],
+        "midday":  [12, 13, 14, 15, 16, 17],
+        "evening": [18, 19, 20, 21],
     })
 
     # Group forecast hours by date
@@ -625,20 +633,28 @@ if dur_data:
             running += p
             dk_curve.append(running / (i + 1))
 
-        # Also compute hourly model daily stats for comparison
-        hourly_prices = sorted([h["price_eur_mwh"] for h in day_hours])
+        # Compute consumer D(k) from hourly forecast prices with day/night tariff
+        hourly_cons = sorted(
+            to_cons(h["price_eur_mwh"], is_night=(h["local_hour"] < 7 or h["local_hour"] >= 22))
+            for h in day_hours
+        )
+        running_cons = 0.0
+        dk_cons_curve = []
+        for i, cp in enumerate(hourly_cons):
+            running_cons += cp
+            dk_cons_curve.append(running_cons / (i + 1))
 
         daily_dk.append({
             "date": date_str,
             "dow": day_hours[0]["dow"],
             "source": "forecast",
             "dk": [round(v, 2) for v in dk_curve],
-            "dk_cons": [round(to_cons(v), 2) for v in dk_curve],
-            "hourly_sorted_cons": [round(to_cons(v), 2) for v in hourly_prices],
-            "d1": round(to_cons(dk_curve[0]), 2) if len(dk_curve) > 0 else 0,
-            "d4": round(to_cons(dk_curve[3]), 2) if len(dk_curve) > 3 else 0,
-            "d8": round(to_cons(dk_curve[7]), 2) if len(dk_curve) > 7 else 0,
-            "d24": round(to_cons(dk_curve[min(23, len(dk_curve) - 1)]), 2),
+            "dk_cons": [round(v, 2) for v in dk_cons_curve],
+            "hourly_sorted_cons": [round(v, 2) for v in hourly_cons],
+            "d1": round(dk_cons_curve[0], 2) if dk_cons_curve else 0,
+            "d4": round(dk_cons_curve[3], 2) if len(dk_cons_curve) > 3 else 0,
+            "d8": round(dk_cons_curve[7], 2) if len(dk_cons_curve) > 7 else 0,
+            "d24": round(dk_cons_curve[min(23, len(dk_cons_curve) - 1)], 2) if dk_cons_curve else 0,
         })
 
     print(f"  {len(daily_dk)} forecast D(k) curves")
@@ -667,7 +683,8 @@ forecast_json = json.dumps({
     "consumer": {
         "vat": _vat,
         "tax_eur_kwh": _tax,
-        "transfer_eur_kwh": _transfer,
+        "transfer_day_eur_kwh": _day_transfer,
+        "transfer_night_eur_kwh": _night_transfer,
         "seller_eur_kwh": _seller,
         "operator": _default_op,
     },
@@ -753,7 +770,7 @@ X = cheapest hours used, Y = average cost.</p>
 const F = ''' + forecast_json + ''';
 const H = F.hourly, DK = F.daily_dk;
 
-function toC(s){ return (Math.max(0,s)/1000+''' + str(_transfer) + '''+''' + str(_tax) + '''+''' + str(_seller) + ''')*''' + str(_vat) + '''*100; }
+function toC(s,night){ var t=night?''' + str(_night_transfer) + ''':''' + str(_day_transfer) + '''; return (Math.max(0,s)/1000+t+''' + str(_tax) + '''+''' + str(_seller) + ''')*''' + str(_vat) + '''*100; }
 
 function priceClass(c){
   if(c<8) return 'price-low';
