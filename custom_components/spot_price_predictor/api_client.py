@@ -154,7 +154,7 @@ class SpotPriceApiClient:
                 for entry in raw:
                     prices.append({
                         "timestamp": entry.get("date") or entry.get("timestamp"),
-                        "price_eur_mwh": float(entry.get("value", 0.0)) / 10.0,
+                        "price_eur_mwh": float(entry.get("value", 0.0)),
                     })
                 _LOGGER.info("Sahkotin: fetched %d price entries", len(prices))
                 return prices
@@ -163,14 +163,17 @@ class SpotPriceApiClient:
             raise ApiClientError(f"Sahkotin: {err}") from err
 
     async def fetch_spot_prices_historical(self, days: int = 2) -> list[dict[str, Any]]:
-        """Fetch past N days of Finnish spot prices from Sahkotin.
+        """Fetch past N days + today of Finnish spot prices from Sahkotin.
 
         Uses start/end parameters (hours= is forward-looking only).
+        Includes today since Nordpool day-ahead prices are known.
         Returns list of dicts with keys: timestamp (ISO), price_eur_mwh.
         """
         try:
             from datetime import datetime, timedelta, timezone
-            end = datetime.now(timezone.utc).strftime("%Y-%m-%dT00:00:00.000Z")
+            # End = tomorrow 00:00 to include all of today's known prices
+            end = (datetime.now(timezone.utc) + timedelta(days=1)).strftime(
+                "%Y-%m-%dT00:00:00.000Z")
             start = (datetime.now(timezone.utc) - timedelta(days=days)).strftime(
                 "%Y-%m-%dT00:00:00.000Z")
             params = {"start": start, "end": end}
@@ -187,7 +190,7 @@ class SpotPriceApiClient:
                 for entry in raw:
                     prices.append({
                         "timestamp": entry.get("date") or entry.get("timestamp"),
-                        "price_eur_mwh": float(entry.get("value", 0.0)) / 10.0,
+                        "price_eur_mwh": float(entry.get("value", 0.0)),
                     })
                 _LOGGER.info("Sahkotin historical: fetched %d price entries (%d days)",
                              len(prices), days)

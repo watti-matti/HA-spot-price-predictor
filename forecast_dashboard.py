@@ -180,10 +180,10 @@ except Exception as e:
 print("Fetching actual spot prices from Sahkotin...")
 actual_dk = []
 try:
-    # Fetch past 3 days using start/end (hours= is forward-looking only)
-    # Extra day needed because UTC→local timezone shift can drop first day
+    # Fetch past 3 days + today (Nordpool day-ahead prices are known)
+    # Extra day needed because UTC->local timezone shift can drop first day
     _hist_start = (datetime.now(tz=timezone.utc) - timedelta(days=3)).strftime("%Y-%m-%dT00:00:00.000Z")
-    _hist_end = datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT00:00:00.000Z")
+    _hist_end = (datetime.now(tz=timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%dT00:00:00.000Z")
     r = requests.get("https://sahkotin.fi/prices",
                       params={"start": _hist_start, "end": _hist_end}, timeout=15)
     r.raise_for_status()
@@ -195,7 +195,7 @@ try:
     actual_by_date = {}
     for entry in raw_prices:
         ts_str = entry.get("date") or entry.get("timestamp", "")
-        price_eur_mwh = float(entry.get("value", 0.0)) / 10.0
+        price_eur_mwh = float(entry.get("value", 0.0))
         try:
             ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
             local_dt = ts.astimezone(TZ)
@@ -207,13 +207,14 @@ try:
             pass
 
     # Compute D(k) for each complete day (24 hours)
-    today_str = datetime.now(tz=TZ).strftime("%Y-%m-%d")
+    # Include today — Nordpool day-ahead prices are published by 14:00 yesterday
+    tomorrow_str = (datetime.now(tz=TZ) + timedelta(days=1)).strftime("%Y-%m-%d")
     for date_str in sorted(actual_by_date.keys()):
         hours_map = actual_by_date[date_str]
         if len(hours_map) < 24:
             continue
-        # Skip today (incomplete until midnight) and future
-        if date_str >= today_str:
+        # Skip future days (tomorrow onward — those are forecasts)
+        if date_str >= tomorrow_str:
             continue
 
         # Sort 24 hourly prices ascending
