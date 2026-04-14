@@ -662,12 +662,21 @@ if dur_data:
 else:
     print("  WARNING: No duration model in model_coefs.json")
 
-# Prepend actual D(k) before forecast, avoiding duplicate dates
-forecast_dates = {d["date"] for d in daily_dk}
-actual_to_prepend = [d for d in actual_dk if d["date"] not in forecast_dates]
-if actual_to_prepend:
-    daily_dk = actual_to_prepend + daily_dk
-    print(f"  Prepended {len(actual_to_prepend)} actual D(k) days -> {len(daily_dk)} total")
+# Merge actual D(k) with forecast: replace forecast with actual for overlapping days
+if actual_dk:
+    actual_dates = {d["date"]: d for d in actual_dk}
+    merged_dk = []
+    replaced = 0
+    for fd in daily_dk:
+        if fd["date"] in actual_dates:
+            merged_dk.append(actual_dates.pop(fd["date"]))
+            replaced += 1
+        else:
+            merged_dk.append(fd)
+    # Prepend remaining actual-only days
+    remaining = sorted(actual_dates.values(), key=lambda d: d["date"])
+    daily_dk = remaining + merged_dk
+    print(f"  Actual D(k): {replaced} replaced forecast, {len(remaining)} prepended -> {len(daily_dk)} total")
 
 # ================================================================
 # BUILD HTML

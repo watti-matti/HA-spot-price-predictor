@@ -286,14 +286,25 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
             actual_dk = self._compute_actual_duration_curves(
                 historical_prices or spot_prices, now)
             if actual_dk:
-                forecast_dates = {d["date"] for d in duration_forecast}
-                to_prepend = [d for d in actual_dk if d["date"] not in forecast_dates]
-                if to_prepend:
-                    duration_forecast = to_prepend + duration_forecast
-                    _LOGGER.info(
-                        "Prepended %d actual D(k) days: %s",
-                        len(to_prepend), [d["date"] for d in to_prepend],
-                    )
+                # Replace forecast entries with actual data for overlapping days,
+                # then prepend any remaining actual-only days
+                actual_dates = {d["date"]: d for d in actual_dk}
+                merged = []
+                replaced = 0
+                for fd in duration_forecast:
+                    if fd["date"] in actual_dates:
+                        merged.append(actual_dates.pop(fd["date"]))
+                        replaced += 1
+                    else:
+                        merged.append(fd)
+                # Prepend remaining actual days (no forecast overlap)
+                remaining = sorted(actual_dates.values(), key=lambda d: d["date"])
+                duration_forecast = remaining + merged
+                _LOGGER.info(
+                    "Actual D(k): %d days total (%d replaced forecast, %d prepended): %s",
+                    len(actual_dk), replaced, len(remaining),
+                    [d["date"] for d in actual_dk],
+                )
 
             # Merge into rolling history (keeps past predictions for charts)
             for f in forecast:
@@ -548,16 +559,18 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
             except Exception:
                 continue
 
-        # Only use completed past days (not today)
-        today_str = now.strftime("%Y-%m-%d")
+        # Include today + completed past days (Nordpool day-ahead prices
+        # are published by 14:00 the day before, so today is always known)
+        tomorrow_str = (now + timedelta(days=1)).strftime("%Y-%m-%d")
         if self._tz:
             from zoneinfo import ZoneInfo
-            today_str = now.replace(
-                tzinfo=ZoneInfo("UTC")).astimezone(self._tz).strftime("%Y-%m-%d")
+            tomorrow_str = (now.replace(
+                tzinfo=ZoneInfo("UTC")).astimezone(self._tz) + timedelta(days=1)
+            ).strftime("%Y-%m-%d")
 
         result: list[dict[str, Any]] = []
         for date_str in sorted(by_date.keys()):
-            if date_str >= today_str:
+            if date_str >= tomorrow_str:
                 continue
             hours_map = by_date[date_str]
             if len(hours_map) < 24:
