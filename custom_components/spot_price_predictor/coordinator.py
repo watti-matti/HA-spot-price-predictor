@@ -151,10 +151,21 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
 
             # Cross-border neighbor prices
             neighbor_spreads: dict[str, float] | None = None
+            neighbor: dict[str, list] = {}
             if self.enable_neighbor_prices:
                 try:
                     neighbor = await self.api.fetch_neighbor_prices()
-                    neighbor_spreads = self.api.compute_rolling_spreads(spot_prices, neighbor)
+                    # Use historical FI prices for spread computation (forward-only
+                    # spot_prices may not overlap with neighbor historical data)
+                    try:
+                        fi_historical = await self.api.fetch_spot_prices_historical(days=2)
+                    except Exception:
+                        fi_historical = []
+                    fi_for_spreads = fi_historical + spot_prices if fi_historical else spot_prices
+                    neighbor_spreads = self.api.compute_rolling_spreads(fi_for_spreads, neighbor)
+                    if neighbor_spreads:
+                        _LOGGER.info("Cross-border spreads: %s",
+                                     {k: f"{v:.1f}" for k, v in neighbor_spreads.items()})
                 except Exception as err:
                     _LOGGER.warning("Cross-border data fetch failed: %s", err)
 
