@@ -343,7 +343,7 @@ pip install -r requirements.txt
 
 # Retrain with latest data
 export FINGRID_API_KEY=your_key_here  # optional
-python -m src.train_model --region finland
+python -m src.train_model --region finland --fingrid-key YOUR_KEY
 
 # Generate monitoring dashboard
 python model_dashboard.py

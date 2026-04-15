@@ -322,7 +322,7 @@ pip install -r requirements.txt
 
 # Kouluta uusimmalla datalla
 export FINGRID_API_KEY=avaimesi  # valinnainen
-python -m src.train_model --region finland
+python -m src.train_model --region finland --fingrid-key YOUR_KEY
 
 # Luo seurantakojelauta
 python model_dashboard.py

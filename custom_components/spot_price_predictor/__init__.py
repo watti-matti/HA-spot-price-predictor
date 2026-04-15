@@ -90,7 +90,7 @@ def _register_services(hass: HomeAssistant) -> None:
         """Upload new model coefficients from file or JSON string.
 
         After training on PC, use this service to update the model:
-          python -m src.train_model --region finland
+          python -m src.train_model --region finland --fingrid-key YOUR_KEY
           # Then call this service with file_path pointing to output/model_coefs.json
         """
         file_path = call.data.get("file_path")
@@ -189,7 +189,7 @@ def _register_services(hass: HomeAssistant) -> None:
                 f"**Duration model:** {'Yes' if 'duration_model' in coefs else 'No'}\n\n"
                 f"To retrain, run on your PC:\n"
                 f"```\n"
-                f"python -m src.train_model --region finland\n"
+                f"python -m src.train_model --region finland --fingrid-key YOUR_KEY\n"
                 f"```\n"
                 f"Then upload with the `{DOMAIN}.{SERVICE_UPLOAD_COEFFICIENTS}` service."
             )

@@ -2,18 +2,19 @@
 Main training pipeline: fetch data, build features, train Ridge regression, export.
 
 Usage:
-    python -m src.train_model --region finland [--years 4] [--half-life 365]
+    python -m src.train_model --region finland --fingrid-key YOUR_KEY [--years 4]
 
 The pipeline adapts to available data sources:
   - Base (11 features): Always available (Sahkotin + Open-Meteo)
   - Cross-border (+4 features): If elprisetjustnu.se + Elering reachable
-  - Nuclear (+2 features): If FINGRID_API_KEY env var is set
+  - Nuclear (+2 features): If --fingrid-key provided or FINGRID_API_KEY env var set
 """
 
 import argparse
 import gc
 import json
 import logging
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -609,7 +610,13 @@ def main():
                         help="Load data from cached parquet files instead of fetching")
     parser.add_argument("--skip-duration", action="store_true",
                         help="Skip D(k) duration model training")
+    parser.add_argument("--fingrid-key", default=None,
+                        help="Fingrid API key (alternative to FINGRID_API_KEY env var)")
     args = parser.parse_args()
+
+    # Set Fingrid API key from CLI arg if provided
+    if args.fingrid_key:
+        os.environ["FINGRID_API_KEY"] = args.fingrid_key
 
     # Setup logging
     logging.basicConfig(

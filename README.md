@@ -180,11 +180,11 @@ cd HA-spot-price-predictor
 pip install -r requirements.txt
 
 # Train with available data (adapts automatically)
-python -m src.train_model --region finland
+python -m src.train_model --region finland --fingrid-key YOUR_KEY
 
 # With Fingrid nuclear data (for nuclear x scarcity feature)
 export FINGRID_API_KEY=your_key_here
-python -m src.train_model --region finland
+python -m src.train_model --region finland --fingrid-key YOUR_KEY
 
 # Evaluate accuracy with interactive dashboard
 python -m src.evaluate --region finland

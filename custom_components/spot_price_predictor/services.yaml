@@ -3,7 +3,7 @@ upload_coefficients:
   description: >
     Upload new model coefficients from a JSON file or inline JSON string.
     Use after retraining the model on your PC with:
-    python -m src.train_model --region finland --years 4
+    python -m src.train_model --region finland --fingrid-key YOUR_KEY
   fields:
     file_path:
       name: File Path
