@@ -120,14 +120,17 @@ def build_calendar_features_hour_workday(
     date_index: pd.DatetimeIndex,
     country: str = "SE",
 ) -> pd.DataFrame:
-    """Option A — Hour-of-day x workday/weekend dummies.
+    """Option A — Hour-of-day x off-day dummies (workday/non-workday split).
 
-    Strict structural superset of AR(2)'s profile_wd[24] + profile_we[24].
-    Calendar columns (~46):
+    Strict structural match to AR(2)'s profile_wd[24] + profile_we[24]:
+    AR(2) treats `is_workday = (dow < 5) AND NOT is_holiday`, so a Tuesday
+    holiday gets the same hourly profile as a Sunday. We mirror that here:
+      is_off_day = is_weekend OR is_holiday   (single binary flag)
+
+    Calendar columns (~47):
       h1..h23                  (23 hour-of-day dummies, hour 0 = ref)
-      h1_we..h23_we            (23 hour-of-day x weekend interactions)
-      is_weekend               (overall weekend level shift)
-      is_holiday               (country-specific)
+      h1_off..h23_off          (23 hour-of-day x is_off_day interactions)
+      is_off_day               (overall off-day level shift)
       sin_y1..cos_y2           (annual Fourier, K=2)
     """
     import holidays as _holidays
@@ -140,24 +143,25 @@ def build_calendar_features_hour_workday(
     years = date_index.year.unique().tolist()
     all_years = sorted(set(years + [max(years) + 1]))
     country_holidays = HolidayClass(years=all_years)
+    holiday_dates = set(country_holidays)
 
     df = pd.DataFrame(index=date_index)
 
-    # Hour-of-day dummies (hour 0 = reference)
     hod = np.asarray(date_index.hour)
-    is_weekend = (np.asarray(date_index.dayofweek) >= 5).astype(int)
+    dow = np.asarray(date_index.dayofweek)
+    is_weekend = (dow >= 5).astype(int)
+    is_holiday = np.array(
+        [d.date() in holiday_dates for d in date_index], dtype=int)
+    is_off_day = ((is_weekend == 1) | (is_holiday == 1)).astype(int)
+
+    # Hour-of-day dummies (hour 0 = reference)
     for h in range(1, 24):
         df[f"h{h}"] = (hod == h).astype(int)
-    df["is_weekend"] = is_weekend
-    # Hour x weekend interactions
+    df["is_off_day"] = is_off_day
+    # Hour x off-day interactions: a holiday Tuesday gets the same off-day
+    # hour pattern as a Sunday, mirroring AR(2)'s profile_we for is_workday=0
     for h in range(1, 24):
-        df[f"h{h}_we"] = (hod == h).astype(int) * is_weekend
-
-    holiday_dates = set(country_holidays)
-    df["is_holiday"] = pd.Series(
-        [d.date() in holiday_dates for d in date_index],
-        index=date_index,
-    ).astype(int)
+        df[f"h{h}_off"] = (hod == h).astype(int) * is_off_day
 
     # Annual Fourier (small contribution but captures slow drift)
     doy = date_index.dayofyear.astype(float).values
