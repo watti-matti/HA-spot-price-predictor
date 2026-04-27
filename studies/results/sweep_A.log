@@ -1,0 +1,61 @@
+07:57:32 INFO    Validation: train ending 2025-12-31, holdout 2026-01-01 -> 2026-04-27
+07:57:32 INFO    Zones: ['se1', 'se3', 'ee'], anchors: 4, horizon: 168 hours
+07:57:32 INFO    SARIMAX exog_mode: hour-workday, seasonal_period: 0
+07:57:34 INFO    Walk-forward anchors: ['2026-01-01 00:00', '2026-02-02 16:00', '2026-03-07 08:00', '2026-04-09 00:00']
+07:57:34 INFO    === Zone SE1 (country=SE) — 35064 hourly observations 2022-04 to 2026-04-15 ===
+07:57:34 INFO    [se1] anchor 1/4 at 2026-01-01 00:00
+07:57:34 INFO      AR(X): coefs=[1.1436, -0.1885] max_root=0.9737
+07:57:34 INFO      AR(2)   MAE=47.12 weekend=48.96 cheap[3]=30.92 peak[0]=78.31
+07:59:37 INFO      SARIMAX MAE=47.29 weekend=47.60 cheap[3]=33.34 peak[0]=75.12
+07:59:37 INFO    [se1] anchor 2/4 at 2026-02-02 16:00
+07:59:37 INFO      AR(X): coefs=[1.1441, -0.1890] max_root=0.9739
+07:59:37 INFO      AR(2)   MAE=69.01 weekend=74.36 cheap[3]=59.22 peak[0]=94.42
+11:46:01 INFO      SARIMAX MAE=66.57 weekend=83.50 cheap[3]=67.21 peak[0]=86.57
+11:46:01 INFO    [se1] anchor 3/4 at 2026-03-07 08:00
+11:46:01 INFO      AR(X): coefs=[1.1443, -0.1892] max_root=0.9739
+11:46:01 INFO      AR(2)   MAE=17.90 weekend=8.02 cheap[3]=14.04 peak[0]=23.50
+12:17:29 INFO      SARIMAX MAE=18.13 weekend=12.28 cheap[3]=11.70 peak[0]=24.68
+12:17:29 INFO    [se1] anchor 4/4 at 2026-04-09 00:00
+12:17:29 WARNING   truncated holdout (166/168), skipping
+12:17:29 INFO    === Zone SE3 (country=SE) — 35064 hourly observations 2022-04 to 2026-04-15 ===
+12:17:29 INFO    [se3] anchor 1/4 at 2026-01-01 00:00
+12:17:29 INFO      AR(X): coefs=[1.2366, -0.2781] max_root=0.9410
+12:17:29 INFO      AR(2)   MAE=44.11 weekend=40.19 cheap[3]=39.51 peak[0]=60.46
+12:24:42 INFO      SARIMAX MAE=44.43 weekend=39.49 cheap[3]=46.45 peak[0]=50.40
+12:24:42 INFO    [se3] anchor 2/4 at 2026-02-02 16:00
+12:24:43 INFO      AR(X): coefs=[1.2374, -0.2789] max_root=0.9411
+12:24:43 INFO      AR(2)   MAE=45.34 weekend=60.96 cheap[3]=55.57 peak[0]=45.68
+13:58:52 INFO      SARIMAX MAE=48.49 weekend=72.86 cheap[3]=74.83 peak[0]=46.12
+13:58:52 INFO    [se3] anchor 3/4 at 2026-03-07 08:00
+13:58:53 INFO      AR(X): coefs=[1.2377, -0.2791] max_root=0.9411
+13:58:53 INFO      AR(2)   MAE=29.65 weekend=16.26 cheap[3]=21.47 peak[0]=47.95
+14:55:38 INFO      SARIMAX MAE=35.44 weekend=35.63 cheap[3]=29.37 peak[0]=48.44
+14:55:38 INFO    [se3] anchor 4/4 at 2026-04-09 00:00
+14:55:38 WARNING   truncated holdout (166/168), skipping
+14:55:38 INFO    === Zone EE (country=EE) — 35064 hourly observations 2022-04 to 2026-04-15 ===
+14:55:38 INFO    [ee] anchor 1/4 at 2026-01-01 00:00
+14:55:38 INFO      AR(X): coefs=[0.7589, 0.1479] max_root=0.9197
+14:55:38 INFO      AR(2)   MAE=45.29 weekend=31.68 cheap[3]=28.37 peak[0]=61.32
+15:49:15 INFO      SARIMAX MAE=45.16 weekend=38.38 cheap[3]=32.16 peak[0]=58.35
+15:49:15 INFO    [ee] anchor 2/4 at 2026-02-02 16:00
+15:49:16 INFO      AR(X): coefs=[0.7612, 0.1469] max_root=0.9207
+15:49:16 INFO      AR(2)   MAE=77.59 weekend=39.81 cheap[3]=33.75 peak[0]=116.10
+15:50:12 INFO      SARIMAX MAE=70.56 weekend=56.41 cheap[3]=59.18 peak[0]=102.25
+15:50:12 INFO    [ee] anchor 3/4 at 2026-03-07 08:00
+15:50:12 INFO      AR(X): coefs=[0.7633, 0.1456] max_root=0.9213
+15:50:12 INFO      AR(2)   MAE=76.87 weekend=49.44 cheap[3]=49.72 peak[0]=88.87
+15:51:28 INFO      SARIMAX MAE=55.48 weekend=45.23 cheap[3]=10.49 peak[0]=79.23
+15:51:28 INFO    [ee] anchor 4/4 at 2026-04-09 00:00
+15:51:28 INFO      AR(X): coefs=[0.7650, 0.1436] max_root=0.9209
+15:51:28 INFO      AR(2)   MAE=31.24 weekend=29.38 cheap[3]=28.92 peak[0]=17.80
+15:53:23 INFO      SARIMAX MAE=37.61 weekend=39.27 cheap[3]=41.18 peak[0]=43.60
+15:53:23 INFO    Raw results written to studies\results\validation_20260427_1553_A.json
+15:53:23 INFO    Report written to studies\results\validation_20260427_1553_A.md
+
+============================================================
+DECISION: KEEP AR(2)
+  zones better MAE:     2/3  (need >=2)
+  zones better cheap4:  0/3  (need all)
+  zones better weekend: 0/3  (need >=2)
+============================================================
+Report: studies\results\validation_20260427_1553_A.md
