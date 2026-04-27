@@ -128,7 +128,7 @@ def fetch_weather(
             "end_date": end_date,
         }
         try:
-            r = requests.get(archive_url, params=params, timeout=30)
+            r = requests.get(archive_url, params=params, timeout=120)
             if r.status_code != 200:
                 logger.warning("  %s -> HTTP %d, skipping", name, r.status_code)
                 continue
