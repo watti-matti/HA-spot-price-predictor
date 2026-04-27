@@ -1,0 +1,16 @@
+15:53:24 INFO    Validation: train ending 2025-12-31, holdout 2026-01-01 -> 2026-04-27
+15:53:24 INFO    Zones: ['se1', 'se3', 'ee'], anchors: 4, horizon: 168 hours
+15:53:24 INFO    SARIMAX exog_mode: hour-of-week, seasonal_period: 0
+15:53:25 INFO    Walk-forward anchors: ['2026-01-01 00:00', '2026-02-02 16:00', '2026-03-07 08:00', '2026-04-09 00:00']
+15:53:25 INFO    === Zone SE1 (country=SE) — 35064 hourly observations 2022-04 to 2026-04-15 ===
+15:53:25 INFO    [se1] anchor 1/4 at 2026-01-01 00:00
+15:53:25 INFO      AR(X): coefs=[1.1436, -0.1885] max_root=0.9737
+15:53:25 INFO      AR(2)   MAE=47.12 weekend=48.96 cheap[3]=30.92 peak[0]=78.31
+17:04:04 INFO      SARIMAX MAE=42.34 weekend=34.75 cheap[3]=30.67 peak[0]=71.64
+17:04:04 INFO    [se1] anchor 2/4 at 2026-02-02 16:00
+17:04:05 INFO      AR(X): coefs=[1.1441, -0.1890] max_root=0.9739
+17:04:05 INFO      AR(2)   MAE=69.01 weekend=74.36 cheap[3]=59.22 peak[0]=94.42
+17:11:47 INFO      SARIMAX MAE=57.21 weekend=65.89 cheap[3]=45.19 peak[0]=82.06
+17:11:47 INFO    [se1] anchor 3/4 at 2026-03-07 08:00
+17:11:47 INFO      AR(X): coefs=[1.1443, -0.1892] max_root=0.9739
+17:11:47 INFO      AR(2)   MAE=17.90 weekend=8.02 cheap[3]=14.04 peak[0]=23.50
