@@ -125,6 +125,7 @@ def _sarimax_forecast(
     *,
     order: tuple = (2, 0, 1),
     seasonal_order: tuple = (0, 0, 0, 0),
+    exog_mode: str = "fourier",
 ) -> pd.Series:
     """Train HourlyNordPoolSARIMAX, then forecast."""
     from src.sarimax_neighbor import HourlyNordPoolSARIMAX
@@ -136,10 +137,10 @@ def _sarimax_forecast(
         diurnal_K=2,
         annual_K=2,
         include_weekend_interaction=True,
+        exog_mode=exog_mode,
     )
     m.fit(train_series)
     fc = m.forecast(horizon=len(forecast_index))
-    # Reindex to match validation grid
     fc.index = forecast_index
     return fc
 
@@ -261,6 +262,9 @@ def validate(
     n_anchors: int,
     horizon: int,
     out_dir: Path,
+    *,
+    exog_mode: str = "fourier",
+    seasonal_order: tuple = (0, 0, 0, 0),
 ) -> dict[str, Any]:
     """Run head-to-head AR(2) vs SARIMAX validation."""
     # Load cached neighbor prices
@@ -346,7 +350,9 @@ def validate(
 
             # SARIMAX forecast
             try:
-                sx_pred = _sarimax_forecast(train, actual.index, country)
+                sx_pred = _sarimax_forecast(train, actual.index, country,
+                                            exog_mode=exog_mode,
+                                            seasonal_order=seasonal_order)
                 sx_metrics = _scalar_metrics(actual, sx_pred, country)
                 sx_dk = _per_day_dk_metrics(actual, sx_pred)
                 logger.info("  SARIMAX MAE=%.2f weekend=%.2f cheap[3]=%.2f peak[0]=%.2f",
@@ -526,6 +532,13 @@ def main():
                         help="Quick mode: 1 anchor per zone (smoke test)")
     parser.add_argument("--out-dir", default="studies/results",
                         help="Output directory for report")
+    parser.add_argument("--exog-mode", default="fourier",
+                        choices=["fourier", "hour-workday", "hour-of-week"],
+                        help="SARIMAX calendar exog mode (default: fourier)")
+    parser.add_argument("--seasonal-period", type=int, default=0,
+                        help="Seasonal period in hours (0=no seasonal state, 168=weekly)")
+    parser.add_argument("--tag", default="",
+                        help="Tag appended to output filenames for run identification")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO,
@@ -552,6 +565,10 @@ def main():
                 holdout_end.strftime("%Y-%m-%d"))
     logger.info("Zones: %s, anchors: %d, horizon: %d hours",
                 zones, args.anchors, args.horizon)
+    logger.info("SARIMAX exog_mode: %s, seasonal_period: %d",
+                args.exog_mode, args.seasonal_period)
+
+    seasonal_order = (1, 1, 0, args.seasonal_period) if args.seasonal_period > 0 else (0, 0, 0, 0)
 
     results = validate(
         zones=zones,
@@ -561,16 +578,28 @@ def main():
         n_anchors=args.anchors,
         horizon=args.horizon,
         out_dir=out_dir,
+        exog_mode=args.exog_mode,
+        seasonal_order=seasonal_order,
     )
+    results["config"] = {
+        "exog_mode": args.exog_mode,
+        "seasonal_order": list(seasonal_order),
+        "anchors": args.anchors,
+        "horizon": args.horizon,
+        "train_end": str(train_end),
+        "holdout_start": str(holdout_start),
+        "holdout_end": str(holdout_end),
+    }
 
     # Write JSON dump
     today_str = datetime.now().strftime("%Y%m%d_%H%M")
-    json_path = out_dir / f"validation_{today_str}.json"
+    tag_str = f"_{args.tag}" if args.tag else ""
+    json_path = out_dir / f"validation_{today_str}{tag_str}.json"
     json_path.write_text(json.dumps(results, indent=2, default=str), encoding="utf-8")
     logger.info("Raw results written to %s", json_path)
 
     # Write markdown report
-    md_path = out_dir / f"validation_{today_str}.md"
+    md_path = out_dir / f"validation_{today_str}{tag_str}.md"
     write_report(results, md_path)
 
     # Print decision to console

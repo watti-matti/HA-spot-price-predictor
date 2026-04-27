@@ -116,6 +116,112 @@ def build_calendar_features_hourly(
     return df
 
 
+def build_calendar_features_hour_workday(
+    date_index: pd.DatetimeIndex,
+    country: str = "SE",
+) -> pd.DataFrame:
+    """Option A — Hour-of-day x workday/weekend dummies.
+
+    Strict structural superset of AR(2)'s profile_wd[24] + profile_we[24].
+    Calendar columns (~46):
+      h1..h23                  (23 hour-of-day dummies, hour 0 = ref)
+      h1_we..h23_we            (23 hour-of-day x weekend interactions)
+      is_weekend               (overall weekend level shift)
+      is_holiday               (country-specific)
+      sin_y1..cos_y2           (annual Fourier, K=2)
+    """
+    import holidays as _holidays
+
+    country_map = {
+        "SE": _holidays.Sweden, "EE": _holidays.Estonia,
+        "FI": _holidays.Finland, "NO": _holidays.Norway,
+    }
+    HolidayClass = country_map.get(country.upper(), _holidays.Sweden)
+    years = date_index.year.unique().tolist()
+    all_years = sorted(set(years + [max(years) + 1]))
+    country_holidays = HolidayClass(years=all_years)
+
+    df = pd.DataFrame(index=date_index)
+
+    # Hour-of-day dummies (hour 0 = reference)
+    hod = np.asarray(date_index.hour)
+    is_weekend = (np.asarray(date_index.dayofweek) >= 5).astype(int)
+    for h in range(1, 24):
+        df[f"h{h}"] = (hod == h).astype(int)
+    df["is_weekend"] = is_weekend
+    # Hour x weekend interactions
+    for h in range(1, 24):
+        df[f"h{h}_we"] = (hod == h).astype(int) * is_weekend
+
+    holiday_dates = set(country_holidays)
+    df["is_holiday"] = pd.Series(
+        [d.date() in holiday_dates for d in date_index],
+        index=date_index,
+    ).astype(int)
+
+    # Annual Fourier (small contribution but captures slow drift)
+    doy = date_index.dayofyear.astype(float).values
+    hod_f = date_index.hour.astype(float).values / 24.0
+    t = (doy + hod_f) / 365.25
+    for k in range(1, 3):
+        df[f"sin_y{k}"] = np.sin(2 * np.pi * k * t)
+        df[f"cos_y{k}"] = np.cos(2 * np.pi * k * t)
+
+    return df
+
+
+def build_calendar_features_hour_of_week(
+    date_index: pd.DatetimeIndex,
+    country: str = "SE",
+) -> pd.DataFrame:
+    """Option B — Full hour-of-week dummies (167 features).
+
+    Strictly more expressive than AR(2)'s profile structure: each
+    (hour, day-of-week) cell gets its own free intercept. Total 167
+    dummies (Sunday h0 = reference).
+
+    Calendar columns (~172):
+      how_1..how_167           (Sunday h0 = ref)
+      is_holiday               (country-specific)
+      sin_y1..cos_y2           (annual Fourier, K=2)
+    """
+    import holidays as _holidays
+
+    country_map = {
+        "SE": _holidays.Sweden, "EE": _holidays.Estonia,
+        "FI": _holidays.Finland, "NO": _holidays.Norway,
+    }
+    HolidayClass = country_map.get(country.upper(), _holidays.Sweden)
+    years = date_index.year.unique().tolist()
+    all_years = sorted(set(years + [max(years) + 1]))
+    country_holidays = HolidayClass(years=all_years)
+
+    df = pd.DataFrame(index=date_index)
+
+    # hour-of-week index: 0..167 (Mon h0=0, ..., Sun h23=167)
+    # Use Sunday h0=0..23 as the *first* slots so we can drop how_0 as ref
+    # Actually simplest: how = dayofweek*24 + hour (Mon=0 -> Sun=6 mapping in pandas)
+    # Drop how_0 (Monday hour 0) as reference
+    how = date_index.dayofweek.values * 24 + date_index.hour.values  # 0..167
+    for k in range(1, 168):
+        df[f"how_{k}"] = (how == k).astype(int)
+
+    holiday_dates = set(country_holidays)
+    df["is_holiday"] = pd.Series(
+        [d.date() in holiday_dates for d in date_index],
+        index=date_index,
+    ).astype(int)
+
+    doy = date_index.dayofyear.astype(float).values
+    hod_f = date_index.hour.astype(float).values / 24.0
+    t = (doy + hod_f) / 365.25
+    for k in range(1, 3):
+        df[f"sin_y{k}"] = np.sin(2 * np.pi * k * t)
+        df[f"cos_y{k}"] = np.cos(2 * np.pi * k * t)
+
+    return df
+
+
 class HourlyNordPoolSARIMAX:
     """Hourly SARIMAX wrapper for Nord Pool neighbor zones.
 
@@ -142,18 +248,38 @@ class HourlyNordPoolSARIMAX:
         diurnal_K: int = 2,
         annual_K: int = 2,
         include_weekend_interaction: bool = True,
+        exog_mode: str = "fourier",
     ):
+        """
+        Parameters
+        ----------
+        exog_mode : str
+            "fourier"        — original: ~14 features (dow dummies + diurnal Fourier
+                               + weekend interaction + annual Fourier).
+            "hour-workday"   — option A: ~46 features (hour-of-day x workday/weekend
+                               dummies + holiday + annual Fourier). Strictly matches
+                               AR(2)'s profile_wd/profile_we structure.
+            "hour-of-week"   — option B: ~172 features (full hour-of-week dummies
+                               + holiday + annual Fourier). Strictly more expressive
+                               than AR(2).
+        """
         self.country = country
         self.order = order
         self.seasonal_order = seasonal_order
         self.diurnal_K = diurnal_K
         self.annual_K = annual_K
         self.include_weekend_interaction = include_weekend_interaction
+        self.exog_mode = exog_mode
         self.result_: Any = None
         self.exog_cols_: list[str] | None = None
         self._train_index: pd.DatetimeIndex | None = None
 
     def _build_exog(self, idx: pd.DatetimeIndex) -> pd.DataFrame:
+        if self.exog_mode == "hour-workday":
+            return build_calendar_features_hour_workday(idx, country=self.country)
+        if self.exog_mode == "hour-of-week":
+            return build_calendar_features_hour_of_week(idx, country=self.country)
+        # Default: "fourier"
         cal = build_calendar_features_hourly(
             idx,
             country=self.country,
@@ -163,7 +289,6 @@ class HourlyNordPoolSARIMAX:
             include_annual_fourier=self.annual_K > 0,
             annual_K=self.annual_K,
         )
-        # Keep all columns produced — they're all useful regressors
         return cal
 
     def fit(self, prices: pd.Series, *, verbose: bool = False) -> "HourlyNordPoolSARIMAX":
