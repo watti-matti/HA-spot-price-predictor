@@ -1,4 +1,24 @@
-# DtACI Online Calibration Layer
+# DtACI Online Calibration Layer (v2)
+
+> **v2 architecture:** DtACI is applied **per-(direction, k) order
+> statistic** — 24 instances per zone (cheap[k] for k=1..12, peak[k] for
+> k=1..12), not per hourly forecast. The thermal LP consumes D(k)
+> directly, so calibrating the exact statistic the consumer uses gives
+> tight, properly-calibrated bands. The reference card in
+> `dtaci_info_cards.html` describes the diagnostic surface this design
+> exposes.
+>
+> **Algorithm:** Gibbs & Candès JMLR 2024, with the discounted-loss
+> weight update `L[m] ← ρ · L[m] + err_t`, `w[m] = softmax(−η · L[m])`.
+> 15-expert γ ladder log-spaced over [0.0005, 0.2].
+>
+> **Production scope:** four zones (FI, SE1, SE3, EE). FI bundle drives
+> consumer-price duration bands; SE1/SE3/EE bundles bias-correct the
+> AR(2) features fed into the FI Ridge model. The neighbour-FI residual
+> correlation (R² = 0.667 on a 3-feature OLS, see
+> `studies/neighbor_bias_propagation.py`) justifies the 4-zone scope.
+
+# Legacy v1 documentation (hourly DtACI) follows for reference
 
 This document describes the Phase B online-calibration layer that wraps
 the production point forecaster with calibrated prediction intervals
