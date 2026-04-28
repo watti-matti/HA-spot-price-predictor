@@ -384,7 +384,12 @@ def train_duration_model(
 
             seg_prices = fi[seg_mask]
             sorted_seg = np.sort(seg_prices)
-            dur_curve = np.cumsum(sorted_seg) / np.arange(1, len(sorted_seg) + 1)
+            # Phase A: cheap-end curve (mean of cheapest k hours, k=1..|seg|)
+            #          and peak-end curve (mean of priciest k hours, k=1..|seg|).
+            # cheap_curve is the legacy `duration_curve`.
+            cheap_curve = np.cumsum(sorted_seg) / np.arange(1, len(sorted_seg) + 1)
+            sorted_desc = sorted_seg[::-1]
+            peak_curve = np.cumsum(sorted_desc) / np.arange(1, len(sorted_desc) + 1)
 
             seg_wind = wind[seg_mask]
             segment_data[seg_name].append({
@@ -402,7 +407,11 @@ def train_duration_model(
                         np.maximum(0, wind_scarcity_base - seg_wind)).mean()),
                 },
                 "date": str(d),
-                "duration_curve": dur_curve.tolist(),
+                # Legacy alias for cheap end (kept so any consumer reading
+                # `duration_curve` continues to work)
+                "duration_curve": cheap_curve.tolist(),
+                "cheap_curve": cheap_curve.tolist(),
+                "peak_curve": peak_curve.tolist(),
             })
 
     # Check data sufficiency
@@ -416,6 +425,9 @@ def train_duration_model(
             return None
 
     # ── Pre-build matrices ───────────────────────────────────────────
+    # Phase A: Train both `Y_cheap` (mean-of-cheapest-k targets) and
+    # `Y_peak` (mean-of-priciest-k targets) per segment.  The features
+    # X are identical for both directions; only the targets differ.
     n_features = len(DURATION_FEATURES)
     seg_matrices = {}
     for seg_name in DURATION_SEGMENTS:
@@ -424,13 +436,22 @@ def train_duration_model(
         n_dur = DURATION_SEG_HOURS[seg_name]
         X = np.array([[d["features"][f] for f in DURATION_FEATURES] for d in data],
                       dtype=np.float64)
-        Y = np.zeros((n_dur, n), dtype=np.float64)
+        Y_cheap = np.zeros((n_dur, n), dtype=np.float64)
+        Y_peak = np.zeros((n_dur, n), dtype=np.float64)
         for k in range(n_dur):
-            raw_vals = np.array([d["duration_curve"][k] + DURATION_LOG_OFFSET
-                                 for d in data])
-            Y[k] = np.log(np.maximum(raw_vals, 1.0))
+            cheap_vals = np.array(
+                [d["cheap_curve"][k] + DURATION_LOG_OFFSET for d in data])
+            peak_vals = np.array(
+                [d["peak_curve"][k] + DURATION_LOG_OFFSET for d in data])
+            Y_cheap[k] = np.log(np.maximum(cheap_vals, 1.0))
+            Y_peak[k] = np.log(np.maximum(peak_vals, 1.0))
         seg_matrices[seg_name] = {
-            "X": X, "Y": Y, "n": n, "n_dur": n_dur,
+            "X": X,
+            "Y": Y_cheap,           # legacy alias
+            "Y_cheap": Y_cheap,
+            "Y_peak": Y_peak,
+            "n": n,
+            "n_dur": n_dur,
             "dates": [d["date"] for d in data],
         }
 
@@ -441,10 +462,13 @@ def train_duration_model(
 
     for seg_name in DURATION_SEGMENTS:
         m = seg_matrices[seg_name]
-        X, Y, n, n_dur = m["X"], m["Y"], m["n"], m["n_dur"]
+        X, n, n_dur = m["X"], m["n"], m["n_dur"]
+        Y_cheap = m["Y_cheap"]
+        Y_peak = m["Y_peak"]
         dates_s = m["dates"]
 
-        logger.info("  Training %s (%d days, %d levels)...", seg_name, n, n_dur)
+        logger.info("  Training %s (%d days, %d levels, dual cheap+peak)...",
+                    seg_name, n, n_dur)
 
         # Final model: train on ALL data with lambda weighting
         # Use augmented matrix [X | 1] to fit intercept without penalising it.
@@ -459,27 +483,39 @@ def train_duration_model(
         A = Xw_aug.T @ Xw_aug + DURATION_RIDGE_ALPHA * np.eye(n_features + 1)
         A[n_features, n_features] -= DURATION_RIDGE_ALPHA  # don't penalise intercept
 
-        models_for_seg = []
+        cheap_models_for_seg = []
+        peak_models_for_seg = []
         for k in range(n_dur):
-            yw = Y[k] * sqrt_w
-            beta_aug = np.linalg.solve(A, Xw_aug.T @ yw)
-            beta = beta_aug[:n_features]
-            intercept_k = float(beta_aug[n_features])
-
-            models_for_seg.append({
+            # Cheap-end Ridge fit
+            yw_c = Y_cheap[k] * sqrt_w
+            beta_c = np.linalg.solve(A, Xw_aug.T @ yw_c)
+            cheap_models_for_seg.append({
                 "k": k,
-                "intercept": round(float(intercept_k), 8),
-                "coefs": [round(float(c), 8) for c in beta],
+                "intercept": round(float(beta_c[n_features]), 8),
+                "coefs": [round(float(c), 8) for c in beta_c[:n_features]],
+            })
+            # Peak-end Ridge fit
+            yw_p = Y_peak[k] * sqrt_w
+            beta_p = np.linalg.solve(A, Xw_aug.T @ yw_p)
+            peak_models_for_seg.append({
+                "k": k,
+                "intercept": round(float(beta_p[n_features]), 8),
+                "coefs": [round(float(c), 8) for c in beta_p[:n_features]],
             })
 
         segments_out[seg_name] = {
             "hours": DURATION_SEGMENTS[seg_name],
             "n_levels": n_dur,
-            "models": models_for_seg,
+            # Phase A: dual cheap/peak models
+            "cheap_models": cheap_models_for_seg,
+            "peak_models": peak_models_for_seg,
+            # Legacy alias (kept so old DurationModel JSON readers still work)
+            "models": cheap_models_for_seg,
         }
 
         # Evaluate: expanding window predictions for Spearman
         # Uses same augmented matrix [X|1] approach as final model
+        # Cheap-end only — preserves the legacy D(4) Spearman headline.
         for t in range(DURATION_MIN_TRAIN, n):
             wt = DURATION_LAMBDA ** np.arange(t - 1, -1, -1, dtype=np.float64)
             sqrt_wt = np.sqrt(wt)
@@ -490,14 +526,13 @@ def train_duration_model(
             x_test_aug = np.append(X[t], 1.0)
             raw = []
             for k in range(n_dur):
-                ywt = Y[k, :t] * sqrt_wt
+                ywt = Y_cheap[k, :t] * sqrt_wt
                 bt = np.linalg.solve(At, Xwt_aug.T @ ywt)
                 lp = float(bt @ x_test_aug)
                 raw.append(max(0.0, np.exp(min(lp, DURATION_EXP_CAP)) - DURATION_LOG_OFFSET))
-            # PAVA
+            # PAVA — non-decreasing for the cheap end
             for i in range(1, len(raw)):
                 if raw[i] < raw[i - 1]:
-                    # Simple forward pass PAVA
                     j = i
                     while j > 0 and raw[j] < raw[j - 1]:
                         avg = (raw[j] + raw[j - 1]) / 2

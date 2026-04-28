@@ -32,6 +32,7 @@ from .const import (
     DEFAULT_TIMEZONE,
 )
 
+from .dk_utils import compute_dk_cheap_peak
 from .features import build_forecast_features
 from .holidays import build_holiday_set
 from .model import SpotPriceModel
@@ -499,6 +500,7 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
             segment_curves = day_result.get("segment_curves", {})
             night_segments = {"night"}  # Segments using night tariff
             consumer_sorted_prices: list[float] = []
+            spot_hourly_prices: list[float] = []
             for seg_name, curve in segment_curves.items():
                 is_night = seg_name in night_segments
                 for i in range(len(curve)):
@@ -507,6 +509,7 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                     else:
                         p = (i + 1) * curve[i] - i * curve[i - 1]
                         p = max(0.0, p)
+                    spot_hourly_prices.append(p)
                     consumer_sorted_prices.append(
                         self._spot_to_consumer_eur_kwh(p, is_night))
             consumer_sorted_prices.sort()
@@ -523,10 +526,52 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                 )
                 continue
 
+            # Phase A: dual cheap/peak D(k) curves (length 12 each).
+            # `dk_cheap[k-1]` = mean of cheapest k hours, monotone non-decreasing.
+            # `dk_peak[k-1]`  = mean of priciest k hours, monotone non-increasing.
+            # Phase A.3: prefer the duration model's own dk_cheap_12 /
+            # dk_peak_12 when emitted (dual-trained model). They reflect
+            # per-direction PAVA on independent Ridge fits, which is more
+            # accurate than deriving the peak end by sorting cheap-end
+            # forecasts. Fall back to sort-based reconstruction otherwise.
+            model_cheap = day_result.get("dk_cheap_12") or []
+            model_peak = day_result.get("dk_peak_12") or []
+            try:
+                if (len(model_cheap) == 12 and len(model_peak) == 12
+                        and day_result.get("schema") == "dual"):
+                    # Spot-end from the dual model. Convert to consumer
+                    # by applying a *single* tariff to each price tier
+                    # is not strictly possible (tier ↔ hour mapping is
+                    # lost), so we keep the model's spot output for the
+                    # `dk_*_spot_eur_mwh` attributes and use the merged-
+                    # hourly sort path for the consumer-tariff curves.
+                    dk_cheap_spot = list(model_cheap)
+                    dk_peak_spot = list(model_peak)
+                    dk_cheap_cons, dk_peak_cons = compute_dk_cheap_peak(
+                        consumer_sorted_prices)
+                else:
+                    dk_cheap_cons, dk_peak_cons = compute_dk_cheap_peak(
+                        consumer_sorted_prices)
+                    dk_cheap_spot, dk_peak_spot = compute_dk_cheap_peak(
+                        spot_hourly_prices)
+            except ValueError as exc:
+                _LOGGER.warning(
+                    "Cheap/peak D(k) computation failed for %s: %s",
+                    date_str, exc,
+                )
+                continue
+
             day_entry: dict[str, Any] = {
                 "date": date_str,
                 "weekday": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][dow],
                 "source": "forecast",
+                # New dual cheap/peak schema (length 12 each)
+                "dk_cheap_eur_kwh": [round(v, 4) for v in dk_cheap_cons],
+                "dk_peak_eur_kwh": [round(v, 4) for v in dk_peak_cons],
+                "dk_cheap_spot_eur_mwh": [round(v, 2) for v in dk_cheap_spot],
+                "dk_peak_spot_eur_mwh": [round(v, 2) for v in dk_peak_spot],
+                # Legacy 24-element cumulative D(k) (deprecated, kept for
+                # one transition release)
                 "dk_consumer_eur_kwh": dk_consumer,
                 "dk_spot_eur_mwh": [round(v, 2) for v in dk_spot],
             }
@@ -588,7 +633,8 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                 continue
 
             # Sort 24 hourly spot prices ascending, compute D(k)
-            sorted_spot = sorted(hours_map[h] for h in range(24))
+            spot_prices_24 = [hours_map[h] for h in range(24)]
+            sorted_spot = sorted(spot_prices_24)
             running_spot = 0.0
             dk_spot: list[float] = []
             for i, p in enumerate(sorted_spot):
@@ -601,18 +647,37 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                 is_night = h < 7 or h >= 22
                 consumer_prices.append(
                     self._spot_to_consumer_eur_kwh(hours_map[h], is_night))
-            consumer_prices.sort()
+            consumer_prices_sorted = sorted(consumer_prices)
             running_cons = 0.0
             dk_consumer: list[float] = []
-            for i, cp in enumerate(consumer_prices):
+            for cp in consumer_prices_sorted:
                 running_cons += cp
-                dk_consumer.append(round(running_cons / (i + 1), 4))
+                dk_consumer.append(round(running_cons / (len(dk_consumer) + 1), 4))
+
+            # Phase A: dual cheap/peak D(k) curves (length 12 each).
+            try:
+                dk_cheap_cons, dk_peak_cons = compute_dk_cheap_peak(
+                    consumer_prices)
+                dk_cheap_spot, dk_peak_spot = compute_dk_cheap_peak(
+                    spot_prices_24)
+            except ValueError as exc:
+                _LOGGER.warning(
+                    "Actual cheap/peak D(k) failed for %s: %s",
+                    date_str, exc,
+                )
+                continue
 
             dow = datetime.strptime(date_str, "%Y-%m-%d").weekday()
             result.append({
                 "date": date_str,
                 "weekday": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][dow],
                 "source": "actual",
+                # New dual cheap/peak schema (length 12 each)
+                "dk_cheap_eur_kwh": [round(v, 4) for v in dk_cheap_cons],
+                "dk_peak_eur_kwh": [round(v, 4) for v in dk_peak_cons],
+                "dk_cheap_spot_eur_mwh": [round(v, 2) for v in dk_cheap_spot],
+                "dk_peak_spot_eur_mwh": [round(v, 2) for v in dk_peak_spot],
+                # Legacy 24-element cumulative D(k) (deprecated)
                 "dk_consumer_eur_kwh": dk_consumer,
                 "dk_spot_eur_mwh": dk_spot,
             })

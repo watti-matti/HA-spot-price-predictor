@@ -17,6 +17,10 @@ env/
 output/*.parquet
 output/*.json
 output/*.html
+output/_*.txt
+
+# DtACI validation price cache (large, regenerable)
+studies/_dtaci_*_prices_cache.json
 
 # IDE
 .vscode/

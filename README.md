@@ -10,7 +10,7 @@
 ## Key Features
 
 - **170-hour consumer price forecast** — predict your electricity cost (EUR/kWh) for the next 7 days, including spot price, transfer tariff, seller margin, energy tax, and VAT
-- **D(k) duration curves (CVaR)** — 7-day × 24-level matrix predicting cost-optimal load scheduling: D(k) = average consumer price for the cheapest k hours per day, mathematically equivalent to CVaR at α = k/24
+- **D(k) cheap/peak duration curves** — 7-day forecast of two complementary 12-level curves: `dk_cheap[k]` = mean price of the cheapest k hours (best achievable cost for deferrable load) and `dk_peak[k]` = mean price of the priciest k hours (worst-case planning cost). Equivalent to CVaR at α=k/24 in both tails of the daily price distribution.
 - **Works out-of-the-box** — pre-trained model included, no setup beyond choosing your distribution operator
 - **Modular data sources** — starts with free weather data, optionally adds cross-border prices and Fingrid nuclear data for improved accuracy
 - **Sign-validated features** — all model coefficients match economic theory (more wind = lower price, more scarcity = higher price)
@@ -31,9 +31,14 @@ The system produces two complementary forecasts from a single model coefficients
 - **Thermal demand** — squared heating degree days for nonlinear cold amplification
 - **Nuclear deficit** (optional, Fingrid API) — nuclear availability + scarcity interaction
 
-**Duration model (D(k) = CVaR)** — a segment-hierarchical Ridge model predicts D(k) for each of the next 7 days. D(k) is the average consumer price for the cheapest k hours in a day, mathematically equivalent to Conditional Value-at-Risk (CVaR) at level α = k/24. This makes D(k) the natural cost metric for load scheduling: "run your appliance during the cheapest k hours" costs exactly D(k) per kWh.
+**Duration model (D(k) cheap/peak)** — a segment-hierarchical Ridge model predicts the daily duration curve for each of the next 7 days, exposed as two 12-element arrays:
 
-The duration model splits each day into 4 tariff-aligned segments (night 22–07, morning 07–12, midday 12–18, evening 18–22), predicts D(k) independently per segment using Ridge regression, enforces monotonicity via PAVA (Pool Adjacent Violators Algorithm), converts each extracted sorted price to consumer EUR/kWh using segment-appropriate transfer tariffs (day/night rate), then merges all segments into a full 24-level D(k) curve.
+- `dk_cheap[k-1]` = mean consumer price of the **cheapest** k hours, k=1..12 (monotone non-decreasing). Use this for deferrable-load scheduling: "run k hours into the cheapest slots, expected cost = `dk_cheap[k-1]` × kWh."
+- `dk_peak[k-1]` = mean consumer price of the **priciest** k hours, k=1..12 (monotone non-increasing). Use this for storage-depletion / worst-case planning: "if I'm forced to run during k peak hours, expected cost = `dk_peak[k-1]` × kWh."
+
+Both arrays are CVaR-equivalent — `dk_cheap[k-1]` = CVaR at α=k/24 in the lower tail, `dk_peak[k-1]` = CVaR at α=k/24 in the upper tail. Together they cover the entire decision-relevant span (the legacy 24-level cumulative D(k), which had non-decision-relevant indices for k=13..24, can be exactly reconstructed from cheap+peak via the sum identity `dk_cheap[11] + dk_peak[11] = 2 × daily_avg`).
+
+The duration model splits each day into 4 tariff-aligned segments (night 22–07, morning 07–12, midday 12–18, evening 18–22), predicts D(k) independently per segment using Ridge regression, enforces monotonicity via PAVA (Pool Adjacent Violators Algorithm), converts each extracted sorted price to consumer EUR/kWh using segment-appropriate transfer tariffs (day/night rate), then merges all segments into the cheap/peak curves.
 
 All data sources are **free**. The optional Fingrid API key is also free (email registration at [data.fingrid.fi](https://data.fingrid.fi)).
 
@@ -44,7 +49,7 @@ All data sources are **free**. The optional Fingrid API key is also free (email 
 | Sensor | State | Unit | Description |
 |--------|-------|------|-------------|
 | `sensor.price_forecast` | Current consumer price | EUR/kWh | 170h hourly forecast with spot, consumer, weather per hour |
-| `sensor.duration_forecast` | Today's D(4) | EUR/kWh | 7-day × 24-level D(k) = CVaR duration matrix |
+| `sensor.duration_forecast` | Today's `dk_cheap[3]` (cheapest 4h) | EUR/kWh | 7-day × (12 cheap + 12 peak) duration curves |
 
 #### Price Forecast attributes
 
@@ -59,25 +64,39 @@ The **Price Forecast** sensor provides the complete hourly forecast as its `fore
 | `week_max_eur_kwh` | float | Maximum consumer price in forecast window |
 | `operator` | string | Configured distribution operator |
 
-#### Duration Forecast attributes — D(k) matrix
+#### Duration Forecast attributes — D(k) cheap/peak curves
 
-The **Duration Forecast** sensor provides D(k) = CVaR of the intra-day price distribution at level α = k/24. The `daily_forecast` attribute contains a 7-day × 24-level D(k) matrix in day-per-row orientation. The state is today's D(4) in EUR/kWh.
+The **Duration Forecast** sensor provides daily duration curves split into a cheap end and a peak end. The `daily_forecast` attribute contains 7 days, each with both new (Phase A) and legacy attributes for backward compatibility. The state is today's `dk_cheap_eur_kwh[3]` — the average consumer price of the cheapest 4 hours, the most-used scheduling indicator.
 
 | Attribute | Shape | Unit | Description |
 |-----------|-------|------|-------------|
-| `daily_forecast` | array[7] | — | D(k) matrix, one entry per day |
+| `daily_forecast` | array[7] | — | One entry per day |
 | `daily_forecast[i].date` | string | — | ISO date (YYYY-MM-DD) |
 | `daily_forecast[i].weekday` | string | — | Mon–Sun |
-| `daily_forecast[i].dk_consumer_eur_kwh` | float[24] | EUR/kWh | D(1)…D(24) consumer price, index k−1 |
-| `daily_forecast[i].dk_spot_eur_mwh` | float[24] | EUR/MWh | D(1)…D(24) spot price, index k−1 |
+| `daily_forecast[i].source` | string | — | `forecast` or `actual` (past days from Sahkotin) |
+| **Phase A (preferred):** | | | |
+| `daily_forecast[i].dk_cheap_eur_kwh` | float[12] | EUR/kWh | Mean price of cheapest k hours, k=1..12 (non-decreasing) |
+| `daily_forecast[i].dk_peak_eur_kwh` | float[12] | EUR/kWh | Mean price of priciest k hours, k=1..12 (non-increasing) |
+| `daily_forecast[i].dk_cheap_spot_eur_mwh` | float[12] | EUR/MWh | Same in spot price |
+| `daily_forecast[i].dk_peak_spot_eur_mwh` | float[12] | EUR/MWh | Same in spot price |
+| **Convenience scalars:** | | | |
+| `today_cheap_4h_eur_kwh` | float | EUR/kWh | Today's `dk_cheap_eur_kwh[3]` (cheapest 4h) |
+| `today_cheap_8h_eur_kwh` | float | EUR/kWh | Today's `dk_cheap_eur_kwh[7]` (cheapest 8h) |
+| `today_peak_4h_eur_kwh` | float | EUR/kWh | Today's `dk_peak_eur_kwh[3]` (priciest 4h) |
+| `today_peak_1h_eur_kwh` | float | EUR/kWh | Today's `dk_peak_eur_kwh[0]` (single priciest hour) |
+| **Legacy (deprecated):** | | | |
+| `daily_forecast[i].dk_consumer_eur_kwh` | float[24] | EUR/kWh | Legacy cumulative D(k), k=1..24. Identical to `dk_cheap_eur_kwh` for k=1..12; indices 13..24 carry no decision-relevant signal |
+| `daily_forecast[i].dk_spot_eur_mwh` | float[24] | EUR/MWh | Legacy cumulative spot D(k) |
 
-**Matrix access patterns:**
-- Single value: `daily_forecast[day].dk_consumer_eur_kwh[k-1]` → D(k) for one day
-- Consumer transposes to k-per-row: `dk_matrix[k-1][day]` for D(k) trajectory across days
-- All vectors guaranteed length 24; only complete days included
+**Access patterns (Phase A):**
+- Cheapest k hours of day d: `daily_forecast[d].dk_cheap_eur_kwh[k-1]` for k in 1..12
+- Priciest k hours of day d: `daily_forecast[d].dk_peak_eur_kwh[k-1]` for k in 1..12
+- Cross-check identity: `cheap[11] + peak[11] = 2 × daily_average` (always holds to numerical noise)
 - Consumer prices include configured tariffs (day/night transfer rate, seller margin, energy tax, VAT)
 
-**Design principle:** This integration provides *forecasts only*. The D(k) matrix is the primary API for downstream systems — thermal optimization, load scheduling, and heat pump control consume D(k) to answer "what does it cost to run k hours today?" This clean separation means either component can be replaced independently.
+**Migration:** the legacy `dk_consumer_eur_kwh[24]` array is still emitted for one transition release. New consumers should read the cheap/peak split; the legacy array can be exactly reconstructed from cheap+peak via the formula in [docs/dk_cheap_peak_migration.md](docs/dk_cheap_peak_migration.md).
+
+**Design principle:** This integration provides *forecasts only*. The cheap/peak curves are the primary API for downstream systems — thermal optimization, load scheduling, and heat pump control consume `dk_cheap` for cost-minimization and `dk_peak` for risk-aware planning. This clean separation means either component can be replaced independently.
 
 ### Actual Price Sensors (optional, when Nordpool entity is configured)
 
@@ -95,7 +114,7 @@ If you have a Nordpool integration installed (e.g., [custom-components/nordpool]
 A complete [Lovelace dashboard](ha_dashboard.yaml) is included (ApexCharts + Mushroom cards) with:
 - **48h consumer price bar chart** — color-coded hourly bars with extrema markers
 - **7-day hourly price trend** — area chart of consumer prices across the full forecast window
-- **D(k) duration curves** — multi-line chart showing D(1), D(4), D(8), D(24) trajectories across 7 days
+- **D(k) cheap/peak duration curves** — two-group multi-line chart: cool colors show `D_cheap(1)`, `D_cheap(4)`, `D_cheap(8)`, `D_cheap(12)` (best achievable cost); warm dashed lines show `D_peak(12)`, `D_peak(8)`, `D_peak(4)`, `D_peak(1)` (worst-case cost)
 - **Current price + D(4) chips** — at-a-glance status with color-coded icons
 - **Week statistics** — min/avg/max consumer price summary
 - **Data status** — active sources, forecast horizon, staleness indicator

@@ -216,24 +216,33 @@ Konfiguroitavissa operaattorikohtaisesti tiedostossa `finland.yaml`. Oletus: Ele
 | `stale` | bool | True jos data on vanhempaa kuin kynnysarvo |
 | `data_age_minutes` | int | Minuutteja viimeisimmästä onnistuneesta hausta |
 
-#### Duration Forecast -attribuutit — D(k)-matriisi
+#### Duration Forecast -attribuutit — D(k) halpa/kallis -käyrät
 
-D(k) = keskimääräinen kuluttajahinta halvimmille k tunnille päivässä = ehdollinen riskiarvo (CVaR, Conditional Value-at-Risk) tasolla α = k/24. `daily_forecast`-attribuutti sisältää 7 vrk × 24 tason matriisin päivä-per-rivi -muodossa.
+`daily_forecast`-attribuutti sisältää enintään 7 päivää. Jokaiselle päivälle annetaan sekä uusi (Phase A) että vanha (poistuva) skeema rinnakkain siirtymävaiheen ajan. Anturin tila on tämän päivän `dk_cheap_eur_kwh[3]` — halvimpien 4 tunnin keskihinta.
 
 | Attribuutti | Muoto | Yksikkö | Kuvaus |
 |-------------|-------|---------|--------|
-| `daily_forecast` | array[7] | — | D(k)-matriisi, yksi rivi per päivä |
+| `daily_forecast` | array[≤7] | — | Yksi rivi per päivä |
 | `daily_forecast[i].date` | string | — | ISO-päivämäärä (VVVV-KK-PP) |
 | `daily_forecast[i].weekday` | string | — | Mon–Sun |
-| `daily_forecast[i].dk_consumer_eur_kwh` | float[24] | EUR/kWh | D(1)…D(24) kuluttajahinta, indeksi k−1 |
-| `daily_forecast[i].dk_spot_eur_mwh` | float[24] | EUR/MWh | D(1)…D(24) spot-hinta, indeksi k−1 |
-| `forecast_days` | int | — | Päivien lukumäärä matriisissa (enintään 7) |
+| `daily_forecast[i].source` | string | — | `forecast` tai `actual` (toteutuneet päivät Sahkotinista) |
+| **Phase A (suositeltu):** | | | |
+| `daily_forecast[i].dk_cheap_eur_kwh` | float[12] | EUR/kWh | Halvimpien k tunnin keskihinta, k=1..12 (ei-laskeva) |
+| `daily_forecast[i].dk_peak_eur_kwh`  | float[12] | EUR/kWh | Kalleimpien k tunnin keskihinta, k=1..12 (ei-nouseva) |
+| `daily_forecast[i].dk_cheap_spot_eur_mwh` | float[12] | EUR/MWh | Sama spot-hinnoissa |
+| `daily_forecast[i].dk_peak_spot_eur_mwh`  | float[12] | EUR/MWh | Sama spot-hinnoissa |
+| **Vanha (poistuva):** | | | |
+| `daily_forecast[i].dk_consumer_eur_kwh` | float[24] | EUR/kWh | Vanha kumulatiivinen D(k); `dk_consumer_eur_kwh[k-1] == dk_cheap_eur_kwh[k-1]` arvoille k=1..12 |
+| `daily_forecast[i].dk_spot_eur_mwh` | float[24] | EUR/MWh | Vanha spot-D(k) |
+| `forecast_days` | int | — | Päivien lukumäärä (enintään 7) |
 
-**Matriisin käyttötavat:**
-- Yksittäinen arvo: `daily_forecast[day].dk_consumer_eur_kwh[k-1]` → D(k) yhdelle päivälle
-- Kuluttajapuoli transponoi k-per-rivi -muotoon: `dk_matrix[k-1][day]` D(k)-trajektorian seuraamiseen päivien yli
-- Kaikki vektorit taattu pituudeltaan 24; vain täydelliset päivät sisällytetään
-- Kuluttaja-D(k) sisältää segmenttikohtaisen tariffimuunnoksen: yötunnit yösiirtotariffilla, päivätunnit päivätariffilla, yhdistetty ja uudelleenlajiteltu
+**Käyttötavat:**
+- Halvimmat k tuntia päivänä d: `daily_forecast[d].dk_cheap_eur_kwh[k-1]` (siirrettävien kuormien aikataulutus)
+- Kalleimmat k tuntia päivänä d: `daily_forecast[d].dk_peak_eur_kwh[k-1]` (varakapasiteetti, pahimman tapauksen suunnittelu)
+- Yhtälöllinen tarkistus: `cheap[11] + peak[11] = 2 × päiväkeskiarvo` (pätee aina numeerisen kohinan tarkkuudella)
+- Kuluttajahinnat sisältävät segmenttikohtaisen tariffimuunnoksen: yötunnit yösiirtotariffilla, päivätunnit päivätariffilla, yhdistetty ja uudelleenlajiteltu
+
+Migraatio-ohje kolmansille osapuolille: katso [docs/dk_cheap_peak_migration.md](docs/dk_cheap_peak_migration.md).
 
 ### Todellinen hinta -sensorit (valinnainen, Nordpool)
 

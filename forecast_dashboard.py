@@ -24,6 +24,8 @@ import numpy as np
 import requests
 import yaml
 
+from src.dk_utils import compute_dk_cheap_peak
+
 warnings.filterwarnings("ignore")
 
 # ================================================================
@@ -234,14 +236,37 @@ try:
             running_cons += cp
             dk_cons_curve.append(running_cons / (i + 1))
 
+        # Phase A: dual cheap/peak D(k) curves (length 12 each).
+        # cheap[k-1] = mean of cheapest k consumer hours (c/kWh)
+        # peak[k-1]  = mean of priciest k consumer hours (c/kWh)
+        dk_cheap_cons, dk_peak_cons = compute_dk_cheap_peak(consumer_by_hour)
+        dk_cheap_spot, dk_peak_spot = compute_dk_cheap_peak(
+            [hours_map[h] for h in range(24)])
+
         dow = datetime.strptime(date_str, "%Y-%m-%d").weekday()
         actual_dk.append({
             "date": date_str,
             "dow": dow,
             "source": "actual",
+            # Legacy 24-array (kept for backward compat / detail view)
             "dk": [round(v, 2) for v in dk_curve],
             "dk_cons": [round(v, 2) for v in dk_cons_curve],
             "hourly_sorted_cons": [round(v, 2) for v in sorted_cons],
+            # New cheap/peak schema (length 12 each)
+            "dk_cheap_cons": [round(v, 2) for v in dk_cheap_cons],
+            "dk_peak_cons": [round(v, 2) for v in dk_peak_cons],
+            "dk_cheap_spot": [round(v, 2) for v in dk_cheap_spot],
+            "dk_peak_spot": [round(v, 2) for v in dk_peak_spot],
+            # Convenience scalars (consumer c/kWh) for cards & line chart
+            "cheap_1h": round(dk_cheap_cons[0], 2),
+            "cheap_4h": round(dk_cheap_cons[3], 2),
+            "cheap_8h": round(dk_cheap_cons[7], 2),
+            "cheap_12h": round(dk_cheap_cons[11], 2),
+            "peak_1h": round(dk_peak_cons[0], 2),
+            "peak_4h": round(dk_peak_cons[3], 2),
+            "peak_8h": round(dk_peak_cons[7], 2),
+            "peak_12h": round(dk_peak_cons[11], 2),
+            # Legacy d1/d4/d8/d24 retained for any external consumers
             "d1": round(dk_cons_curve[0], 2),
             "d4": round(dk_cons_curve[3], 2) if len(dk_cons_curve) > 3 else 0,
             "d8": round(dk_cons_curve[7], 2) if len(dk_cons_curve) > 7 else 0,
@@ -635,28 +660,58 @@ if dur_data:
             dk_curve.append(running / (i + 1))
 
         # Compute consumer D(k) from hourly forecast prices with day/night tariff
-        hourly_cons = sorted(
+        hourly_cons_unsorted = [
             to_cons(h["price_eur_mwh"], is_night=(h["local_hour"] < 7 or h["local_hour"] >= 22))
             for h in day_hours
-        )
+        ]
+        hourly_cons = sorted(hourly_cons_unsorted)
         running_cons = 0.0
         dk_cons_curve = []
         for i, cp in enumerate(hourly_cons):
             running_cons += cp
             dk_cons_curve.append(running_cons / (i + 1))
 
-        daily_dk.append({
+        # Phase A: dual cheap/peak D(k) curves (length 12 each).
+        # `compute_dk_cheap_peak` requires exactly 24 hourly prices; only
+        # complete days reach this path so the assertion holds.
+        if len(hourly_cons_unsorted) == 24 and len(all_pred_prices) == 24:
+            dk_cheap_cons, dk_peak_cons = compute_dk_cheap_peak(hourly_cons_unsorted)
+            dk_cheap_spot, dk_peak_spot = compute_dk_cheap_peak(all_pred_prices)
+        else:
+            # Skip days with non-24-hour DST/transition gaps for the new schema
+            dk_cheap_cons = dk_peak_cons = []
+            dk_cheap_spot = dk_peak_spot = []
+
+        entry: dict = {
             "date": date_str,
             "dow": day_hours[0]["dow"],
             "source": "forecast",
+            # Legacy 24-array detail view
             "dk": [round(v, 2) for v in dk_curve],
             "dk_cons": [round(v, 2) for v in dk_cons_curve],
             "hourly_sorted_cons": [round(v, 2) for v in hourly_cons],
+            # Legacy scalars
             "d1": round(dk_cons_curve[0], 2) if dk_cons_curve else 0,
             "d4": round(dk_cons_curve[3], 2) if len(dk_cons_curve) > 3 else 0,
             "d8": round(dk_cons_curve[7], 2) if len(dk_cons_curve) > 7 else 0,
             "d24": round(dk_cons_curve[min(23, len(dk_cons_curve) - 1)], 2) if dk_cons_curve else 0,
-        })
+        }
+        if dk_cheap_cons and dk_peak_cons:
+            entry.update({
+                "dk_cheap_cons": [round(v, 2) for v in dk_cheap_cons],
+                "dk_peak_cons": [round(v, 2) for v in dk_peak_cons],
+                "dk_cheap_spot": [round(v, 2) for v in dk_cheap_spot],
+                "dk_peak_spot": [round(v, 2) for v in dk_peak_spot],
+                "cheap_1h": round(dk_cheap_cons[0], 2),
+                "cheap_4h": round(dk_cheap_cons[3], 2),
+                "cheap_8h": round(dk_cheap_cons[7], 2),
+                "cheap_12h": round(dk_cheap_cons[11], 2),
+                "peak_1h": round(dk_peak_cons[0], 2),
+                "peak_4h": round(dk_peak_cons[3], 2),
+                "peak_8h": round(dk_peak_cons[7], 2),
+                "peak_12h": round(dk_peak_cons[11], 2),
+            })
+        daily_dk.append(entry)
 
     print(f"  {len(daily_dk)} forecast D(k) curves")
 else:
@@ -747,18 +802,20 @@ footer a { color:#60a5fa; text-decoration:none; }
 <p class="sub" id="info"></p>
 
 <h2>Weekly Overview — Daily Cost by Usage Duration</h2>
-<p class="sub">D(k) = average consumer price for the k cheapest hours.
-D(4) = cheapest 4h, D(8) = cheapest 8h, D(24) = daily average.</p>
+<p class="sub">D_cheap(k) = mean price of the cheapest k hours (deferrable load cost).
+D_peak(k) = mean price of the priciest k hours (worst-case planning cost).
+Cards show D_cheap(4) prominently with cheap/peak comparison below.</p>
 <div class="cards" id="day-cards"></div>
 
-<h2>D(k) Duration Costs (Consumer c/kWh)</h2>
-<p class="sub">Actual (filled) + forecast (open) duration curve costs per day.
-Lower = cheaper electricity for that usage pattern.</p>
+<h2>D(k) Duration Costs (Consumer c/kWh) — Cheap & Peak</h2>
+<p class="sub">Actual (filled) + forecast (open) cheap-end and peak-end curves.
+Cool colors = D_cheap(k) (lower is cheaper for k-hour load);
+warm colors = D_peak(k) (higher is more expensive for k peak hours).</p>
 <div class="box"><canvas id="dkChart" height="280"></canvas></div>
 
 <h2>Duration Curve — Day Detail</h2>
-<p class="sub">Click a day above to see its full 24-level D(k) curve.
-X = cheapest hours used, Y = average cost.</p>
+<p class="sub">Click a day above to see its cheap-end and peak-end curves.
+X = number of hours, Y = average c/kWh of those hours (cheapest or priciest).</p>
 <div class="box"><canvas id="dayCurve" height="200"></canvas></div>
 
 <h2>Hourly Consumer Price (c/kWh)</h2>
@@ -804,46 +861,73 @@ document.getElementById('gen-time').textContent = F.generated;
     const dayName=F.day_names[d.dow];
     const dateShort=d.date.substring(5);
     const cls=(isWe?'card weekend':'card')+(isActual?' actual':'');
+    // Prefer new cheap/peak schema; fallback to legacy d1/d4/d8/d24
+    const c4=(d.cheap_4h!=null)?d.cheap_4h:d.d4;
+    const c1=(d.cheap_1h!=null)?d.cheap_1h:d.d1;
+    const c8=(d.cheap_8h!=null)?d.cheap_8h:d.d8;
+    const p1=(d.peak_1h!=null)?d.peak_1h:d.d24;
+    const p4=(d.peak_4h!=null)?d.peak_4h:d.d24;
     el.innerHTML+=
       '<div class="'+cls+'" onclick="showDay('+i+')" style="cursor:pointer">'+
       '<div class="day">'+dayName+(isActual?' &#9679;':'')+'</div>'+
       '<div class="date">'+dateShort+'</div>'+
-      '<div class="price '+priceClass(d.d4)+'">'+d.d4.toFixed(1)+'</div>'+
-      '<div class="label">D(4) 4h c/kWh</div>'+
+      '<div class="price '+priceClass(c4)+'">'+c4.toFixed(1)+'</div>'+
+      '<div class="label">D_cheap(4) 4h c/kWh</div>'+
       '<div style="margin-top:6px;font-size:10px;color:#94a3b8">'+
-        '<span style="color:#22d3ee">1h:</span> '+d.d1.toFixed(1)+' &nbsp; '+
-        '<span style="color:#f97316">8h:</span> '+d.d8.toFixed(1)+' &nbsp; '+
-        '<span style="color:#ef4444">24h:</span> '+d.d24.toFixed(1)+
+        '<span style="color:#22d3ee">cheap 1h:</span> '+c1.toFixed(1)+' &nbsp; '+
+        '<span style="color:#0ea5e9">cheap 8h:</span> '+c8.toFixed(1)+'<br>'+
+        '<span style="color:#f97316">peak 4h:</span> '+p4.toFixed(1)+' &nbsp; '+
+        '<span style="color:#ef4444">peak 1h:</span> '+p1.toFixed(1)+
       '</div></div>';
   });
 })();
 
-// ── D(k) line chart (actual + forecast) ──
+// ── D(k) cheap/peak line chart (actual + forecast) ──
 (function(){
   if(!DK.length) return;
   const labels=DK.map(d=>(d.source==='actual'?'\\u2588 ':'')+F.day_names[d.dow]+'\\n'+d.date.substring(5));
-  // Point styles: filled circle for actual, open circle for forecast
-  const ptStyle=DK.map(d=>d.source==='actual'?'circle':'circle');
+  // Point styles: filled point for actual, open for forecast
   const ptBg=(color)=>DK.map(d=>d.source==='actual'?color:'transparent');
   const ptBorder=(color)=>DK.map(d=>color);
   const ptBw=DK.map(d=>d.source==='actual'?0:2);
+  // Pull series with new schema preferred, legacy fallback (so re-deploy is graceful)
+  const cheap=(k,legacyKey)=>DK.map(d=>{
+    const arr=d.dk_cheap_cons;
+    if(arr&&arr.length>=k) return arr[k-1];
+    return d[legacyKey];
+  });
+  const peak=(k,fallback)=>DK.map(d=>{
+    const arr=d.dk_peak_cons;
+    if(arr&&arr.length>=k) return arr[k-1];
+    return d[fallback]!=null?d[fallback]:null;
+  });
   new Chart(document.getElementById('dkChart').getContext('2d'),{type:'line',
     data:{labels,datasets:[
-      {label:'D(1) Cheapest 1h',data:DK.map(d=>d.d1),borderColor:'#22d3ee',borderWidth:2,pointRadius:5,
+      // Cheap end (cool colors): cyan -> sky -> teal -> deep blue
+      {label:'D_cheap(1)',data:cheap(1,'d1'),borderColor:'#22d3ee',borderWidth:2,pointRadius:5,
        pointBackgroundColor:ptBg('#22d3ee'),pointBorderColor:ptBorder('#22d3ee'),pointBorderWidth:ptBw,fill:false,tension:0.3},
-      {label:'D(4) Cheapest 4h',data:DK.map(d=>d.d4),borderColor:'#facc15',borderWidth:2.5,pointRadius:6,
+      {label:'D_cheap(4)',data:cheap(4,'d4'),borderColor:'#0ea5e9',borderWidth:2.5,pointRadius:6,
+       pointBackgroundColor:ptBg('#0ea5e9'),pointBorderColor:ptBorder('#0ea5e9'),pointBorderWidth:ptBw,fill:false,tension:0.3},
+      {label:'D_cheap(8)',data:cheap(8,'d8'),borderColor:'#14b8a6',borderWidth:2,pointRadius:5,
+       pointBackgroundColor:ptBg('#14b8a6'),pointBorderColor:ptBorder('#14b8a6'),pointBorderWidth:ptBw,fill:false,tension:0.3},
+      {label:'D_cheap(12)',data:cheap(12,'d24'),borderColor:'#3b82f6',borderWidth:2,pointRadius:5,
+       pointBackgroundColor:ptBg('#3b82f6'),pointBorderColor:ptBorder('#3b82f6'),pointBorderWidth:ptBw,fill:false,tension:0.3},
+      // Peak end (warm colors): yellow -> orange -> red -> magenta
+      {label:'D_peak(12)',data:peak(12,'d24'),borderColor:'#facc15',borderWidth:2,borderDash:[5,3],pointRadius:5,
        pointBackgroundColor:ptBg('#facc15'),pointBorderColor:ptBorder('#facc15'),pointBorderWidth:ptBw,fill:false,tension:0.3},
-      {label:'D(8) Cheapest 8h',data:DK.map(d=>d.d8),borderColor:'#f97316',borderWidth:2,pointRadius:5,
+      {label:'D_peak(8)',data:peak(8,'d24'),borderColor:'#f97316',borderWidth:2,borderDash:[5,3],pointRadius:5,
        pointBackgroundColor:ptBg('#f97316'),pointBorderColor:ptBorder('#f97316'),pointBorderWidth:ptBw,fill:false,tension:0.3},
-      {label:'D(24) Daily Average',data:DK.map(d=>d.d24),borderColor:'#ef4444',borderWidth:2,pointRadius:5,
+      {label:'D_peak(4)',data:peak(4,'d24'),borderColor:'#ef4444',borderWidth:2.5,borderDash:[5,3],pointRadius:6,
        pointBackgroundColor:ptBg('#ef4444'),pointBorderColor:ptBorder('#ef4444'),pointBorderWidth:ptBw,fill:false,tension:0.3},
+      {label:'D_peak(1)',data:peak(1,'d24'),borderColor:'#d946ef',borderWidth:2,borderDash:[5,3],pointRadius:5,
+       pointBackgroundColor:ptBg('#d946ef'),pointBorderColor:ptBorder('#d946ef'),pointBorderWidth:ptBw,fill:false,tension:0.3},
     ]},
     options:{responsive:true,animation:false,
       interaction:{mode:'index',intersect:false},
-      plugins:{legend:{labels:{color:'#e2e8f0',font:{size:11},boxWidth:14,padding:12}},
+      plugins:{legend:{labels:{color:'#e2e8f0',font:{size:11},boxWidth:14,padding:8}},
         tooltip:{backgroundColor:'#1e2433',borderColor:'#374151',borderWidth:1,
           titleColor:'#e2e8f0',bodyColor:'#e2e8f0',
-          callbacks:{label:c=>c.dataset.label+': '+c.parsed.y.toFixed(1)+' c/kWh'}}},
+          callbacks:{label:c=>c.dataset.label+': '+(c.parsed.y!=null?c.parsed.y.toFixed(1):'-')+' c/kWh'}}},
       scales:{
         x:{grid:{color:'#1e293b'},ticks:{color:'#e2e8f0',font:{size:10},maxRotation:0}},
         y:{title:{display:true,text:'Consumer price (c/kWh)',color:'#e2e8f0'},
@@ -855,13 +939,29 @@ let dayCurveChart=null;
 function showDay(idx){
   const d=DK[idx];
   if(!d||!d.dk_cons) return;
-  const labels=d.dk_cons.map((_,i)=>(i+1)+'h');
-  const data={labels,datasets:[
-    {label:'Duration D(k)',data:d.dk_cons,borderColor:'#facc15',borderWidth:2.5,
-     pointRadius:3,pointBackgroundColor:'#facc15',fill:false,tension:0.2},
-  ]};
-  // Add hourly model sorted prices if available
-  if(d.hourly_sorted_cons&&d.hourly_sorted_cons.length){
+  // Prefer the new cheap[12] + peak[12] schema; fallback to legacy 24-array
+  const haveSplit=Array.isArray(d.dk_cheap_cons)&&Array.isArray(d.dk_peak_cons)&&
+                  d.dk_cheap_cons.length>0&&d.dk_peak_cons.length>0;
+  const labels=haveSplit
+    ? d.dk_cheap_cons.map((_,i)=>(i+1)+'h')
+    : d.dk_cons.map((_,i)=>(i+1)+'h');
+  const data={labels,datasets:[]};
+  if(haveSplit){
+    data.datasets.push(
+      {label:'D_cheap(k) — cheapest k hours',data:d.dk_cheap_cons,
+       borderColor:'#0ea5e9',borderWidth:2.5,pointRadius:3,
+       pointBackgroundColor:'#0ea5e9',fill:false,tension:0.2},
+      {label:'D_peak(k) — priciest k hours',data:d.dk_peak_cons,
+       borderColor:'#ef4444',borderWidth:2.5,pointRadius:3,
+       pointBackgroundColor:'#ef4444',fill:false,tension:0.2}
+    );
+  } else {
+    data.datasets.push({label:'Duration D(k)',data:d.dk_cons,
+      borderColor:'#facc15',borderWidth:2.5,pointRadius:3,
+      pointBackgroundColor:'#facc15',fill:false,tension:0.2});
+  }
+  // Add hourly model sorted prices if available (legacy detail overlay)
+  if(!haveSplit && d.hourly_sorted_cons&&d.hourly_sorted_cons.length){
     data.datasets.push({label:'Hourly model (sorted)',data:d.hourly_sorted_cons.slice(0,d.dk_cons.length).map(
       (v,i,a)=>{let s=0;for(let j=0;j<=i;j++)s+=a[j];return s/(i+1);}),
       borderColor:'#60a5fa',borderWidth:1.5,borderDash:[5,3],

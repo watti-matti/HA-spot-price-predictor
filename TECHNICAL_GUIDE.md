@@ -138,19 +138,26 @@ The log transform naturally handles the nonlinear price-scarcity relationship: n
 
 **Training:** 4 years historical data, 85/15 time-ordered split, batch processing (512 rows).
 
-### Duration model: Segment-hierarchical Ridge + PAVA
+### Duration model: Segment-hierarchical Ridge + PAVA (cheap/peak split)
 
-Predicts D(k) = average spot price for the cheapest k hours in a day. D(k) is mathematically equivalent to Conditional Value-at-Risk (CVaR) of the intra-day price distribution at level α = k/24, making it the natural cost metric for load scheduling: "schedule into the cheapest k hours" minimizes CVaR.
+Predicts two complementary duration curves per day:
 
-**PAVA** (Pool Adjacent Violators Algorithm) is an isotonic regression method that enforces monotonicity. Since D(k) must be non-decreasing by definition — adding more hours to the average can only include equal or more expensive hours — PAVA merges any violations from independent per-level Ridge predictions by averaging adjacent violating pairs until D(1) ≤ D(2) ≤ ... ≤ D(N) holds everywhere.
+- **`dk_cheap[k-1]`** = mean spot price of the **cheapest k hours**, k=1..12 (monotone non-decreasing). CVaR at α=k/24 in the lower tail. Best achievable cost for a deferrable load that can choose its k cheapest slots.
+- **`dk_peak[k-1]`** = mean spot price of the **priciest k hours**, k=1..12 (monotone non-increasing). CVaR at α=k/24 in the upper tail. Worst-case cost if the load is forced into peak hours (storage-depletion / risk-aware planning).
+
+The legacy 24-element cumulative D(k) — useful for k=1..12, indistinguishable from random for k=13..24 — is exactly recoverable from cheap+peak via the sum identity `cheap[11] + peak[11] = 2 × daily_avg` (`src/dk_utils.py` round-trip is exact to numerical noise; tested in `tests/test_dk_consumers.py`).
+
+**PAVA** (Pool Adjacent Violators Algorithm) is an isotonic regression method that enforces monotonicity. The cheap end requires non-decreasing PAVA; the peak end requires non-increasing PAVA (mirrored). Both are applied independently per direction after the per-segment Ridge predictions.
 
 **Architecture:**
 - 4 day segments aligned with day/night tariff: night (22-07, 9h), morning (07-12, 5h), midday (12-18, 6h), evening (18-22, 4h)
-- Per (segment, duration level): independent Ridge model with 10 features
-- Log-linear target: log(D(k) + 55)
+- Per `(segment, direction, duration level)`: independent Ridge model with 10 features (after Phase A retrain — currently the production model still uses single-direction Ridge per `(segment, k)` with cheap/peak derived from sorting hourly forecasts; see `src/train_model.py:train_duration_model` for the migration plan)
+- Log-linear target: `log(D(k) + 55)`
 - Forgetting factor λ = 0.960 (half-life 17 days, optimized via sweep)
-- PAVA isotonic post-processing: enforces D(1) ≤ D(2) ≤ ... ≤ D(N)
-- Segment-to-day reconstruction: extract sorted prices → merge → re-sort → full 24h D(k)
+- PAVA isotonic post-processing per direction:
+  - Cheap end: enforces `dk_cheap[0] ≤ dk_cheap[1] ≤ ... ≤ dk_cheap[11]`
+  - Peak end:  enforces `dk_peak[0]  ≥ dk_peak[1]  ≥ ... ≥ dk_peak[11]`
+- Segment-to-day reconstruction: extract sorted prices from each segment → merge into 24 hourly forecasts → `compute_dk_cheap_peak()` produces the two 12-element arrays
 
 **Duration model features:**
 `wind_mean`, `solar_mean`, `hdd_mean`, `se3_mean`, `se1_mean`, `nuclear_deficit`, `is_workday`, `month_sin`, `month_cos`, `wind_log_scarcity`
@@ -199,7 +206,7 @@ Configurable per operator in `finland.yaml`. Default: Elenia (day 3.61, night 2.
 | Sensor | State | Unit | Description |
 |--------|-------|------|-------------|
 | Price Forecast | Current consumer price | EUR/kWh | 170h hourly forecast with spot, consumer, weather per hour |
-| Duration Forecast | Today's D(4) | EUR/kWh | 7-day × 24-level D(k) = CVaR duration matrix |
+| Duration Forecast | Today's `dk_cheap[3]` (cheapest 4h) | EUR/kWh | 7-day × (12 cheap + 12 peak) duration curves; legacy `dk_consumer_eur_kwh[24]` retained for one transition release |
 
 #### Price Forecast attributes
 
@@ -216,24 +223,35 @@ Configurable per operator in `finland.yaml`. Default: Elenia (day 3.61, night 2.
 | `stale` | bool | True if data is older than threshold |
 | `data_age_minutes` | int | Minutes since last successful fetch |
 
-#### Duration Forecast attributes — D(k) matrix
+#### Duration Forecast attributes — D(k) cheap/peak
 
-D(k) = average consumer price for the cheapest k hours in a day = Conditional Value-at-Risk (CVaR) at α = k/24. The `daily_forecast` attribute provides a 7-day × 24-level matrix in day-per-row orientation.
+The `daily_forecast` attribute provides up to 7 days, each with both the new Phase A schema (preferred) and the legacy 24-array (deprecated, retained for one transition release).
 
 | Attribute | Shape | Unit | Description |
 |-----------|-------|------|-------------|
-| `daily_forecast` | array[7] | — | D(k) matrix, one entry per day |
+| `daily_forecast` | array[≤7] | — | One entry per day |
 | `daily_forecast[i].date` | string | — | ISO date (YYYY-MM-DD) |
 | `daily_forecast[i].weekday` | string | — | Mon–Sun |
-| `daily_forecast[i].dk_consumer_eur_kwh` | float[24] | EUR/kWh | D(1)…D(24) consumer price, index k−1 |
-| `daily_forecast[i].dk_spot_eur_mwh` | float[24] | EUR/MWh | D(1)…D(24) spot price, index k−1 |
-| `forecast_days` | int | — | Number of days in matrix (up to 7) |
+| `daily_forecast[i].source` | string | — | `forecast` for future days, `actual` for past days reconciled from Sahkotin |
+| **Phase A (preferred):** | | | |
+| `daily_forecast[i].dk_cheap_eur_kwh` | float[12] | EUR/kWh | Mean of cheapest k hours, k=1..12 |
+| `daily_forecast[i].dk_peak_eur_kwh`  | float[12] | EUR/kWh | Mean of priciest k hours, k=1..12 |
+| `daily_forecast[i].dk_cheap_spot_eur_mwh` | float[12] | EUR/MWh | Same in spot price |
+| `daily_forecast[i].dk_peak_spot_eur_mwh`  | float[12] | EUR/MWh | Same in spot price |
+| **Convenience scalars (today only):** | | | |
+| `today_cheap_4h_eur_kwh`, `today_cheap_8h_eur_kwh` | float | EUR/kWh | Today's cheapest 4h/8h indicators |
+| `today_peak_4h_eur_kwh`,  `today_peak_1h_eur_kwh` | float | EUR/kWh | Today's worst-case 4h/1h indicators |
+| **Legacy (deprecated):** | | | |
+| `daily_forecast[i].dk_consumer_eur_kwh` | float[24] | EUR/kWh | Legacy cumulative ascending D(k); `dk_consumer_eur_kwh[k-1] == dk_cheap_eur_kwh[k-1]` for k=1..12 |
+| `daily_forecast[i].dk_spot_eur_mwh`     | float[24] | EUR/MWh | Same in spot price |
+| `forecast_days` | int | — | Number of days emitted (up to 7) |
 
-**Matrix access patterns:**
-- Single value: `daily_forecast[day].dk_consumer_eur_kwh[k-1]` → D(k) for one day
-- Consumer transposes to k-per-row: `dk_matrix[k-1][day]` for D(k) trajectory across days
-- All vectors guaranteed length 24; only complete days included
-- Consumer D(k) includes per-segment tariff conversion: night hours use night transfer rate, day hours use day rate, then merged and re-sorted
+**Access patterns:**
+- Cheapest k hours of day d: `daily_forecast[d].dk_cheap_eur_kwh[k-1]` for k in 1..12 (use this for deferrable-load scheduling)
+- Priciest k hours of day d: `daily_forecast[d].dk_peak_eur_kwh[k-1]` for k in 1..12 (use this for worst-case / storage planning)
+- Cross-check identity: `cheap[11] + peak[11] = 2 × daily_avg` (always holds to numerical noise; foundation of the migration)
+- Legacy reconstruction: any consumer still reading `dk_consumer_eur_kwh[k-1]` for k=13..24 can be served exactly from cheap+peak via `(12*(cheap[11]+peak[11]) - (24-k)*peak[24-k-1]) / k`. Implementation in `multi_load_ha_integration.py:fetch_dk_forecast` (thermal-energy-optimization repo).
+- Consumer prices include per-segment tariff conversion: night hours use night transfer rate, day hours use day rate, then merged and re-sorted
 
 ### Actual price sensors (optional, Nordpool)
 
@@ -244,11 +262,15 @@ D(k) = average consumer price for the cheapest k hours in a day = Conditional Va
 
 ### Design principle
 
-This integration provides **forecasts only**. The D(k) = CVaR duration matrix is the primary API for downstream systems — thermal optimization and load scheduling consume D(k) to answer "what does it cost per kWh to run for k hours today?" This clean separation allows either component to be replaced independently.
+This integration provides **forecasts only**. The cheap/peak duration curves are the primary API for downstream systems:
+- Thermal optimization / load scheduling reads `dk_cheap[k-1]` to answer "what does it cost per kWh to run for k hours today, scheduled into the cheapest slots?"
+- Risk-aware planning (storage depletion, capacity reservation) reads `dk_peak[k-1]` to answer "what's the worst case if we have to run during k peak hours?"
+
+This clean separation allows either component to be replaced independently.
 
 The **Price Forecast** sensor provides a unified 170-hour forecast array for visualization and hourly price display. The state is the current hour's consumer price in EUR/kWh.
 
-The **Duration Forecast** sensor provides the D(k) matrix for optimization decisions. The state is today's D(4) — the average cost of running during the cheapest 4 hours — serving as a quick-glance cost indicator.
+The **Duration Forecast** sensor exposes the cheap/peak curves for optimization decisions. The state is today's `dk_cheap_eur_kwh[3]` — the average cost of running during the cheapest 4 hours — serving as a quick-glance cost indicator. See [docs/dk_cheap_peak_migration.md](docs/dk_cheap_peak_migration.md) for the migration guide for downstream consumers.
 
 ---
 

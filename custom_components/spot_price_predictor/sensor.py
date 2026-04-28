@@ -172,19 +172,33 @@ class PriceForecastSensor(CoordinatorEntity, SensorEntity):
 class DurationForecastSensor(CoordinatorEntity, SensorEntity):
     """D(k) duration curve forecast — 7 days ahead.
 
-    State: first forecast day's D(4) = average consumer price for the
-    cheapest 4 hours (EUR/kWh). D(k) = CVaR at level k/24.
+    State: first forecast day's `dk_cheap_eur_kwh[3]` = average consumer
+    price for the cheapest 4 hours of that day (EUR/kWh). This is the
+    most-used D(k) value for thermal scheduling of deferrable loads.
 
     Attributes:
       daily_forecast: 7-day array, each entry:
-        {date, weekday, dk_consumer_eur_kwh[24], dk_spot_eur_mwh[24]}
-        dk_consumer_eur_kwh[k-1] = D(k) consumer price in EUR/kWh for k=1..24
-        dk_spot_eur_mwh[k-1] = D(k) spot price in EUR/MWh for k=1..24
-      forecast_days: number of forecast days
+        {date, weekday, source,
+         dk_cheap_eur_kwh[12], dk_peak_eur_kwh[12],
+         dk_cheap_spot_eur_mwh[12], dk_peak_spot_eur_mwh[12],
+         dk_consumer_eur_kwh[24], dk_spot_eur_mwh[24]}
 
-    All D(k) vectors are guaranteed length 24 (only complete days
-    are included). Thermal optimization can read any D(k) directly
-    from the vector: dk_consumer_eur_kwh[k-1] for k=1..24.
+        Phase A schema (use these for new consumers):
+          dk_cheap_eur_kwh[k-1] = mean consumer price (EUR/kWh) of the
+                                  CHEAPEST k hours, k=1..12, monotone
+                                  non-decreasing.
+          dk_peak_eur_kwh[k-1]  = mean consumer price (EUR/kWh) of the
+                                  PRICIEST k hours, k=1..12, monotone
+                                  non-increasing.
+          dk_cheap_spot_eur_mwh / dk_peak_spot_eur_mwh: same for spot prices.
+
+        Legacy schema (deprecated, kept for one transition release; will
+        be removed in a future version):
+          dk_consumer_eur_kwh[24] / dk_spot_eur_mwh[24] — single cumulative
+          D(k) sorted ascending. Indices k=13..24 are not decision-relevant
+          for scheduling; use the cheap/peak split above instead.
+
+      forecast_days: number of forecast days
     """
 
     _attr_has_entity_name = True
@@ -202,14 +216,24 @@ class DurationForecastSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self) -> float | None:
-        """State = first forecast day's D(4) in EUR/kWh."""
+        """State = first forecast day's cheapest-4h average (EUR/kWh).
+
+        Prefers the new `dk_cheap_eur_kwh[3]` attribute; falls back to
+        the legacy `dk_consumer_eur_kwh[3]` if the coordinator has not
+        yet been updated with the new schema.
+        """
         if not self.coordinator.data:
             return None
         dk_list = self.coordinator.data.get("duration_forecast", [])
         if not dk_list:
             return None
-        dk_vec = dk_list[0].get("dk_consumer_eur_kwh", [])
-        return dk_vec[3] if len(dk_vec) >= 4 else None
+        first = dk_list[0]
+        cheap_vec = first.get("dk_cheap_eur_kwh") or []
+        if len(cheap_vec) >= 4:
+            return cheap_vec[3]
+        # Fallback to legacy 24-array
+        legacy_vec = first.get("dk_consumer_eur_kwh") or []
+        return legacy_vec[3] if len(legacy_vec) >= 4 else None
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -219,11 +243,28 @@ class DurationForecastSensor(CoordinatorEntity, SensorEntity):
         if not dk_list:
             return {}
 
-        return {
+        first = dk_list[0]
+        cheap_vec = first.get("dk_cheap_eur_kwh") or []
+        peak_vec = first.get("dk_peak_eur_kwh") or []
+
+        # Convenience scalars for common scheduling decisions
+        attrs: dict[str, Any] = {
             "daily_forecast": dk_list,
             "forecast_days": len(dk_list),
-            **_status_attributes(self.coordinator.data),
         }
+        if len(cheap_vec) >= 12:
+            attrs["today_cheap_1h_eur_kwh"] = cheap_vec[0]
+            attrs["today_cheap_4h_eur_kwh"] = cheap_vec[3]
+            attrs["today_cheap_8h_eur_kwh"] = cheap_vec[7]
+            attrs["today_cheap_12h_eur_kwh"] = cheap_vec[11]
+        if len(peak_vec) >= 12:
+            attrs["today_peak_1h_eur_kwh"] = peak_vec[0]
+            attrs["today_peak_4h_eur_kwh"] = peak_vec[3]
+            attrs["today_peak_8h_eur_kwh"] = peak_vec[7]
+            attrs["today_peak_12h_eur_kwh"] = peak_vec[11]
+
+        attrs.update(_status_attributes(self.coordinator.data))
+        return attrs
 
     @property
     def device_info(self) -> dict[str, Any]:
