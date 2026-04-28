@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -16,13 +17,17 @@ from .const import (
     DOMAIN,
     CONF_FINGRID_API_KEY,
     CONF_ENABLE_NEIGHBOR_PRICES,
+    CONF_ENABLE_DTACI_DK,
     CONF_OPERATOR,
     CONF_CUSTOM_DAY_RATE,
     CONF_CUSTOM_NIGHT_RATE,
     CONF_CUSTOM_VAT,
     CONF_CUSTOM_ENERGY_TAX,
     CONF_SELLER_MARGIN,
+    DEFAULT_ENABLE_DTACI_DK,
     DEFAULT_SELLER_MARGIN,
+    DTACI_TARGET_COVERAGE,
+    DTACI_ZONES,
     OPERATORS,
     DEFAULT_VAT_MULTIPLIER,
     DEFAULT_ENERGY_TAX,
@@ -80,6 +85,25 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
 
         self.enable_neighbor_prices = entry.data.get(CONF_ENABLE_NEIGHBOR_PRICES, False)
         self.has_fingrid = bool(fingrid_key)
+        self.enable_dtaci_dk = entry.data.get(
+            CONF_ENABLE_DTACI_DK, DEFAULT_ENABLE_DTACI_DK,
+        )
+
+        # DtACI per-D(i) bundles (one per zone). Lazy-loaded on first
+        # use so cold-start doesn't block the initial coordinator
+        # refresh. State files live under
+        # `<config_dir>/.storage/spot_price_predictor_dtaci/`.
+        self._dtaci_bundles: dict[str, Any] = {}
+        self._dtaci_state_dir: Path | None = None
+        # Rolling DK-forecast history per (date, zone) used to reconcile
+        # forecasts against actuals once Sähkötin reports the day's
+        # complete 24-hour window.
+        # Key: date_str (YYYY-MM-DD)
+        # Value: {"<zone>": {"cheap": [12], "peak": [12]}}
+        self._dk_forecast_history: dict[str, dict[str, dict]] = {}
+        # Days that have already been fed to the bundle, to avoid
+        # double-counting on subsequent coordinator cycles.
+        self._dk_reconciled_dates: set[tuple[str, str]] = set()
 
         # Build holiday set
         now = datetime.now(timezone.utc)
@@ -119,6 +143,163 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
         spot_kwh = max(0.0, spot_eur_mwh) / 1000.0
         return (spot_kwh + self.seller_margin + transfer + self.energy_tax) \
             * self.vat_multiplier
+
+    # ── DtACI per-D(i) calibration layer ──────────────────────────
+
+    def _dtaci_init_bundles(self) -> None:
+        """Lazy-init the four DtACI bundles (FI, SE1, SE3, EE).
+
+        Each bundle is loaded from `<config_dir>/.storage/<DOMAIN>_dtaci/
+        dtaci_dk_<zone>.json` if present, otherwise cold-started. Idempotent —
+        safe to call every cycle.
+        """
+        if self._dtaci_bundles:
+            return
+        try:
+            from .dtaci_integration import load_or_create_bundle
+            base = Path(self.hass.config.path()) / ".storage" / f"{DOMAIN}_dtaci"
+            base.mkdir(parents=True, exist_ok=True)
+            self._dtaci_state_dir = base
+            for zone in DTACI_ZONES:
+                path = base / f"dtaci_dk_{zone}.json"
+                self._dtaci_bundles[zone] = load_or_create_bundle(
+                    path, target_coverage=DTACI_TARGET_COVERAGE,
+                )
+            _LOGGER.info(
+                "DtACI: initialised %d zone bundles in %s",
+                len(self._dtaci_bundles), base,
+            )
+        except Exception as err:
+            _LOGGER.exception("DtACI: bundle init failed: %s", err)
+
+    def _dtaci_record_forecasts(
+        self, duration_forecast: list[dict[str, Any]],
+    ) -> None:
+        """Capture today's day-ahead FI D(i) forecast for later reconciliation.
+
+        Each `duration_forecast` entry with `source == "forecast"` is stored
+        by date_str so a subsequent cycle (which sees the same date as
+        `source == "actual"`) can pair the forecast with the realised D(i).
+        Pruned to the last 14 days to bound memory.
+        """
+        for d in duration_forecast:
+            if d.get("source") != "forecast":
+                continue
+            date_str = d.get("date")
+            cheap = d.get("dk_cheap_eur_kwh") or []
+            peak = d.get("dk_peak_eur_kwh") or []
+            if not (date_str and len(cheap) >= 12 and len(peak) >= 12):
+                continue
+            slot = self._dk_forecast_history.setdefault(date_str, {})
+            slot["fi"] = {"cheap": list(cheap[:12]), "peak": list(peak[:12])}
+        # Prune to last 14 days
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=14)
+                  ).strftime("%Y-%m-%d")
+        for old in list(self._dk_forecast_history.keys()):
+            if old < cutoff:
+                del self._dk_forecast_history[old]
+
+    def _dtaci_reconcile_actuals(
+        self, duration_forecast: list[dict[str, Any]],
+    ) -> int:
+        """Feed (forecast, actual) D(i) pairs to the FI bundle.
+
+        For each entry in `duration_forecast` whose source is "actual" and
+        whose date appears in our forecast history, build the pair and
+        update the FI bundle. Each (zone, date) is only fed once.
+        Returns the number of pairs ingested.
+        """
+        bundle = self._dtaci_bundles.get("fi")
+        if bundle is None:
+            return 0
+        n = 0
+        for d in duration_forecast:
+            if d.get("source") != "actual":
+                continue
+            date_str = d.get("date")
+            if not date_str:
+                continue
+            key = ("fi", date_str)
+            if key in self._dk_reconciled_dates:
+                continue
+            forecast_entry = self._dk_forecast_history.get(date_str, {}).get("fi")
+            if not forecast_entry:
+                # No stored forecast for this date — happens on first
+                # ever startup or after long downtime. Skip without fail.
+                continue
+            actual_cheap = d.get("dk_cheap_eur_kwh") or []
+            actual_peak = d.get("dk_peak_eur_kwh") or []
+            if len(actual_cheap) < 12 or len(actual_peak) < 12:
+                continue
+            try:
+                bundle.update(
+                    forecast_dk_cheap=forecast_entry["cheap"],
+                    forecast_dk_peak=forecast_entry["peak"],
+                    actual_dk_cheap=list(actual_cheap[:12]),
+                    actual_dk_peak=list(actual_peak[:12]),
+                )
+                self._dk_reconciled_dates.add(key)
+                n += 1
+            except (KeyError, ValueError) as exc:
+                _LOGGER.warning(
+                    "DtACI[FI]: reconcile failed for %s: %s", date_str, exc,
+                )
+        if n:
+            _LOGGER.info("DtACI[FI]: reconciled %d new actual day(s)", n)
+        return n
+
+    def _dtaci_attach_bands(
+        self, duration_forecast: list[dict[str, Any]],
+    ) -> None:
+        """Mutate forecast entries to add `dk_cheap_lower/upper_eur_kwh`
+        and `dk_peak_lower/upper_eur_kwh`. No-op for actual entries
+        (their bands collapse to the actual; meaningless to display)."""
+        bundle = self._dtaci_bundles.get("fi")
+        if bundle is None:
+            return
+        try:
+            from .dtaci_integration import attach_dk_intervals
+            forecast_only = [d for d in duration_forecast
+                             if d.get("source") == "forecast"]
+            attach_dk_intervals(bundle, forecast_only)
+        except Exception as err:
+            _LOGGER.exception("DtACI[FI]: attach bands failed: %s", err)
+
+    def _dtaci_save(self) -> None:
+        """Persist all bundles atomically. Best-effort — failures logged
+        but don't propagate (sensor data should still be usable)."""
+        if not self._dtaci_state_dir or not self._dtaci_bundles:
+            return
+        try:
+            from .dtaci_integration import save_bundle
+            for zone, bundle in self._dtaci_bundles.items():
+                path = self._dtaci_state_dir / f"dtaci_dk_{zone}.json"
+                save_bundle(path, bundle)
+        except Exception as err:
+            _LOGGER.warning("DtACI: save_bundle failed: %s", err)
+
+    def _dtaci_diagnostics(self) -> dict[str, Any]:
+        """Per-zone diagnostics for the duration-forecast sensor.
+
+        Output structure mirrors the reference UI card's parameter set
+        (mean coverage, mean width, dominant gamma, weight entropy, plus
+        per-(direction, k) breakdown).
+        """
+        if not self._dtaci_bundles:
+            return {}
+        out: dict[str, Any] = {
+            "enabled": True,
+            "target_coverage": DTACI_TARGET_COVERAGE,
+            "zones": {},
+        }
+        for zone, bundle in self._dtaci_bundles.items():
+            try:
+                out["zones"][zone] = bundle.diagnostics()
+            except Exception as err:
+                _LOGGER.warning(
+                    "DtACI[%s]: diagnostics failed: %s", zone, err,
+                )
+        return out
 
     def _return_cached_or_fail(self, err: Exception) -> dict[str, Any]:
         """Return cached data on failure, or raise UpdateFailed if no cache."""
@@ -318,6 +499,19 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                     [d["date"] for d in actual_dk],
                 )
 
+            # ── DtACI per-D(i) calibration layer ────────────────────
+            # When enabled, run the four-zone bundle: capture today's
+            # forecast, reconcile newly-actual days, attach calibrated
+            # bands to forecast-mode entries, persist state.
+            dtaci_diagnostics: dict[str, Any] = {}
+            if self.enable_dtaci_dk:
+                self._dtaci_init_bundles()
+                self._dtaci_record_forecasts(duration_forecast)
+                self._dtaci_reconcile_actuals(duration_forecast)
+                self._dtaci_attach_bands(duration_forecast)
+                self._dtaci_save()
+                dtaci_diagnostics = self._dtaci_diagnostics()
+
             # Merge into rolling history (keeps past predictions for charts)
             for f in forecast:
                 self._forecast_history[f["timestamp"]] = f
@@ -345,6 +539,7 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                 "current_spot_eur_mwh": forecast[0]["spot_eur_mwh"] if forecast else 0.0,
                 "forecast": combined_forecast,
                 "duration_forecast": duration_forecast,
+                "dtaci_diagnostics": dtaci_diagnostics,
                 "data_sources_active": " + ".join(sources),
                 "last_update": now.isoformat(),
                 "stale": False,

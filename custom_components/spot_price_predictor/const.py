@@ -26,6 +26,17 @@ CONF_PV_SELL_COMMISSION = "pv_sell_commission"
 
 DEFAULT_PV_SELL_COMMISSION = 0.002   # EUR/kWh (0.2 c/kWh)
 
+# DtACI online calibration layer (Phase B v2). Off by default; enabling
+# wires up per-(direction, k) DtACI on FI consumer-price D(i) statistics
+# and runs neighbour-zone (SE1, SE3, EE) bundles for bias diagnostics.
+CONF_ENABLE_DTACI_DK = "enable_dtaci_dk"
+DEFAULT_ENABLE_DTACI_DK = False
+DTACI_TARGET_COVERAGE = 0.9  # 90% prediction intervals
+# Zones whose D(i) statistics get a DtACI bundle. FI drives sensor bands;
+# the neighbour bundles produce bias estimates that can later be fed back
+# into the AR(2) features (separate enhancement).
+DTACI_ZONES = ("fi", "se1", "se3", "ee")
+
 # Update intervals (seconds)
 UPDATE_INTERVAL_WEATHER = 21600  # 6 hours
 UPDATE_INTERVAL_FINGRID = 3600   # 1 hour

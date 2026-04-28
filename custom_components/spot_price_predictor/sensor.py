@@ -263,6 +263,33 @@ class DurationForecastSensor(CoordinatorEntity, SensorEntity):
             attrs["today_peak_8h_eur_kwh"] = peak_vec[7]
             attrs["today_peak_12h_eur_kwh"] = peak_vec[11]
 
+        # DtACI calibrated bands for today (consumer EUR/kWh). Only
+        # populated when the layer is enabled and warmed up; missing
+        # otherwise so card templates can branch cleanly.
+        cheap_lo = first.get("dk_cheap_lower_eur_kwh") or []
+        cheap_hi = first.get("dk_cheap_upper_eur_kwh") or []
+        peak_lo = first.get("dk_peak_lower_eur_kwh") or []
+        peak_hi = first.get("dk_peak_upper_eur_kwh") or []
+        if len(cheap_lo) == 12 and len(cheap_hi) == 12:
+            attrs["today_cheap_4h_lower_eur_kwh"] = cheap_lo[3]
+            attrs["today_cheap_4h_upper_eur_kwh"] = cheap_hi[3]
+        if len(peak_lo) == 12 and len(peak_hi) == 12:
+            attrs["today_peak_1h_lower_eur_kwh"] = peak_lo[0]
+            attrs["today_peak_1h_upper_eur_kwh"] = peak_hi[0]
+
+        # DtACI diagnostic block (per-zone, per-(direction, k)).
+        # Drives the diagnostics Lovelace card.
+        diag = self.coordinator.data.get("dtaci_diagnostics") or {}
+        if diag:
+            attrs["dtaci_diagnostics"] = diag
+            # Top-level scalars for header/state badges
+            fi = (diag.get("zones") or {}).get("fi") or {}
+            attrs["dtaci_target_coverage"] = diag.get("target_coverage")
+            attrs["dtaci_fi_mean_coverage"] = fi.get("mean_coverage")
+            attrs["dtaci_fi_mean_width_eur_kwh"] = fi.get("mean_width")
+            attrs["dtaci_fi_warm_instances"] = fi.get("n_warm_instances")
+            attrs["dtaci_fi_total_instances"] = fi.get("n_total_instances")
+
         attrs.update(_status_attributes(self.coordinator.data))
         return attrs
 

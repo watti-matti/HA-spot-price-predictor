@@ -96,6 +96,8 @@ The **Duration Forecast** sensor provides daily duration curves split into a che
 
 **Migration:** the legacy `dk_consumer_eur_kwh[24]` array is still emitted for one transition release. New consumers should read the cheap/peak split; the legacy array can be exactly reconstructed from cheap+peak via the formula in [docs/dk_cheap_peak_migration.md](docs/dk_cheap_peak_migration.md).
 
+**Optional online calibration (DtACI).** Enable the `enable_dtaci_dk` option to wrap the duration forecast with adaptive conformal prediction intervals (Gibbs & Candès, JMLR 2024) plus per-D(i) online bias correction. When on, each daily forecast entry gains four 12-element band attributes — `dk_cheap_lower/upper_eur_kwh` and `dk_peak_lower/upper_eur_kwh` — that achieve 90 % marginal coverage and adapt to regime shifts. A `dtaci_diagnostics` attribute exposes per-(direction, k) coverage / bias EMA / dominant γ / weight entropy for monitoring; see [docs/yaml_examples/dtaci_diagnostics_card.yaml](docs/yaml_examples/dtaci_diagnostics_card.yaml) for a Lovelace card. Off by default until the layer warms up (~14 days of reconciled actuals).
+
 **Design principle:** This integration provides *forecasts only*. The cheap/peak curves are the primary API for downstream systems — thermal optimization, load scheduling, and heat pump control consume `dk_cheap` for cost-minimization and `dk_peak` for risk-aware planning. This clean separation means either component can be replaced independently.
 
 ### Actual Price Sensors (optional, when Nordpool entity is configured)

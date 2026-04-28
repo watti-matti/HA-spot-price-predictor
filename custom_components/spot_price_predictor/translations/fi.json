@@ -28,7 +28,8 @@
         "description": "Rajat ylittävät hintatiedot parantavat ennusteita Ruotsin ja Viron hintadatalla — ei API-avainta tarvita. Fingrid-ydinvoimadata lisää ydinvoimatuotannon tiedot — vaatii ilmaisen API-avaimen osoitteesta data.fingrid.fi.\n\nApexCharts-kojelauta: https://github.com/watti-matti/HA-spot-price-predictor/blob/main/docs/yaml_examples/apexcharts_dashboard.yaml",
         "data": {
           "fingrid_api_key": "Fingrid API-avain (valinnainen, ilmainen osoitteessa data.fingrid.fi)",
-          "enable_neighbor_prices": "Ota käyttöön rajat ylittävät hintatiedot (Ruotsi SE1/SE3, Viro)"
+          "enable_neighbor_prices": "Ota käyttöön rajat ylittävät hintatiedot (Ruotsi SE1/SE3, Viro)",
+          "enable_dtaci_dk": "Ota käyttöön DtACI-online-kalibrointi (adaptiiviset D(k)-ennustevälit + biaskorjaus)"
         }
       }
     },
@@ -53,6 +54,7 @@
           "custom_vat": "ALV-kerroin (esim. 1.255 = 25,5%)",
           "custom_energy_tax": "Sähkövero (EUR/kWh)",
           "enable_neighbor_prices": "Rajat ylittävät hintatiedot",
+          "enable_dtaci_dk": "DtACI-online-kalibrointi (adaptiiviset D(k)-ennustevälit + biaskorjaus)",
           "fingrid_api_key": "Fingrid API-avain"
         }
       }

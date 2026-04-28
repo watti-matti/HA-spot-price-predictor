@@ -28,6 +28,8 @@ from .const import (
     CONF_ENABLE_PV_SELLING,
     CONF_PV_SELL_COMMISSION,
     DEFAULT_PV_SELL_COMMISSION,
+    CONF_ENABLE_DTACI_DK,
+    DEFAULT_ENABLE_DTACI_DK,
     REGIONS,
     OPERATORS,
     DEFAULT_VAT_MULTIPLIER,
@@ -160,6 +162,9 @@ class SpotPricePredictorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 self._data[CONF_ENABLE_NEIGHBOR_PRICES] = user_input.get(
                     CONF_ENABLE_NEIGHBOR_PRICES, True
                 )
+                self._data[CONF_ENABLE_DTACI_DK] = user_input.get(
+                    CONF_ENABLE_DTACI_DK, DEFAULT_ENABLE_DTACI_DK
+                )
 
                 title = f"Spot Price ({REGIONS.get(self._data.get(CONF_REGION, 'finland'), 'Finland')})"
                 return self.async_create_entry(title=title, data=self._data)
@@ -167,6 +172,10 @@ class SpotPricePredictorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         schema = vol.Schema({
             vol.Optional(CONF_FINGRID_API_KEY, default=""): str,
             vol.Optional(CONF_ENABLE_NEIGHBOR_PRICES, default=True): bool,
+            vol.Optional(
+                CONF_ENABLE_DTACI_DK,
+                default=DEFAULT_ENABLE_DTACI_DK,
+            ): bool,
         })
         return self.async_show_form(
             step_id="optional_apis", data_schema=schema, errors=errors
@@ -227,6 +236,9 @@ class SpotPriceOptionsFlow(config_entries.OptionsFlow):
                 new_data[CONF_ENABLE_NEIGHBOR_PRICES] = user_input.get(
                     CONF_ENABLE_NEIGHBOR_PRICES, True
                 )
+                new_data[CONF_ENABLE_DTACI_DK] = user_input.get(
+                    CONF_ENABLE_DTACI_DK, DEFAULT_ENABLE_DTACI_DK
+                )
                 if fingrid_key:
                     new_data[CONF_FINGRID_API_KEY] = fingrid_key
                 elif not user_input.get(CONF_FINGRID_API_KEY):
@@ -284,6 +296,10 @@ class SpotPriceOptionsFlow(config_entries.OptionsFlow):
             vol.Optional(
                 CONF_ENABLE_NEIGHBOR_PRICES,
                 default=current.get(CONF_ENABLE_NEIGHBOR_PRICES, True),
+            ): bool,
+            vol.Optional(
+                CONF_ENABLE_DTACI_DK,
+                default=current.get(CONF_ENABLE_DTACI_DK, DEFAULT_ENABLE_DTACI_DK),
             ): bool,
             vol.Optional(
                 CONF_FINGRID_API_KEY,
