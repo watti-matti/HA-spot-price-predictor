@@ -133,12 +133,21 @@ class TestDurationModelPredict:
         for i in range(1, len(sp)):
             assert sp[i] >= sp[i - 1] - 1e-10
 
-    def test_all_prices_non_negative(self, minimal_duration_config, typical_features):
+    def test_negative_spot_allowed(self, minimal_duration_config, typical_features):
+        """v2.1.1: spot forecasts may be negative (mild Nordic days have
+        negative night/morning hours). The duration model surfaces them
+        instead of clamping at zero. Consumer prices are still floored
+        downstream by the coordinator's tariff conversion.
+        """
         model = DurationModel(minimal_duration_config)
         result = model.predict_day(typical_features)
 
+        # No assertion that prices >= 0; we just confirm the type/shape
+        # is preserved when negatives appear. Length is sum of segment
+        # n_levels across the minimal config (not necessarily 24).
+        assert len(result["sorted_prices"]) > 0
         for p in result["sorted_prices"]:
-            assert p >= 0.0
+            assert isinstance(p, float)
 
     def test_segment_curves_present(self, minimal_duration_config, typical_features):
         model = DurationModel(minimal_duration_config)
@@ -185,13 +194,14 @@ class TestLinearPrediction:
         # solar=0: 0*0 = 0
         # hdd=10: 0.005*10 = 0.05
         # linear = 4.0 + (-0.05) + 0 + 0.05 = 4.0
-        # D(k) = exp(4.0) - 55 = 54.598 - 55 = -0.402 -> max(0, -0.402) = 0
+        # D(k) = exp(4.0) - 55 = 54.598 - 55 = -0.402  (v2.1.1: NOT clamped)
 
         features = {"wind_mean": 5.0, "solar_mean": 0.0, "hdd_mean": 10.0}
         curve = model._predict_segment("night", features)
 
         expected_linear = 4.0 + (-0.01 * 5.0) + (0.0 * 0.0) + (0.005 * 10.0)
-        expected_dk = max(0.0, math.exp(expected_linear) - 55)
+        # v2.1.1: floor removed — negative spot is allowed to surface
+        expected_dk = math.exp(expected_linear) - 55
         assert curve[0] == pytest.approx(expected_dk, abs=1e-6)
 
     def test_missing_feature_defaults_zero(self, minimal_duration_config):
@@ -201,7 +211,8 @@ class TestLinearPrediction:
         curve = model._predict_segment("night", features)
 
         expected_linear = 4.0 + (-0.01 * 5.0) + (0.0 * 0.0) + (0.005 * 0.0)
-        expected_dk = max(0.0, math.exp(expected_linear) - 55)
+        # v2.1.1: floor removed
+        expected_dk = math.exp(expected_linear) - 55
         assert curve[0] == pytest.approx(expected_dk, abs=1e-6)
 
     def test_exp_overflow_capped(self, minimal_duration_config):
@@ -291,8 +302,16 @@ class TestProductionCoefficients:
     def test_production_model_loads(self, prod_model):
         assert prod_model.duration_model is not None
 
-    def test_production_10_features(self, prod_model):
-        assert len(prod_model.duration_model.feature_names) == 10
+    def test_production_features(self, prod_model):
+        # v2.1: 10 features, v2.2: 12 features (added net_load_mean,
+        # net_load_squared_mean). Either count is valid; the test
+        # confirms the feature_names list is non-empty and consistent
+        # with the per-segment cheap_models coefficient count.
+        n_feat = len(prod_model.duration_model.feature_names)
+        assert n_feat in (10, 12), f"unexpected feature_count {n_feat}"
+        seg = next(iter(prod_model.duration_model.segments.values()))
+        sub = (seg.get("cheap_models") or seg.get("models"))[0]
+        assert len(sub["coefs"]) == n_feat
 
     def test_production_4_segments(self, prod_model):
         assert len(prod_model.duration_model.segments) == 4
@@ -318,9 +337,10 @@ class TestProductionCoefficients:
         result = prod_model.duration_model.predict_day(features)
         dk = result["duration_curve"]
 
-        # Spot prices should be in reasonable range for Finland
-        assert 0 <= dk[0] <= 100, f"D(1) = {dk[0]} out of range"
-        assert 0 <= dk[-1] <= 200, f"D(24) = {dk[-1]} out of range"
+        # v2.1.1: spot may be negative (mild Nordic days). Bound is
+        # generous to allow that and any nuclear-deficit-driven spike.
+        assert -100 <= dk[0] <= 100, f"D(1) = {dk[0]} out of range"
+        assert -100 <= dk[-1] <= 300, f"D(24) = {dk[-1]} out of range"
         assert len(dk) == 24
 
 

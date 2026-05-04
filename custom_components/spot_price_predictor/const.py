@@ -124,10 +124,16 @@ API_ELERING = "https://dashboard.elering.ee/api/nps/price"
 API_ELPRISET = "https://www.elprisetjustnu.se/api/v1/prices"
 API_FINGRID = "https://data.fingrid.fi/api/datasets"
 
-# Fingrid dataset IDs (only nuclear used for nuclear_x_scarcity interaction)
-FINGRID_NUCLEAR = 188
+# Fingrid dataset IDs
+FINGRID_NUCLEAR = 188                    # Real-time nuclear production (3-min)
+# v2.2: net-load forecast inputs. Day-ahead consumption / wind / solar
+# generation forecasts. The empirical study showed cor 0.80 with FI prices.
+FINGRID_CONSUMPTION_FORECAST = 165       # Once-a-day consumption forecast (15-min)
+FINGRID_WIND_FORECAST = 246              # Once-a-day wind generation forecast (15-min)
+FINGRID_SOLAR_FORECAST = 247             # Once-a-day solar generation forecast (15-min)
 
-# Normalization values for Fingrid data
+# Normalization values for Fingrid data (max_value used for bounded
+# fraction-of-capacity series like nuclear_mw)
 FINGRID_MAX_VALUES = {
     "nuclear_mw": 4372,
 }

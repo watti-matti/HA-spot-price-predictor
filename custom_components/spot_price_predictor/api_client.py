@@ -18,6 +18,9 @@ from .const import (
     UMM_FUEL_TYPE_NUCLEAR,
     UMM_AREA_FINLAND,
     FINGRID_NUCLEAR,
+    FINGRID_CONSUMPTION_FORECAST,
+    FINGRID_WIND_FORECAST,
+    FINGRID_SOLAR_FORECAST,
     FINGRID_MAX_VALUES,
     FINNISH_NUCLEAR_CAPACITY_MW,
     FINLAND_LOCATIONS,
@@ -299,6 +302,101 @@ class SpotPriceApiClient:
 
         _LOGGER.info("Fingrid nuclear_mw: %.3f", result.get("nuclear_mw", 0.0))
         return result
+
+    async def fetch_fingrid_forecasts(
+        self, hours_ahead: int = FORECAST_HOURS,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """v2.2: fetch day-ahead consumption / wind / solar generation
+        forecasts for net-load feature construction.
+
+        Returns a dict with one key per dataset; each value is a list of
+        ``{"timestamp": ISO-8601 UTC, "value_mw": float}`` records,
+        resampled to hourly mean. Empty dict if no Fingrid key.
+
+        Three datasets:
+            consumption_mw     — Fingrid 165 (day-ahead consumption forecast)
+            wind_forecast_mw   — Fingrid 246 (day-ahead wind generation forecast)
+            solar_forecast_mw  — Fingrid 247 (day-ahead solar generation forecast)
+
+        Sub-hourly samples are aggregated to hourly mean. Hour timestamps
+        are aligned to the top of the hour (UTC). The integration
+        coordinator re-uses these for every forecast hour by lookup.
+
+        The empirical study (`studies/fingrid_netload_study.py`) showed
+        net_load = consumption - wind - solar - nuclear has cor 0.80 with
+        FI prices and explains 46 % of the AR(2) baseline residual
+        variance — strongest single feature improvement measured.
+        """
+        if not self._fingrid_api_key:
+            return {}
+
+        headers = {"x-api-key": self._fingrid_api_key}
+        now = datetime.now(timezone.utc)
+        # Pull a slightly wider window than FORECAST_HOURS so resampling
+        # doesn't lose the trailing hour.
+        start = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        end = (now + timedelta(hours=hours_ahead + 6)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ")
+
+        out: dict[str, list[dict[str, Any]]] = {}
+        datasets = {
+            "consumption_mw":    FINGRID_CONSUMPTION_FORECAST,
+            "wind_forecast_mw":  FINGRID_WIND_FORECAST,
+            "solar_forecast_mw": FINGRID_SOLAR_FORECAST,
+        }
+        for name, ds_id in datasets.items():
+            url = f"{API_FINGRID}/{ds_id}/data"
+            params = {
+                "startTime": start, "endTime": end,
+                "format": "json", "pageSize": 5000,
+            }
+            try:
+                async with self._session.get(
+                    url, headers=headers, params=params,
+                ) as resp:
+                    if resp.status == 429:
+                        _LOGGER.info(
+                            "Fingrid %s rate-limited; will retry next cycle",
+                            name)
+                        continue
+                    if resp.status != 200:
+                        _LOGGER.warning(
+                            "Fingrid %s HTTP %d", name, resp.status)
+                        continue
+                    data = await resp.json()
+            except Exception as err:
+                _LOGGER.warning("Fingrid %s fetch failed: %s", name, err)
+                continue
+
+            entries = data.get("data") if isinstance(data, dict) else data
+            if not entries:
+                continue
+
+            # Resample sub-hourly entries to hourly mean
+            buckets: dict[str, list[float]] = {}
+            for entry in entries:
+                ts_str = entry.get("startTime")
+                if not ts_str:
+                    continue
+                try:
+                    val = float(entry.get("value", 0.0))
+                except (TypeError, ValueError):
+                    continue
+                # Hour key: drop minutes/seconds
+                hour_key = ts_str[:13] + ":00:00Z"
+                buckets.setdefault(hour_key, []).append(val)
+
+            hourly: list[dict[str, Any]] = []
+            for hour_key in sorted(buckets.keys()):
+                vals = buckets[hour_key]
+                hourly.append({
+                    "timestamp": hour_key,
+                    "value_mw": sum(vals) / len(vals),
+                })
+            out[name] = hourly
+            _LOGGER.info("Fingrid %s: %d hourly buckets", name, len(hourly))
+
+        return out
 
     async def validate_fingrid_key(self) -> bool:
         """Validate Fingrid API key by making a test request."""

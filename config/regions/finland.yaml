@@ -160,6 +160,38 @@ grid_sources:
     resolution: "3min"               # Needs hourly aggregation
     update_interval_hours: 1
 
+  # ─── v2.2: net-load features ──────────────────────────────────────
+  # Together with nuclear_mw above, these three series feed
+  #     net_load_gw = (consumption - wind - solar - nuclear) / 1000
+  # which the empirical study (`fingrid_netload_study.py`) showed has
+  # cor 0.80 with FI prices and explains 46 % of the AR(2) baseline
+  # residual variance — the strongest single feature improvement we've
+  # measured. The dataset IDs are Fingrid's day-ahead forecasts; the
+  # integration's runtime fetcher uses the same IDs.
+  - name: "fingrid_consumption_forecast"
+    env_key: "FINGRID_API_KEY"
+    url: "https://data.fingrid.fi/api/datasets/165/data"
+    feature_name: "consumption_mw"
+    max_value: 1                       # Keep raw MW (no normalisation)
+    resolution: "15min"
+    update_interval_hours: 1
+
+  - name: "fingrid_wind_forecast"
+    env_key: "FINGRID_API_KEY"
+    url: "https://data.fingrid.fi/api/datasets/246/data"
+    feature_name: "wind_forecast_mw"
+    max_value: 1                       # Keep raw MW
+    resolution: "15min"
+    update_interval_hours: 1
+
+  - name: "fingrid_solar_forecast"
+    env_key: "FINGRID_API_KEY"
+    url: "https://data.fingrid.fi/api/datasets/247/data"
+    feature_name: "solar_forecast_mw"
+    max_value: 1                       # Keep raw MW
+    resolution: "15min"
+    update_interval_hours: 1
+
 # ============================================================================
 # Demand modeling parameters
 # ============================================================================
@@ -332,8 +364,11 @@ duration_model:
     - hdd_mean               # Mean heating degree days
     - se3_mean               # Mean SE3 neighbor price (raw EUR/MWh)
     - se1_mean               # Mean SE1 neighbor price (raw EUR/MWh)
-    - nuclear_deficit         # Nuclear capacity deficit (0-1)
+    - nuclear_deficit        # Nuclear capacity deficit (0-1)
     - is_workday             # Binary: weekday and not holiday
     - month_sin              # sin(2*pi*month/12)
     - month_cos              # cos(2*pi*month/12)
     - wind_log_scarcity      # log1p(max(0, base - wind_speed))
+    # v2.2: net-load aggregates per segment
+    - net_load_mean          # Mean net_load_gw in segment hours
+    - net_load_squared_mean  # Mean (net_load_gw - 6)^2 in segment hours

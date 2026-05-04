@@ -326,6 +326,108 @@ def _build_nuclear_features(
 
 
 # ---------------------------------------------------------------------------
+# v2.2: Net-load features (+ up to 4)
+# ---------------------------------------------------------------------------
+# Empirical study (`studies/fingrid_netload_study.py`) on 3,552 hours of
+# the 2025-12 → 2026-04 winter regime found:
+#
+#   cor(net_load, price)         = +0.805
+#   cor(net_load, AR(2) residual) = +0.676
+#   OLS R^2 on residual           =  0.458
+#   |residual| in top-decile / bottom-decile of net_load = 4.5x
+#
+# i.e. residual demand directly predicts both price level and the AR(2)
+# baseline's miss, with the strongest signal during winter pinch events.
+# This module exposes net_load + nonlinear interactions for the FI Ridge
+# greedy feature selector to choose from.
+
+def _build_netload_features(
+    df: pd.DataFrame,
+    grid_data: dict[str, pd.Series],
+) -> tuple[pd.DataFrame, list[str]]:
+    """Add net-load (residual demand) features to df.
+
+    Required Fingrid series in `grid_data`:
+        consumption_mw     (Fingrid dataset 165, day-ahead consumption forecast)
+        wind_forecast_mw   (Fingrid dataset 246, day-ahead wind generation forecast)
+        solar_forecast_mw  (Fingrid dataset 247, day-ahead solar generation forecast)
+        nuclear_mw         (Fingrid dataset 188; fraction of capacity, 0..1)
+
+    If any series is missing the function silently does nothing — the
+    feature set falls back to the v2.1 17-feature configuration.
+
+    Adds (when all four are present):
+        net_load_gw            (cons - wind - solar - nuclear) / 1000   GW
+        net_load_squared       (centered around mean of 6 GW) ** 2
+        net_load_x_workday     net_load_gw * is_workday  (interaction)
+
+    The squared term captures the super-linear price response when supply
+    pinches; the workday interaction captures the demand-pattern shift.
+    """
+    new_features: list[str] = []
+
+    cons = grid_data.get("consumption_mw")
+    wind_fc = grid_data.get("wind_forecast_mw")
+    solar_fc = grid_data.get("solar_forecast_mw")
+    nuc_series = grid_data.get("nuclear_mw")
+
+    if cons is None or wind_fc is None or solar_fc is None:
+        logger.info("  Net-load: skipped (missing consumption/wind/solar forecast)")
+        return df, new_features
+
+    # Reindex everything to df.index. ffill+bfill is fine because
+    # forecasts are smooth at hourly timescale.
+    cons_a = cons.reindex(df.index).ffill().bfill().fillna(0.0)
+    wind_a = wind_fc.reindex(df.index).ffill().bfill().fillna(0.0)
+    solar_a = solar_fc.reindex(df.index).ffill().bfill().fillna(0.0)
+
+    # Nuclear came in as fraction of capacity (max_value=4372 MW). Reverse to MW.
+    if nuc_series is not None and len(nuc_series) > 0:
+        nuc_a = nuc_series.reindex(df.index).ffill().bfill().fillna(0.0)
+        # nuc_series was normalised in fetch_grid_data via series/=max_value=4372
+        nuc_mw = nuc_a * 4372.0
+    else:
+        # No nuclear data — assume 80 % of capacity baseline (≈3500 MW)
+        # so net_load doesn't get an artificial boost from a 0-MW assumption.
+        nuc_mw = 3500.0
+        logger.info("  Net-load: nuclear missing, using baseline 3500 MW")
+
+    # Net load in GW
+    net_load_mw = cons_a.to_numpy() - wind_a.to_numpy() - solar_a.to_numpy() - (
+        nuc_mw if isinstance(nuc_mw, float) else nuc_mw.to_numpy()
+    )
+    net_load_gw = net_load_mw / 1000.0
+    df["net_load_gw"] = net_load_gw
+    new_features.append("net_load_gw")
+    logger.info("  Net-load: added net_load_gw (mean=%.2f, max=%.2f, min=%.2f GW)",
+                float(np.mean(net_load_gw)),
+                float(np.max(net_load_gw)),
+                float(np.min(net_load_gw)))
+
+    # Centered squared term — captures super-linear spike response.
+    # Center around the long-run mean so the feature has zero mean and
+    # sign reflects "tighter than usual".
+    nl_mean = float(np.mean(net_load_gw))
+    df["net_load_squared"] = (net_load_gw - nl_mean) ** 2
+    new_features.append("net_load_squared")
+    logger.info("  Net-load: added net_load_squared (centered at %.2f GW)", nl_mean)
+
+    # Interaction with workday flag — peaks happen during workdays
+    if "_is_workday" in df.columns:
+        df["net_load_x_workday"] = net_load_gw * df["_is_workday"].to_numpy()
+        new_features.append("net_load_x_workday")
+        logger.info("  Net-load: added net_load_x_workday")
+
+    # Interaction with scarcity indicator — pinch + cold + low wind
+    if "_scarcity_indicator" in df.columns:
+        df["net_load_x_scarcity"] = net_load_gw * df["_scarcity_indicator"].to_numpy()
+        new_features.append("net_load_x_scarcity")
+        logger.info("  Net-load: added net_load_x_scarcity")
+
+    return df, new_features
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -385,6 +487,16 @@ def build_features(
                      len(nuclear_features), len(feature_cols))
     else:
         logger.info("Nuclear: skipped (no grid data)")
+
+    # v2.2: net-load features — strongest single feature improvement
+    # measured. Requires consumption + wind + solar forecasts from
+    # Fingrid, plus the nuclear series above.
+    if grid_data:
+        df, netload_features = _build_netload_features(df, grid_data)
+        feature_cols.extend(netload_features)
+        if netload_features:
+            logger.info("Net-load: +%d features (total: %d)",
+                        len(netload_features), len(feature_cols))
 
     # Remove internal intermediate columns
     for col in list(df.columns):

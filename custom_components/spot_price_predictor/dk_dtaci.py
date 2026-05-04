@@ -77,10 +77,21 @@ class DkDtACIBundle:
     bias_halflife_days
         Per-instance OnlineBiasCorrector halflife.
     bias_warmup_steps
-        Per-instance bias-corrector warmup. Note that D(k) updates arrive
-        at *daily* cadence, so 168 steps = 168 days ≈ 24 weeks. We default
-        to 30 (≈1 month) since daily cadence has 24× fewer datapoints
-        than hourly.
+        Per-instance bias-corrector warmup. v2.1.0 used 30 (≈1 month) on
+        the principle that EMA estimates need many samples; v2.1.1 lowered
+        to 7 because the 30-day wait was a bad HA UX — users had freshly
+        installed the integration and saw flat point-only intervals for a
+        month with no obvious explanation. With a 21-day halflife the EMA
+        is still mostly noise after only 7 daily samples, but it's a
+        better-than-nothing correction and the estimate sharpens
+        continuously thereafter.
+    min_warmup
+        Each DtACI instance's `min_warmup`. v2.1.0 used 14 (a fortnight of
+        daily reconciliations before opening intervals). v2.1.1 lowered to
+        5 for the same UX reason: 5 days is the minimum that gives a
+        non-degenerate empirical-quantile estimate at the 90th percentile,
+        and conformal coverage continues to converge with each subsequent
+        update.
     cadence_per_day
         How many bias-corrector ticks per day. For D(k) statistics this
         is 1 (one observation per day, post-reconciliation). Forwarded
@@ -94,9 +105,9 @@ class DkDtACIBundle:
         eta: float = 5.0,
         rho: float = 0.99,
         window: int = 365,
-        min_warmup: int = 14,
+        min_warmup: int = 5,
         bias_halflife_days: float = 21.0,
-        bias_warmup_steps: int = 30,
+        bias_warmup_steps: int = 7,
         cadence_per_day: int = 1,
     ) -> None:
         self.target_coverage = float(target_coverage)

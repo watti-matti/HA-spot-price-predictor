@@ -79,7 +79,7 @@ def _device_info(entry: ConfigEntry) -> dict[str, Any]:
         "name": "Spot Price Predictor",
         "manufacturer": "watti-matti",
         "model": "Spot Price Predictor",
-        "sw_version": "2.0.0",
+        "sw_version": "2.2.0",
     }
 
 
@@ -289,6 +289,64 @@ class DurationForecastSensor(CoordinatorEntity, SensorEntity):
             attrs["dtaci_fi_mean_width_eur_kwh"] = fi.get("mean_width")
             attrs["dtaci_fi_warm_instances"] = fi.get("n_warm_instances")
             attrs["dtaci_fi_total_instances"] = fi.get("n_total_instances")
+
+            # v2.1.1: human-readable warmup status string the Lovelace
+            # cards can show as a badge. Examples:
+            #   "ready (24/24 warm)"
+            #   "warming up (3/24 warm — needs ~2 more daily updates)"
+            #   "cold start (0/24 warm)"
+            # Logic: scan all 4 zones (fi/se1/se3/ee), report the
+            # min(n_updates) seen and how many of the 4 × 24 = 96
+            # instances are warm. The most-lagging instance dictates
+            # whether the global state is "ready" or "warming".
+            zones = diag.get("zones") or {}
+            min_updates: int | None = None
+            warm_total = 0
+            inst_total = 0
+            min_warmup_threshold: int | None = None
+            for zone_state in zones.values():
+                per_k = (zone_state.get("per_k") or {})
+                for direction in ("cheap", "peak"):
+                    block = per_k.get(direction) or {}
+                    for inst in block.values():
+                        n = inst.get("n_updates")
+                        if n is not None:
+                            min_updates = (n if min_updates is None
+                                           else min(min_updates, n))
+                        # Heuristic: if the diagnostic block reports
+                        # a non-zero half_width, the instance is past
+                        # its min_warmup gate.
+                        hw = inst.get("half_width", 0)
+                        if hw and hw > 0:
+                            warm_total += 1
+                        inst_total += 1
+            # Derive the threshold from the most-warm instance we know:
+            # if any instance's `bias_warm` is true, bias_warmup_steps
+            # has been crossed. We don't have direct access to the
+            # bundle's min_warmup here, so fall back to v2.1.1 defaults.
+            min_warmup_threshold = 5  # v2.1.1 DkDtACIBundle.min_warmup
+            bias_threshold = 7         # v2.1.1 bias_warmup_steps
+            if min_updates is None or inst_total == 0:
+                attrs["dtaci_warmup_status"] = "no data"
+            elif min_updates >= max(min_warmup_threshold, bias_threshold):
+                attrs["dtaci_warmup_status"] = (
+                    f"ready ({warm_total}/{inst_total} warm)"
+                )
+            elif warm_total > 0:
+                remaining = max(min_warmup_threshold,
+                                bias_threshold) - min_updates
+                attrs["dtaci_warmup_status"] = (
+                    f"warming up ({warm_total}/{inst_total} warm "
+                    f"— needs ~{remaining} more daily updates)"
+                )
+            else:
+                attrs["dtaci_warmup_status"] = (
+                    f"cold start ({warm_total}/{inst_total} warm; "
+                    f"{min_warmup_threshold - min_updates} updates "
+                    f"to first interval band, "
+                    f"{bias_threshold - min_updates} to bias correction)"
+                )
+            attrs["dtaci_min_n_updates"] = min_updates if min_updates is not None else 0
 
         attrs.update(_status_attributes(self.coordinator.data))
         return attrs

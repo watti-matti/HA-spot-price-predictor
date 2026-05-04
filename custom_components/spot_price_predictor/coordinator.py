@@ -359,6 +359,23 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                 except Exception as err:
                     _LOGGER.warning("Fingrid nuclear data fetch failed: %s", err)
 
+            # v2.2: Fingrid day-ahead consumption / wind / solar generation
+            # forecasts for net-load feature. Empirically the strongest
+            # single feature improvement (cor 0.80 with FI prices, 46 % R²
+            # on AR(2) residuals — see studies/fingrid_netload_study.py).
+            netload_hourly: dict[str, list[dict[str, Any]]] | None = None
+            if self.has_fingrid:
+                try:
+                    netload_hourly = await self.api.fetch_fingrid_forecasts()
+                    if netload_hourly:
+                        _LOGGER.info(
+                            "Fingrid net-load forecasts: %s",
+                            {k: len(v) for k, v in netload_hourly.items()},
+                        )
+                except Exception as err:
+                    _LOGGER.warning(
+                        "Fingrid net-load forecast fetch failed: %s", err)
+
             # Nuclear outage schedule (Nord Pool UMM, public, no key required)
             nuclear_hourly_data: dict[str, list[float]] | None = None
             if nuclear_data and "nuclear_mw" in nuclear_data:
@@ -443,6 +460,7 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                 nuclear_data=nuclear_data,
                 nuclear_hourly=nuclear_hourly_data,
                 ar_neighbor_hourly=ar_neighbor_hourly,
+                netload_hourly=netload_hourly,
             )
 
             # Run model inference
@@ -469,6 +487,7 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
             # D(k) duration curve forecast (7-day daily curves)
             duration_forecast = self._compute_duration_forecast(
                 forecast, weather, ar_neighbor_hourly, nuclear_data, now,
+                netload_hourly=netload_hourly,
             )
 
             # Prepend actual D(k) from historical spot prices (yesterday + day before)
@@ -569,6 +588,7 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
         ar_neighbor_hourly: dict[str, list[float]] | None,
         nuclear_data: dict[str, float] | None,
         now: datetime,
+        netload_hourly: dict[str, list[dict[str, Any]]] | None = None,
     ) -> list[dict[str, Any]]:
         """Compute 7-day D(k) duration curve forecast.
 
@@ -590,6 +610,26 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
         for seg_name, seg_cfg in dur_model.segments.items():
             seg_hours[seg_name] = seg_cfg.get("hours", [])
 
+        # v2.2: build a UTC-hour-keyed lookup for net-load forecasts so
+        # we can compute per-segment net_load_mean / net_load_squared_mean
+        # below. Falls back to {} when Fingrid forecasts are unavailable
+        # (segment_features will use 0.0 for the new keys, matching the
+        # training-side fallback in train_duration_model).
+        netload_lookup: dict[str, dict[str, float]] = {}
+        if netload_hourly:
+            for series_name, entries in netload_hourly.items():
+                if not isinstance(entries, list):
+                    continue
+                for entry in entries:
+                    ts = entry.get("timestamp")
+                    if not ts:
+                        continue
+                    ts_key = ts[:13]   # "YYYY-MM-DDTHH"
+                    if ts_key not in netload_lookup:
+                        netload_lookup[ts_key] = {}
+                    netload_lookup[ts_key][series_name] = float(
+                        entry.get("value_mw", 0.0))
+
         # Group forecast hours by local date
         by_date: dict[str, list[dict]] = {}
         for i, entry in enumerate(forecast):
@@ -608,10 +648,15 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
             if date_str not in by_date:
                 by_date[date_str] = []
 
+            # UTC-hour key for net_load lookup (no minutes/seconds)
+            utc_hour_key = (ts.replace(tzinfo=timezone.utc)
+                            if ts.tzinfo is None else ts).strftime(
+                "%Y-%m-%dT%H")
             by_date[date_str].append({
                 "local_hour": local.hour,
                 "dow": local.weekday(),
                 "forecast_idx": i,
+                "utc_hour_key": utc_hour_key,
                 "wind": weather[i].get("wind_weighted", 0) if i < len(weather) else 3.0,
                 "solar": weather[i].get("solar_weighted", 0) if i < len(weather) else 0.0,
                 "temp": weather[i].get("temp_weighted", 0) if i < len(weather) else 5.0,
@@ -662,6 +707,40 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                 if nuclear_data and "nuclear_mw" in nuclear_data:
                     nuclear_deficit = max(0.0, 1.0 - nuclear_data["nuclear_mw"] / 4372.0)
 
+                # v2.2: per-segment net-load aggregates. Compute the
+                # GW-scale net_load over the segment's hours; both
+                # net_load_mean and net_load_squared_mean default to 0.0
+                # if Fingrid forecasts aren't available for those hours
+                # — matches the training-time fallback so old
+                # model_coefs without these features still load.
+                NETLOAD_CENTER_GW = 6.0
+                seg_netloads: list[float] = []
+                if netload_lookup:
+                    nuc_mw_const = (
+                        nuclear_data["nuclear_mw"] * 4372.0
+                        if nuclear_data and "nuclear_mw" in nuclear_data
+                        else 3500.0
+                    )
+                    for h in seg_hrs:
+                        nl_data = netload_lookup.get(h["utc_hour_key"])
+                        if not nl_data:
+                            continue
+                        cons_mw = nl_data.get("consumption_mw", 0.0)
+                        wind_mw = nl_data.get("wind_forecast_mw", 0.0)
+                        solar_mw = nl_data.get("solar_forecast_mw", 0.0)
+                        seg_netloads.append(
+                            (cons_mw - wind_mw - solar_mw - nuc_mw_const)
+                            / 1000.0
+                        )
+                if seg_netloads:
+                    nl_mean = sum(seg_netloads) / len(seg_netloads)
+                    nl_sq_mean = sum(
+                        (n - NETLOAD_CENTER_GW) ** 2 for n in seg_netloads
+                    ) / len(seg_netloads)
+                else:
+                    nl_mean = 0.0
+                    nl_sq_mean = 0.0
+
                 segment_features[seg_name] = {
                     "wind_mean": wind_mean,
                     "solar_mean": solar_mean,
@@ -673,6 +752,9 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                     "month_sin": math.sin(2 * math.pi * mo / 12),
                     "month_cos": math.cos(2 * math.pi * mo / 12),
                     "wind_log_scarcity": math.log1p(max(0.0, 8.0 - wind_mean)),
+                    # v2.2: net-load aggregates (0.0 if Fingrid offline)
+                    "net_load_mean": nl_mean,
+                    "net_load_squared_mean": nl_sq_mean,
                 }
 
             if not segment_features:
@@ -702,8 +784,13 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                     if i == 0:
                         p = curve[0]
                     else:
+                        # v2.1.1: removed the `max(0, p)` floor here
+                        # (matching the same fix in DurationModel) so
+                        # negative spot forecasts surface in
+                        # `dk_cheap_spot_eur_mwh`. The consumer-side
+                        # conversion via `_spot_to_consumer_eur_kwh`
+                        # still floors at the fixed-overhead level.
                         p = (i + 1) * curve[i] - i * curve[i - 1]
-                        p = max(0.0, p)
                     spot_hourly_prices.append(p)
                     consumer_sorted_prices.append(
                         self._spot_to_consumer_eur_kwh(p, is_night))

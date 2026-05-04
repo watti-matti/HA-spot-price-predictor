@@ -276,6 +276,8 @@ _DURATION_DEFAULTS = {
         "wind_mean", "solar_mean", "hdd_mean", "se3_mean", "se1_mean",
         "nuclear_deficit", "is_workday", "month_sin", "month_cos",
         "wind_log_scarcity",
+        # v2.2 net-load
+        "net_load_mean", "net_load_squared_mean",
     ],
     "log_offset": 55,
     "lambda": 0.990,
@@ -364,6 +366,17 @@ def train_duration_model(
     nuc_col = [c for c in df.columns if "nuclear_deficit" in c.lower()]
     nuc_deficit = df[nuc_col[0]].values if nuc_col else np.zeros(len(fi))
 
+    # v2.2: net-load features (per-segment mean). Falls back to zeros if
+    # the upstream Fingrid fetchers were unavailable.
+    if "net_load_gw" in df.columns:
+        net_load_gw = df["net_load_gw"].values
+    else:
+        net_load_gw = np.zeros(len(fi))
+    if "net_load_squared" in df.columns:
+        net_load_sq = df["net_load_squared"].values
+    else:
+        net_load_sq = np.zeros(len(fi))
+
     # ── Build segment records ────────────────────────────────────────
     wind_scarcity_base = config.get("features", {}).get("wind_log_scarcity_base", 8.0)
     unique_dates = sorted(set(dates))
@@ -405,6 +418,12 @@ def train_duration_model(
                     "month_cos": float(np.cos(2 * np.pi * mo / 12)),
                     "wind_log_scarcity": float(np.log1p(
                         np.maximum(0, wind_scarcity_base - seg_wind)).mean()),
+                    # v2.2: per-segment net-load aggregates. Always present
+                    # in the feature dict so model_coefs.json schema is
+                    # stable; values are 0.0 when Fingrid forecasts are
+                    # unavailable.
+                    "net_load_mean": float(net_load_gw[seg_mask].mean()),
+                    "net_load_squared_mean": float(net_load_sq[seg_mask].mean()),
                 },
                 "date": str(d),
                 # Legacy alias for cheap end (kept so any consumer reading
@@ -709,10 +728,37 @@ def main():
         grid_data = None
         if not args.skip_nuclear:
             gd_path = out_dir / "fi_grid_data.parquet"
+            api_key = os.environ.get("FINGRID_API_KEY", "").strip()
+            # Helper: do the cached columns include the v2.2 net-load
+            # series? Older caches had only `nuclear_mw`.
+            REQUIRED_COLS = {
+                "nuclear_mw", "consumption_mw",
+                "wind_forecast_mw", "solar_forecast_mw",
+            }
+            need_refetch = True
             if gd_path.exists():
                 gd_df = pd.read_parquet(gd_path)
-                grid_data = {col: gd_df[col] for col in gd_df.columns}
-                logger.info("  Grid data: %d columns", len(grid_data))
+                if REQUIRED_COLS.issubset(set(gd_df.columns)):
+                    grid_data = {col: gd_df[col] for col in gd_df.columns}
+                    logger.info("  Grid data: %d columns (cached)",
+                                len(grid_data))
+                    need_refetch = False
+                else:
+                    missing = REQUIRED_COLS - set(gd_df.columns)
+                    logger.info(
+                        "  Grid cache exists but missing %s; re-fetching",
+                        missing,
+                    )
+            # Refetch if cache absent or stale
+            if need_refetch and api_key:
+                logger.info("  Fetching grid data for v2.2 net-load features")
+                grid_data = fetch_grid_data(config, start_dt, end_dt)
+                if grid_data:
+                    pd.DataFrame(grid_data).to_parquet(gd_path)
+                    logger.info("  Grid data: %d columns (refetched)",
+                                len(grid_data))
+                else:
+                    grid_data = None
     else:
         prices = fetch_prices(config, start_dt, end_dt)
         weather = fetch_weather(

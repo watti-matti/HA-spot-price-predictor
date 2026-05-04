@@ -116,13 +116,24 @@ class DurationModel:
     def _predict_one(
         self, sub_models: list[dict], features: dict[str, float],
     ) -> list[float]:
-        """Compute raw `exp(linear) - offset` for each k, no monotonicity."""
+        """Compute raw `exp(linear) - offset` for each k, no monotonicity.
+
+        v2.1.1: removed the `max(0, ...)` floor so genuinely negative
+        forecast spot prices surface at the duration-model output
+        instead of being silently clamped to zero. Negative pricing is
+        a real feature of Nordic spring/summer hours (high wind, mild
+        weather, low demand) and clamping it lost information that the
+        cheap-end forecast and downstream DtACI calibration need.
+        Consumer prices remain floored at the fixed-overhead level by
+        `_spot_to_consumer_eur_kwh` in the coordinator, so customer
+        billing semantics are unchanged.
+        """
         raw: list[float] = []
         for model in sub_models:
             linear = model["intercept"]
             for i, fname in enumerate(self.feature_names):
                 linear += model["coefs"][i] * features.get(fname, 0.0)
-            dk = max(0.0, math.exp(min(linear, self.exp_cap)) - self.log_offset)
+            dk = math.exp(min(linear, self.exp_cap)) - self.log_offset
             raw.append(dk)
         return raw
 
@@ -160,8 +171,10 @@ class DurationModel:
             if i == 0:
                 out.append(dk)
             else:
+                # v2.1.1: removed the `max(0, p)` floor — see _predict_one.
+                # Negative spot is a valid model output; we surface it.
                 p = (i + 1) * dk - i * curve[i - 1]
-                out.append(max(0.0, p))
+                out.append(p)
         return out
 
     # ── Public ──────────────────────────────────────────────────────

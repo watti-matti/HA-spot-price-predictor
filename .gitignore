@@ -22,6 +22,9 @@ output/_*.txt
 # DtACI validation price cache (large, regenerable)
 studies/_dtaci_*_prices_cache.json
 
+# Fingrid net-load study cache (large, regenerable from Fingrid API)
+studies/_fingrid_cache/
+
 # IDE
 .vscode/
 .idea/

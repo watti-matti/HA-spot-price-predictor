@@ -42,6 +42,7 @@ def compute_features_for_hour(
     neighbor_spreads: dict[str, float] | None = None,
     nuclear_data: dict[str, float] | None = None,
     ar_neighbor_prices: dict[str, float] | None = None,
+    netload_data: dict[str, float] | None = None,
 ) -> dict[str, float]:
     """Compute all 17 features for a single forecast hour.
 
@@ -152,6 +153,31 @@ def compute_features_for_hour(
     feat["nuclear_deficit"] = nuclear_deficit
     feat["nuclear_x_scarcity"] = nuclear_deficit * scarcity_indicator
 
+    # v2.2: net-load features. The Fingrid forecasts are passed as
+    # raw MW for this specific hour; we centre the squared term around
+    # the long-run mean of 6.0 GW (matches what the training pipeline
+    # used). Defaults to 0.0 (neutral) when forecasts are unavailable
+    # so missing-Fingrid installs continue to work with the v2.1
+    # 17-feature contribution.
+    NETLOAD_CENTER_GW = 6.0     # long-run mean from training data
+    if netload_data:
+        cons_mw = float(netload_data.get("consumption_mw", 0.0))
+        wind_mw = float(netload_data.get("wind_forecast_mw", 0.0))
+        solar_mw = float(netload_data.get("solar_forecast_mw", 0.0))
+        # Re-derive nuclear MW from the normalized fraction in nuclear_data.
+        nuclear_mw_value = (nuc * 4372.0) if nuc > 0 else 3500.0
+        net_load_mw = cons_mw - wind_mw - solar_mw - nuclear_mw_value
+        net_load_gw = net_load_mw / 1000.0
+        feat["net_load_gw"] = net_load_gw
+        feat["net_load_squared"] = (net_load_gw - NETLOAD_CENTER_GW) ** 2
+        feat["net_load_x_workday"] = net_load_gw * is_workday
+        feat["net_load_x_scarcity"] = net_load_gw * scarcity_indicator
+    else:
+        feat["net_load_gw"] = 0.0
+        feat["net_load_squared"] = 0.0
+        feat["net_load_x_workday"] = 0.0
+        feat["net_load_x_scarcity"] = 0.0
+
     return feat
 
 
@@ -207,6 +233,7 @@ def build_forecast_features(
     nuclear_data: dict[str, float] | None = None,
     nuclear_hourly: dict[str, list[float]] | None = None,
     ar_neighbor_hourly: dict[str, list[float]] | None = None,
+    netload_hourly: dict[str, list[dict[str, Any]]] | None = None,
 ) -> list[dict[str, float]]:
     """Build feature dicts for each hour of the forecast window.
 
@@ -224,6 +251,24 @@ def build_forecast_features(
     Returns:
         List of feature dicts, one per hour.
     """
+    # v2.2: build a timestamp-keyed lookup for net-load forecasts so we
+    # can pull per-hour values into compute_features_for_hour.
+    netload_lookup: dict[str, dict[str, float]] = {}
+    if netload_hourly:
+        for series_name, entries in netload_hourly.items():
+            if not isinstance(entries, list):
+                continue
+            for entry in entries:
+                ts = entry.get("timestamp")
+                if not ts:
+                    continue
+                # Normalise to "YYYY-MM-DDTHH" hour key
+                ts_key = ts[:13]
+                if ts_key not in netload_lookup:
+                    netload_lookup[ts_key] = {}
+                netload_lookup[ts_key][series_name] = float(
+                    entry.get("value_mw", 0.0))
+
     rows = []
     for i in range(min(hours, len(weather_data))):
         utc_dt = start_utc + timedelta(hours=i)
@@ -244,6 +289,12 @@ def build_forecast_features(
                 if i < len(values):
                     hour_ar[f"ar_{key}"] = values[i]
 
+        # Per-hour net-load forecast inputs
+        hour_netload = None
+        if netload_lookup:
+            ts_key = utc_dt.strftime("%Y-%m-%dT%H")
+            hour_netload = netload_lookup.get(ts_key)
+
         feat = compute_features_for_hour(
             utc_dt=utc_dt,
             wind_weighted=wd.get("wind_weighted", 0.0),
@@ -254,6 +305,7 @@ def build_forecast_features(
             neighbor_spreads=neighbor_spreads,
             nuclear_data=hour_nuclear,
             ar_neighbor_prices=hour_ar,
+            netload_data=hour_netload,
         )
         rows.append(feat)
     return rows
