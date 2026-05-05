@@ -2,6 +2,7 @@
 
 [![HACS Integration](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Version](https://img.shields.io/badge/version-2.2.0-blue.svg)](https://github.com/watti-matti/HA-spot-price-predictor/releases/tag/v2.2.0)
 
 **Forecast consumer electricity costs and D(k) duration curves up to 7 days ahead** using machine learning with physics-based weather features, cross-border trade analysis, and nuclear outage awareness.
 
@@ -12,9 +13,10 @@
 - **170-hour consumer price forecast** — predict your electricity cost (EUR/kWh) for the next 7 days, including spot price, transfer tariff, seller margin, energy tax, and VAT
 - **D(k) cheap/peak duration curves** — 7-day forecast of two complementary 12-level curves: `dk_cheap[k]` = mean price of the cheapest k hours (best achievable cost for deferrable load) and `dk_peak[k]` = mean price of the priciest k hours (worst-case planning cost). Equivalent to CVaR at α=k/24 in both tails of the daily price distribution.
 - **Works out-of-the-box** — pre-trained model included, no setup beyond choosing your distribution operator
-- **Modular data sources** — starts with free weather data, optionally adds cross-border prices and Fingrid nuclear data for improved accuracy
+- **Modular data sources** — starts with free weather + cross-border data, optionally adds Fingrid nuclear data for the full 9-feature model
 - **Sign-validated features** — all model coefficients match economic theory (more wind = lower price, more scarcity = higher price)
 - **Nuclear outage awareness** — planned outage schedules from Nord Pool UMM enable forward-looking nuclear capacity prediction
+- **Online calibration (DtACI)** — optional adaptive conformal prediction intervals with per-D(i) online bias correction; warms up in ~5 days
 - **Clean API for optimization** — forecast-only sensor interface with structured D(k) matrix, ready for downstream thermal optimization
 - **Retrainable** — advanced users can retrain the model with local data for better personalization
 - **Localizable** — region configuration files allow adaptation to other Nordic/European countries
@@ -23,22 +25,30 @@
 
 The system produces two complementary forecasts from a single model coefficients file:
 
-**Hourly price model** — a log-linear Ridge regression trained on 4 years of historical data predicts spot price (EUR/MWh) for each of the next 170 hours. The coordinator converts each hour to consumer price (EUR/kWh) using your configured tariffs (transfer, margin, tax, VAT). The log transform naturally handles the nonlinear price-scarcity relationship: nearly linear at low prices, exponential amplification at high prices. Features are selected via greedy forward selection with sign constraints and bootstrap stability analysis. Key drivers:
+**Hourly price model** — a log-linear Ridge regression (log_offset=100, α=50) trained on 4+ years of historical data predicts spot price (EUR/MWh) for each of the next 170 hours. The coordinator converts each hour to consumer price (EUR/kWh) using your configured tariffs (transfer, margin, tax, VAT). The log transform naturally handles the nonlinear price-scarcity relationship: nearly linear at low prices, exponential amplification at high prices.
 
-- **Wind speed at 120m** from 7 Finnish locations weighted by installed wind capacity — the dominant price driver
-- **Nonlinear wind scarcity** — logarithmic scarcity and calm-wind × demand-peak interactions
-- **AR neighbor price models** — autoregressive forecasts for Sweden (SE1, SE3) and Estonia (EE) capturing European market coupling
-- **Thermal demand** — squared heating degree days for nonlinear cold amplification
-- **Nuclear deficit** (optional, Fingrid API) — nuclear availability + scarcity interaction
+The v2.2 bundled model uses **9 sign-validated features** selected via a leave-one-out redundancy sweep — 8 features from v2.1 were identified as redundant or harmful (collinear with the remaining 9) and pruned:
+
+| Feature | Category | Economic role |
+|---------|----------|---------------|
+| `wind_speed_weighted` | Weather | Primary price driver — more wind = lower price |
+| `wind_log_scarcity` | Weather | Nonlinear scarcity signal in low-wind regimes |
+| `hdd_sq` | Weather | Squared heating degree days — nonlinear cold amplification |
+| `month_cos` | Calendar | Seasonal cycle (peak winter / low summer) |
+| `is_holiday` | Calendar | Demand reduction on public holidays |
+| `ar_se3` | Cross-border | AR(2) day-ahead forecast for Sweden SE3 |
+| `ar_ee` | Cross-border | AR(2) day-ahead forecast for Estonia |
+| `export_potential_se3` | Cross-border | SE3 price spread — FI→SE export capacity signal |
+| `nuclear_x_scarcity` | Fingrid | Nuclear availability × weather-stress interaction |
 
 **Duration model (D(k) cheap/peak)** — a segment-hierarchical Ridge model predicts the daily duration curve for each of the next 7 days, exposed as two 12-element arrays:
 
 - `dk_cheap[k-1]` = mean consumer price of the **cheapest** k hours, k=1..12 (monotone non-decreasing). Use this for deferrable-load scheduling: "run k hours into the cheapest slots, expected cost = `dk_cheap[k-1]` × kWh."
 - `dk_peak[k-1]` = mean consumer price of the **priciest** k hours, k=1..12 (monotone non-increasing). Use this for storage-depletion / worst-case planning: "if I'm forced to run during k peak hours, expected cost = `dk_peak[k-1]` × kWh."
 
-Both arrays are CVaR-equivalent — `dk_cheap[k-1]` = CVaR at α=k/24 in the lower tail, `dk_peak[k-1]` = CVaR at α=k/24 in the upper tail. Together they cover the entire decision-relevant span (the legacy 24-level cumulative D(k), which had non-decision-relevant indices for k=13..24, can be exactly reconstructed from cheap+peak via the sum identity `dk_cheap[11] + dk_peak[11] = 2 × daily_avg`).
+Both arrays are CVaR-equivalent — `dk_cheap[k-1]` = CVaR at α=k/24 in the lower tail, `dk_peak[k-1]` = CVaR at α=k/24 in the upper tail. Together they cover the entire decision-relevant span (the legacy 24-level cumulative D(k) can be exactly reconstructed via the sum identity `dk_cheap[11] + dk_peak[11] = 2 × daily_avg`).
 
-The duration model splits each day into 4 tariff-aligned segments (night 22–07, morning 07–12, midday 12–18, evening 18–22), predicts D(k) independently per segment using Ridge regression, enforces monotonicity via PAVA (Pool Adjacent Violators Algorithm), converts each extracted sorted price to consumer EUR/kWh using segment-appropriate transfer tariffs (day/night rate), then merges all segments into the cheap/peak curves.
+The duration model splits each day into 4 tariff-aligned segments (night 22–07, morning 07–12, midday 12–18, evening 18–22), predicts D(k) independently per segment using Ridge regression, enforces monotonicity via PAVA (Pool Adjacent Violators Algorithm), then merges all segments into the cheap/peak curves.
 
 All data sources are **free**. The optional Fingrid API key is also free (email registration at [data.fingrid.fi](https://data.fingrid.fi)).
 
@@ -66,7 +76,7 @@ The **Price Forecast** sensor provides the complete hourly forecast as its `fore
 
 #### Duration Forecast attributes — D(k) cheap/peak curves
 
-The **Duration Forecast** sensor provides daily duration curves split into a cheap end and a peak end. The `daily_forecast` attribute contains 7 days, each with both new (Phase A) and legacy attributes for backward compatibility. The state is today's `dk_cheap_eur_kwh[3]` — the average consumer price of the cheapest 4 hours, the most-used scheduling indicator.
+The **Duration Forecast** sensor provides daily duration curves split into a cheap end and a peak end. The `daily_forecast` attribute contains 7 days, each with both new and legacy attributes for backward compatibility. The state is today's `dk_cheap_eur_kwh[3]` — the average consumer price of the cheapest 4 hours, the most-used scheduling indicator.
 
 | Attribute | Shape | Unit | Description |
 |-----------|-------|------|-------------|
@@ -74,7 +84,7 @@ The **Duration Forecast** sensor provides daily duration curves split into a che
 | `daily_forecast[i].date` | string | — | ISO date (YYYY-MM-DD) |
 | `daily_forecast[i].weekday` | string | — | Mon–Sun |
 | `daily_forecast[i].source` | string | — | `forecast` or `actual` (past days from Sahkotin) |
-| **Phase A (preferred):** | | | |
+| **Preferred:** | | | |
 | `daily_forecast[i].dk_cheap_eur_kwh` | float[12] | EUR/kWh | Mean price of cheapest k hours, k=1..12 (non-decreasing) |
 | `daily_forecast[i].dk_peak_eur_kwh` | float[12] | EUR/kWh | Mean price of priciest k hours, k=1..12 (non-increasing) |
 | `daily_forecast[i].dk_cheap_spot_eur_mwh` | float[12] | EUR/MWh | Same in spot price |
@@ -85,20 +95,20 @@ The **Duration Forecast** sensor provides daily duration curves split into a che
 | `today_peak_4h_eur_kwh` | float | EUR/kWh | Today's `dk_peak_eur_kwh[3]` (priciest 4h) |
 | `today_peak_1h_eur_kwh` | float | EUR/kWh | Today's `dk_peak_eur_kwh[0]` (single priciest hour) |
 | **Legacy (deprecated):** | | | |
-| `daily_forecast[i].dk_consumer_eur_kwh` | float[24] | EUR/kWh | Legacy cumulative D(k), k=1..24. Identical to `dk_cheap_eur_kwh` for k=1..12; indices 13..24 carry no decision-relevant signal |
+| `daily_forecast[i].dk_consumer_eur_kwh` | float[24] | EUR/kWh | Legacy cumulative D(k), k=1..24 |
 | `daily_forecast[i].dk_spot_eur_mwh` | float[24] | EUR/MWh | Legacy cumulative spot D(k) |
 
-**Access patterns (Phase A):**
+**Access patterns:**
 - Cheapest k hours of day d: `daily_forecast[d].dk_cheap_eur_kwh[k-1]` for k in 1..12
 - Priciest k hours of day d: `daily_forecast[d].dk_peak_eur_kwh[k-1]` for k in 1..12
 - Cross-check identity: `cheap[11] + peak[11] = 2 × daily_average` (always holds to numerical noise)
 - Consumer prices include configured tariffs (day/night transfer rate, seller margin, energy tax, VAT)
 
-**Migration:** the legacy `dk_consumer_eur_kwh[24]` array is still emitted for one transition release. New consumers should read the cheap/peak split; the legacy array can be exactly reconstructed from cheap+peak via the formula in [docs/dk_cheap_peak_migration.md](docs/dk_cheap_peak_migration.md).
+**Migration:** the legacy `dk_consumer_eur_kwh[24]` array is still emitted for one transition release. New consumers should read the cheap/peak split; see [docs/dk_cheap_peak_migration.md](docs/dk_cheap_peak_migration.md).
 
-**Optional online calibration (DtACI).** Enable the `enable_dtaci_dk` option to wrap the duration forecast with adaptive conformal prediction intervals (Gibbs & Candès, JMLR 2024) plus per-D(i) online bias correction. When on, each daily forecast entry gains four 12-element band attributes — `dk_cheap_lower/upper_eur_kwh` and `dk_peak_lower/upper_eur_kwh` — that achieve 90 % marginal coverage and adapt to regime shifts. A `dtaci_diagnostics` attribute exposes per-(direction, k) coverage / bias EMA / dominant γ / weight entropy for monitoring; see [docs/yaml_examples/dtaci_diagnostics_card.yaml](docs/yaml_examples/dtaci_diagnostics_card.yaml) for a Lovelace card. Off by default until the layer warms up (~14 days of reconciled actuals).
+**Optional online calibration (DtACI).** Enable the `enable_dtaci_dk` option to wrap the duration forecast with adaptive conformal prediction intervals (Gibbs & Candes, JMLR 2024) plus per-D(i) online bias correction. When on, each daily forecast entry gains four 12-element band attributes — `dk_cheap_lower/upper_eur_kwh` and `dk_peak_lower/upper_eur_kwh` — that achieve 90% marginal coverage and adapt to regime shifts. A `dtaci_diagnostics` attribute exposes per-(direction, k) coverage / bias EMA / dominant gamma / weight entropy for monitoring; see [docs/yaml_examples/dtaci_diagnostics_card.yaml](docs/yaml_examples/dtaci_diagnostics_card.yaml) for a Lovelace card. Calibrated intervals appear after approximately 5 days of reconciled actuals (v2.2: warmup lowered from ~14 days).
 
-**Design principle:** This integration provides *forecasts only*. The cheap/peak curves are the primary API for downstream systems — thermal optimization, load scheduling, and heat pump control consume `dk_cheap` for cost-minimization and `dk_peak` for risk-aware planning. This clean separation means either component can be replaced independently.
+**Design principle:** This integration provides *forecasts only*. The cheap/peak curves are the primary API for downstream systems — thermal optimization, load scheduling, and heat pump control consume `dk_cheap` for cost-minimization and `dk_peak` for risk-aware planning.
 
 ### Actual Price Sensors (optional, when Nordpool entity is configured)
 
@@ -109,7 +119,7 @@ If you have a Nordpool integration installed (e.g., [custom-components/nordpool]
 | `sensor.spot_electricity_price` | Actual consumer price from Nordpool with continuous timeline attribute |
 | `sensor.spot_electricity_selling_price` | Spot price minus PV selling commission (for solar panel owners) |
 
-**Setup:** Enter your Nordpool sensor entity ID (e.g., `sensor.nordpool_kwh_fi_eur_3_10_0`) in the operator configuration step. These sensors enable side-by-side comparison of actual prices vs forecast in the dashboard.
+**Setup:** Enter your Nordpool sensor entity ID (e.g., `sensor.nordpool_kwh_fi_eur_3_10_0`) in the operator configuration step.
 
 ### Dashboard
 
@@ -125,40 +135,46 @@ An additional [ApexCharts-only dashboard](docs/yaml_examples/apexcharts_dashboar
 
 ## Data Sources & Features
 
-The model supports up to 17 sign-validated features selected via greedy forward selection with bootstrap stability analysis. The bundled default model uses 15 features (weather + cross-border, no API keys required). Adding Fingrid nuclear data enables the full 17 features.
+The v2.2 bundled model uses **9 features** selected by leave-one-out redundancy analysis — a pruning that improved walk-forward MAE by 16% over the previous 17-feature v2.1 model. The feature set scales with available data sources:
 
-| Data Sources | Features | API Keys |
+| Data Sources | Features | API Keys Required |
 |-------------|:---:|:---:|
-| Weather (Sahkotin + Open-Meteo) | 11 (weather + wind nonlinear) | None |
-| + Cross-border (elprisetjustnu.se + Elering) | 15 (+AR neighbor prices) | None |
-| + Nuclear (Fingrid) | 17 (+nuclear features) | 1 (free) |
+| Weather (Open-Meteo) + Cross-border (elprisetjustnu.se + Elering) | 8 | None |
+| + Nuclear (Fingrid dataset #188) | **9** | 1 (free) |
 
-**Weather features** include wind speed, solar irradiance, heating degree days, time cycles, holidays, and nonlinear wind features (log-scarcity, calm-wind x demand-peak interactions).
+**Weather features** — wind speed at 120m weighted by installed wind capacity (dominant price driver), logarithmic wind scarcity term, squared heating degree days for nonlinear cold amplification, and seasonal month cycle.
 
-**Cross-border features** add AR(2) autoregressive neighbor price models for Sweden (SE1, SE3) and Estonia (EE), each with separate workday/weekend hourly profiles. The AR models capture European market coupling — when neighbor markets are expensive, Finnish prices follow. Also includes SE3 export potential from 7-day price spreads.
+**Calendar features** — holiday flag (Finnish public holidays reduce demand and prices).
 
-**Nuclear features** add nuclear deficit (fraction of nuclear capacity offline) and nuclear x scarcity interaction (amplified price impact during weather stress). Planned outage schedules from [Nord Pool UMM](https://umm.nordpoolgroup.com/) (public API, no key required) provide forward-looking nuclear awareness.
+**Cross-border features** — AR(2) autoregressive day-ahead price models for Sweden (SE3) and Estonia (EE), each with separate workday/weekend hourly profiles capturing European market coupling. SE3 export potential from 7-day price spreads signals FI→SE transmission headroom.
+
+**Nuclear features** — nuclear availability × scarcity interaction (amplified price impact during weather stress). Planned outage schedules from [Nord Pool UMM](https://umm.nordpoolgroup.com/) (public API, no key required) provide forward-looking nuclear capacity prediction. Fingrid dataset #188 provides real-time nuclear production.
+
+**Fingrid net-load infrastructure** (datasets #165 consumption, #246 wind forecast, #247 solar forecast) is present in the codebase for future experimentation but is not used by the bundled model — the existing 9 features already capture the same supply-pinch signal without multicollinearity.
 
 ## Model Performance
 
-**Bundled model (weather + cross-border, 15 features):**
+**v2.2.0 bundled model:**
+
+| Metric | v2.1.0 | v2.2.0 | Change |
+|--------|:---:|:---:|:---:|
+| Hourly Ridge features | 17 | **9** | -8 redundant features pruned |
+| MAE (training test split) | 23.94 EUR/MWh | **20.07 EUR/MWh** | -16% |
+| R² | 0.515 | **0.719** | +40% |
+| D(4) Spearman rho (last 365d) | 0.913 | **0.930** | +0.017 |
+| Walk-forward MAE (180d holdout) | — | **20.99 EUR/MWh** | vs. AR(2) floor 37.82 |
+
+The walk-forward evaluation (weekly refit on 540-day rolling window, tested on the most recent 180 days including the Jan-Mar 2026 Finnish price spike at 113 EUR/MWh mean) confirms that the 9-feature pruned model outperforms both the v2.1 baseline and the AR(2) neighbour-price floor across all tracked metrics.
+
+**Duration model D(k) ranking accuracy (Spearman rho):**
 
 | Metric | Value |
 |--------|:---:|
-| MAE | 24.7 EUR/MWh |
-| R² | 0.39 |
-| Features | 15 (sign-validated, bootstrap-stable) |
-| Training data | 4 years (2022-2026) |
+| D(4) cheap-end rho | 0.930 |
+| Training data | 4+ years (2022-2026) |
+| Walk-forward holdout | 180 days (most recent) |
 
-**Duration model (D(k) Spearman ρ, last 365 days):**
-
-| D(k) | Use case | ρ |
-|:---:|:-:|:---:|
-| D(4) | Cheapest 4h | 0.908 |
-| D(8) | Cheapest 8h | 0.921 |
-| D(24) | Daily avg | 0.937 |
-
-Retraining with Fingrid nuclear data (free API key) adds 2 features and improves accuracy.
+The D(k) rho measures whether the relative ranking of days by cheap-hour price is correct — the metric that matters for thermal scheduling decisions.
 
 ## Supported Operators (Finland) (check your contract)
 
@@ -180,7 +196,7 @@ For yleissiirto (general transfer), set day and night rates equal.
 ### HACS (Recommended)
 
 1. Open **HACS** in Home Assistant
-2. Click **Integrations** → ⋮ menu → **Custom repositories**
+2. Click **Integrations** → menu → **Custom repositories**
 3. Add `https://github.com/watti-matti/HA-spot-price-predictor` as **Integration**
 4. Search for "Spot Price Predictor" and **Download**
 5. **Restart** Home Assistant
@@ -193,25 +209,26 @@ Copy `custom_components/spot_price_predictor/` to your Home Assistant `custom_co
 
 ## Optional: Custom Training
 
-For advanced users who want to retrain the model with their own historical data:
+Advanced users can retrain the model with their own historical data. This is useful for personalizing to local conditions or incorporating new data sources.
 
 ```bash
 git clone https://github.com/watti-matti/HA-spot-price-predictor.git
 cd HA-spot-price-predictor
 pip install -r requirements.txt
 
-# Train with available data (adapts automatically)
+# Train with weather + cross-border data only (no API key needed)
+python -m src.train_model --region finland
+
+# Train with Fingrid nuclear data (adds nuclear_x_scarcity feature)
 python -m src.train_model --region finland --fingrid-key YOUR_KEY
 
-# With Fingrid nuclear data (for nuclear x scarcity feature)
-export FINGRID_API_KEY=your_key_here
-python -m src.train_model --region finland --fingrid-key YOUR_KEY
-
-# Evaluate accuracy with interactive dashboard
-python -m src.evaluate --region finland
+# Walk-forward accuracy evaluation (180-day holdout)
+python studies/validate_forecaster_performance.py --zone fi --test-days 180
 ```
 
 Upload the resulting `output/model_coefs.json` to your Home Assistant to replace the bundled defaults.
+
+**Hyperparameter note:** The bundled model uses `log_offset=100` and `alpha=50`, tuned via a 72-variant overnight sweep on the most recent 180-day holdout. If you retrain, use `--log-offset 100 --ridge-alpha 50` to match.
 
 ## Localization to Other Countries
 
@@ -230,17 +247,21 @@ To adapt for another country, create a new region YAML file and retrain. The mod
 
 | Source | Purpose | Free | Auth |
 |--------|---------|:---:|:---:|
-| [Sahkotin](https://sahkotin.fi) | FI Nord Pool spot prices | Yes | None |
+| [Sahkotin](https://sahkotin.fi) | FI Nord Pool spot prices (historical + current) | Yes | None |
 | [Open-Meteo](https://open-meteo.com) | Weather forecasts (7 locations, 120m wind) | Yes | None |
 | [elprisetjustnu.se](https://www.elprisetjustnu.se) | Swedish spot prices (SE3) | Yes | None |
 | [Elering](https://dashboard.elering.ee) | Estonian spot prices (EE) | Yes | None |
-| [Fingrid](https://data.fingrid.fi) | Nuclear production (#188) | Yes | API key (free) |
+| [Fingrid #188](https://data.fingrid.fi) | Nuclear production (real-time) | Yes | API key (free) |
+| [Fingrid #165/246/247](https://data.fingrid.fi) | Consumption / wind / solar forecasts (infrastructure present, not used by bundled model) | Yes | API key (free) |
 | [Nord Pool UMM](https://umm.nordpoolgroup.com) | Planned nuclear outage schedules | Yes | None |
 
 ## Technical Documentation
 
 - [TECHNICAL_GUIDE.md](TECHNICAL_GUIDE.md) — Architecture, feature engineering, model details (English)
 - [TEKNINEN_TOTEUTUS.md](TEKNINEN_TOTEUTUS.md) — Arkkitehtuuri, piirre-engineering, mallin kuvaus (suomeksi)
+- [docs/dk_cheap_peak_migration.md](docs/dk_cheap_peak_migration.md) — D(k) schema migration guide for downstream consumers
+- [docs/dtaci_layer.md](docs/dtaci_layer.md) — DtACI online calibration: algorithm details, state persistence, troubleshooting
+- [studies/results/V2_2_RELEASE_NOTES.md](studies/results/V2_2_RELEASE_NOTES.md) — v2.2.0 full release notes with sweep results
 
 ## License
 
