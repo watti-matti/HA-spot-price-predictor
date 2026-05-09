@@ -284,7 +284,7 @@ The **Duration Forecast** sensor exposes the cheap/peak curves for optimization 
 
 ## PV-aware pricing
 
-When the user configures a non-zero `pv_capacity_kwp` (or supplies an external PV forecast entity) the coordinator augments every forecast hour with a **marginal effective price** representing the cost of running 1 additional kWh of flexible load given the household's PV production and non-flexible baseload.
+When the user configures a non-zero `pv_capacity_kwp` (or supplies an external PV forecast entity) the coordinator augments every forecast hour with a **marginal effective price** representing the cost of running 1 additional kWh of flexible load given the household's PV production and the typical-total baseload.
 
 ### Notation
 
@@ -325,10 +325,25 @@ Computed directly from the 24 hourly `effective_eur_kwh` values per local day, u
 The forecast must remain a deterministic function of `(spot, weather, PV config, baseload config)` so the downstream optimizer's flexible-load decisions cannot feed back into next cycle's price forecast. Concretely:
 
 - **`_resolve_baseload(ts)` MUST NOT call `hass.states.get` or any HA entity-read API.** Enforced by a grep test in `tests/test_coordinator_pv.py`.
-- **The configured `baseload_kwh_per_hour` represents non-flexible consumption only.** Heat pump, EV, sauna, and any other optimizer-controlled load are excluded by contract.
+- **The configured `baseload_kwh_per_hour` should represent the user's typical TOTAL hourly consumption** — bill-derived total demand including all loads (heat pump, EV, sauna, water heater, etc.). Static configuration cannot create optimizer feedback because it doesn't depend on observed consumption; the actual stability requirement is only about what the predictor reads from HA.
 - **`_read_external_pv_forecast()` MAY read an HA entity** because the PV forecast is weather-driven and independent of optimizer decisions — no feedback loop is created.
 
-If a user includes a flexible-load sensor in baseload (Phase 2 will allow this opt-in with explicit warnings), the coupled forecast↔optimizer system can oscillate: optimizer schedules into cheap hours → those hours' baseload rises → next forecast shifts cheap hours → schedule chases. Phase 1 prevents this by construction.
+#### Why "typical total" not "non-flexible only" — worked example
+
+Sunny noon, 4 kWh PV, heat-pump household with 16 000 kWh/yr typical demand:
+
+| Scenario | baseload | pv_avail | m_h | Behaviour |
+|---|---|---|---|---|
+| **A: non-flex only (~0.5 kWh/h)** | 0.5 | 3.5 kWh | ≈ 4 c/kWh | Over-optimistic. Forecast claims all PV is free for extra load. EMHASS schedules heat pump there + further loads on top → second load actually pulls 16 c/kWh from grid. **Systematic optimism bias.** |
+| **B: typical total (~1.83 kWh/h × seasonal)** | ~1.83 | 2.17 kWh | ≈ 4 c/kWh | Self-consistent. Forecast assumes typical demand (heat pump etc.) is happening; EMHASS plans around that; reality matches assumption; equilibrium. |
+
+With PV at only 2 kWh, Case B correctly returns m_h ≈ 14 c/kWh (PV mostly absorbed by typical demand, only 0.17 kWh headroom). Case A would have returned ~10 c/kWh — still optimistic. Both cases satisfy the stability invariant because both are static config; Case B is **more accurate** because the PV/grid ratio that drives the marginal cost is genuinely a function of total demand, not non-flex demand.
+
+#### v2.3 → v2.3.1 doc-fix note
+
+The v2.3.0 release shipped with help text saying baseload should be "non-flexible only" and an emphatic warning to exclude heat pump, EV, etc. **That guidance was incorrect** — it conflated two separate stability concerns. The actual stability requirement is only about what the predictor READS (no optimizer-influenced HA entities), not what the static configured value REPRESENTS. Users following the old guidance get the Case-A optimism bias on heat-pump days. Please raise your `baseload_kwh_per_hour` to typical TOTAL hourly consumption (≈ annual_bill_kWh / 8760).
+
+The forthcoming v2.4.0 schema overhaul replaces these three fields with a single `annual_consumption_kwh` (default 12 000) plus an optional `consumption_entity` for HA-sensor-driven smoothing — much friendlier UX for the right semantics.
 
 ### External PV forecast — supported attribute conventions
 
@@ -355,7 +370,7 @@ PV system parameters live in `consumer_pricing` adjacent fields and the optional
 | `pv_system_efficiency` | 0.85 | Lumped DC/AC + soiling + losses |
 | `pv_external_entity` | "" | Optional HA sensor that overrides internal estimator |
 | `pv_export_grid_fee` | 0 | Extra EUR/kWh fee on exported energy (above seller commission) |
-| `baseload_kwh_per_hour` | 0.8 | Constant non-flexible household consumption (~7000 kWh/yr typical) |
+| `baseload_kwh_per_hour` | 0.8 (legacy default — see note below) | Typical TOTAL hourly household consumption (≈ annual_bill_kWh / 8760). For a mid-range Finnish single-family house with heat pump etc. this is ≈ 1.4 (≈ 12 000 kWh/yr); for an apartment without electric heating closer to 0.5 (≈ 4 000 kWh/yr). Default value is preserved at 0.8 for v2.3.x backwards compatibility but is too low for most heat-pump houses; please re-tune per your bill. |
 | `baseload_day_factor` | 1.2 | 07–22 multiplier |
 | `baseload_night_factor` | 0.7 | 22–07 multiplier |
 
@@ -365,7 +380,7 @@ Setting `pv_capacity_kwp = 0` (the default) and leaving `pv_external_entity` emp
 
 - **Battery storage** — adds a temporal state variable; defer to Phase 2.
 - **Capacitated water-filling D(k)** — for very large flexible loads relative to PV capacity, the marginal-1-kWh model under-counts by ~`(load − pv_avail) × s_h` per hour. Acceptable for typical residential loads (heat pump, EV).
-- **HA energy entity for baseload** — Phase 2 only, opt-in with stability warnings, requires user-classified non-flexible sensor.
+- **HA energy entity for baseload** — coming in v2.4.0 (`consumption_entity`) with internal long-window smoothing of any consumption sensor type (smart-meter counter, daily/monthly `utility_meter`, instantaneous power); long EMA window plus 5 % hysteresis preserves the stability invariant.
 - **Per-tilt second Open-Meteo fetch** — current implementation reuses the integration's existing 45°-S irradiance fetch with scalar correction. Phase 2 may add a per-system fetch for sharper accuracy.
 - **Spot-model retraining with PV** — model unchanged; PV is a post-prediction transform.
 

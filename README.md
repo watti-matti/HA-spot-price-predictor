@@ -118,7 +118,7 @@ When a non-zero `pv_capacity_kwp` is set in the optional "PV system" config step
 | Attribute | Type | Description |
 |-----------|------|-------------|
 | `pv_production_kwh` | float | Estimated PV output for the hour (kWh) |
-| `baseload_kwh` | float | Configured non-flexible household consumption for that hour |
+| `baseload_kwh` | float | Configured typical total household consumption for that hour |
 | `effective_eur_kwh` | float | **Marginal cost of running 1 additional kWh of flexible load** at this hour given PV. Bounded in `[s_h, b_h]` (sell ≤ effective ≤ buy). |
 | `net_household_cost_eur` | float | Informational raw EUR/h flow (export revenue ↔ grid import). Not used for D(k). |
 | `is_export_hour` | bool | True when PV exceeds baseload |
@@ -130,7 +130,9 @@ The duration sensor gains parallel `dk_cheap_pv_eur_kwh[12]` / `dk_peak_pv_eur_k
 - **Internal estimator (default)** — uses Open-Meteo `global_tilted_irradiance_instant` × your configured `kwp` × tilt/azimuth correction × `efficiency`. Free, 7-day horizon, no rate limit.
 - **External entity (override)** — set `pv_external_entity` to any HA sensor whose attributes match one of: `forecast` list-of-dict (kWh), `wh_hours` dict (Wh), `watts` dict (W), or `irradiance` list (auto-detected W/kWh). Forecast.Solar, custom Open-Meteo templates, and similar publishers all just work. Use this if you have multi-array setups or want shading-aware values.
 
-**Stability invariant.** The `baseload_kwh_per_hour` configuration value represents *non-flexible* consumption only (lighting, fridge, base appliances). **Do NOT** include heat pump, EV, sauna, or any other load that a downstream optimizer schedules — the integration would otherwise see its own decisions reflected back in baseload, breaking the open-loop guarantee and potentially causing schedule oscillation. See [TECHNICAL_GUIDE.md](TECHNICAL_GUIDE.md#pv-aware-pricing) for the full cross-system contract.
+**Stability invariant.** The `baseload_kwh_per_hour` configuration value represents the user's **typical TOTAL hourly consumption** — bill-derived total demand including all loads (heat pump, EV, sauna, water heater, etc.). The static configured value cannot create optimizer feedback because it doesn't depend on observed consumption; including typical flexible loads makes the marginal-cost arithmetic self-consistent with the optimizer's planning. The actual stability requirement is only about what the predictor **reads** (no HA entities reflecting optimizer-controlled load), not what the static value **represents**. See [TECHNICAL_GUIDE.md](TECHNICAL_GUIDE.md#pv-aware-pricing) for the full cross-system contract and a worked Case A vs Case B example.
+
+*Note (v2.3 → v2.3.1 doc fix): the v2.3.0 release shipped with help text saying baseload should be "non-flexible only" — that guidance was incorrect. Users following it get a systematic optimism bias on heat-pump days. Please raise your `baseload_kwh_per_hour` to typical TOTAL hourly consumption (≈ annual_bill_kWh / 8760). v2.4.0 will replace these three fields with `annual_consumption_kwh` directly.*
 
 ### Actual Price Sensors (optional, when Nordpool entity is configured)
 

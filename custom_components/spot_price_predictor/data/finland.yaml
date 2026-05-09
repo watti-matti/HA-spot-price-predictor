@@ -261,15 +261,28 @@ consumer_pricing:
 # are only fallbacks. When `pv_capacity_kwp = 0` and no external entity is
 # set, all PV-aware sensor outputs are silently omitted.
 #
-# STABILITY INVARIANT (do not relax in Phase 1):
-#   The price forecaster MUST NOT consume optimizer-influenced consumption
-#   signals. `baseload_kwh_per_hour` represents NON-flexible household
-#   consumption only. Heat pump, EV, sauna, etc. are scheduled by the
-#   downstream optimizer and must NOT be folded into baseload here, or the
-#   coupled forecast↔optimizer system can oscillate without converging.
+# STABILITY INVARIANT:
+#   Baseload must be a deterministic function of (config, time) — never
+#   read from an HA entity that reflects optimizer-controlled load. The
+#   configured value should represent the user's TYPICAL TOTAL hourly
+#   household consumption (kWh) including loads the optimizer schedules
+#   (heat pump, EV, sauna, water heater, etc.). Static configuration cannot
+#   create optimizer feedback because it doesn't change in response to
+#   observed consumption. Including typical flexible loads here makes the
+#   marginal-cost arithmetic self-consistent with EMHASS's planning — the
+#   forecast assumes the typical day happens, EMHASS plans around that,
+#   reality matches the assumption, equilibrium.
 #
-# See TECHNICAL_GUIDE.md for the marginal-cost theorem and the cross-system
-# contract that this invariant enforces.
+# Note (v2.3 → v2.3.1 doc fix): the v2.3.0 release shipped with help text
+# saying baseload should be NON-flexible only. That was incorrect — it
+# conflated two separate stability concerns. The actual requirement is
+# only about what the predictor READS (no optimizer-influenced HA entities),
+# not what the static value REPRESENTS. Users following the old guidance
+# get a systematic optimism bias on heat-pump days; please raise the
+# baseload to typical TOTAL hourly consumption.
+#
+# See TECHNICAL_GUIDE.md "PV-aware pricing" for the marginal-cost theorem,
+# the worked Case A vs Case B example, and the cross-system contract.
 
 pv_system:
   capacity_kwp: 0.0                  # 0 disables PV-aware outputs (default off)
@@ -279,7 +292,18 @@ pv_system:
   external_entity: ""                # Optional HA entity overriding internal estimator
   export_grid_fee_eur_kwh: 0.0       # Extra grid fee on exported energy (above sell commission)
 
-  baseload_kwh_per_hour: 0.8         # ~7000 kWh/yr typical Finnish household
+  # baseload values represent TYPICAL TOTAL hourly household consumption
+  # (the bill-derived total demand including all loads). Day/night factors
+  # split this average between 07-22 and 22-07 — they are NOT a model of
+  # optimizer behavior, just the unavoidable diurnal demand pattern of
+  # lighting, cooking, occupancy etc.
+  #
+  # Default value is the previous v2.3.0 value preserved for backwards
+  # compatibility. Users following the corrected guidance should configure
+  # baseload_kwh_per_hour ≈ annual_kwh / 8760 — e.g. 12000/8760 ≈ 1.4 for
+  # a mid-range Finnish single-family house. v2.4.0 schema overhaul will
+  # replace these three fields with `annual_consumption_kwh` directly.
+  baseload_kwh_per_hour: 0.8         # legacy default — re-tune per your bill
   baseload_day_factor: 1.2           # 07-22 multiplier
   baseload_night_factor: 0.7         # 22-07 multiplier
 

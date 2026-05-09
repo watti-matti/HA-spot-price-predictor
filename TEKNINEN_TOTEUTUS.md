@@ -273,7 +273,7 @@ Tämä integraatio tuottaa **ainoastaan ennusteita**. D(k) = CVaR -kestomatriisi
 
 ## PV-tietoinen hinnoittelu (valinnainen)
 
-Kun käyttäjä asettaa nollasta poikkeavan `pv_capacity_kwp` -arvon (tai määrittää ulkoisen PV-ennuste-entiteetin), koordinaattori lisää jokaiseen ennustetuntiin **marginaalisen efektiivisen hinnan** — paljonko maksaa ajaa yksi lisä-kWh joustavaa kuormaa kyseisellä tunnilla, kun otetaan huomioon kotitalouden PV-tuotto ja ei-joustava perustaso.
+Kun käyttäjä asettaa nollasta poikkeavan `pv_capacity_kwp` -arvon (tai määrittää ulkoisen PV-ennuste-entiteetin), koordinaattori lisää jokaiseen ennustetuntiin **marginaalisen efektiivisen hinnan** — paljonko maksaa ajaa yksi lisä-kWh joustavaa kuormaa kyseisellä tunnilla, kun otetaan huomioon kotitalouden PV-tuotto ja tyypillinen kokonaisperustaso.
 
 ### Merkinnät
 
@@ -314,8 +314,25 @@ Lasketaan suoraan paikallisen päivän 24 tuntittaisesta `effective_eur_kwh` -ar
 Ennusteen on pysyttävä deterministisenä funktiona `(spot, sää, PV-konfiguraatio, perustaso-konfiguraatio)` -syötteistä, jotta alavirran optimoijan joustavakuorma-päätökset eivät voi syöttyä takaisin seuraavan syklin hintaennusteeseen. Konkreettisesti:
 
 - **`_resolve_baseload(ts)` EI saa kutsua `hass.states.get` -kutsua tai mitään HA-entiteetinlukua.** Varmistettu grep-testillä tiedostossa `tests/test_coordinator_pv.py`.
-- **Konfiguroitu `baseload_kwh_per_hour` edustaa vain ei-joustavaa kulutusta.** Lämpöpumppu, sähköauto, sauna ja muut optimoijan ohjaamat kuormat on rajattu sopimuksella pois.
+- **Konfiguroidun `baseload_kwh_per_hour`-arvon tulisi edustaa käyttäjän tyypillistä KOKONAISTUNTIKULUTUSTA** — laskupohjaista kokonaiskysyntää mukaan lukien kaikki kuormat (lämpöpumppu, sähköauto, sauna, vedenlämmitin jne.). Staattinen konfiguraatio ei voi luoda optimoijan takaisinkytkentää koska se ei riipu havaitusta kulutuksesta; varsinainen vakausvaatimus koskee vain sitä mitä ennustaja LUKEE HA:sta.
 - **`_read_external_pv_forecast()` SAA lukea HA-entiteetin** koska PV-ennuste on säävetoinen ja riippumaton optimoijan päätöksistä — takaisinkytkentää ei muodostu.
+
+#### Miksi "tyypillinen kokonais" eikä "vain ei-joustava" — esimerkkilaskelma
+
+Aurinkoinen keskipäivä, 4 kWh PV, lämpöpumpputalous 16 000 kWh/v tyypillisellä kysynnällä:
+
+| Tilanne | perustaso | pv_avail | m_h | Käyttäytyminen |
+|---|---|---|---|---|
+| **A: vain ei-joustava (~0,5 kWh/h)** | 0,5 | 3,5 kWh | ≈ 4 c/kWh | Liian optimistinen. Ennuste väittää että kaikki PV on ilmaista lisäkuormalle. EMHASS aikatauluttaa lämpöpumpun + lisäkuormat → toinen kuorma vetääkin 16 c/kWh verkosta. **Systemaattinen optimismivinouma.** |
+| **B: tyypillinen kokonais (~1,83 kWh/h × kausi)** | ~1,83 | 2,17 kWh | ≈ 4 c/kWh | Itsestään yhteensopiva. Ennuste olettaa että tyypillinen kysyntä (lämpöpumppu jne.) tapahtuu; EMHASS suunnittelee sen ympärille; todellisuus vastaa oletusta; tasapaino. |
+
+PV:n ollessa vain 2 kWh, Tapaus B palauttaa oikein m_h ≈ 14 c/kWh (PV pääosin tyypillisen kysynnän käyttämä, vain 0,17 kWh marginaalia). Tapaus A olisi palauttanut ~10 c/kWh — silti optimistinen. Molemmat tapaukset täyttävät vakausinvariantin koska molemmat ovat staattista konfiguraatiota; Tapaus B on **tarkempi** koska PV/verkko-suhde joka määrittää marginaalikustannuksen on aidosti kokonaiskysynnän — ei ei-joustavan kysynnän — funktio.
+
+#### v2.3 → v2.3.1 dokumentaatiokorjaus
+
+v2.3.0 -julkaisu sisälsi virheellisen ohjeen "vain ei-joustava". **Ohje oli väärä** — se sekoitti kaksi erillistä vakaushuolta. Varsinainen vaatimus koskee vain sitä mitä ennustaja LUKEE (ei optimoijan vaikuttamia HA-entiteettejä), ei sitä mitä staattinen arvo EDUSTAA. Vanhaa ohjetta noudattavat käyttäjät saavat Tapauksen A optimismivinouman lämpöpumppupäivinä. Nosta `baseload_kwh_per_hour` tyypilliseen KOKONAISKULUTUKSEEN (≈ vuosilasku_kWh / 8760).
+
+Tuleva v2.4.0 -skeemauudistus korvaa nämä kolme kenttää yhdellä `annual_consumption_kwh` -arvolla (oletus 12 000) plus valinnaisella `consumption_entity` -kentällä HA-anturipohjaista tasausta varten — paljon ystävällisempi UX oikealle semantiikalle.
 
 ### Ulkoinen PV-ennuste — tuetut attribuutti-konventiot
 
@@ -342,7 +359,7 @@ PV-järjestelmän parametrit asetetaan HA-asennusvelhon valinnaisessa "PV system
 | `pv_system_efficiency` | 0,85 | DC/AC + likaantuminen + häviöt yhteenlaskettuna |
 | `pv_external_entity` | "" | Valinnainen HA-sensori, joka korvaa sisäisen estimaattorin |
 | `pv_export_grid_fee` | 0 | Lisämaksu viedystä energiasta (myyntipalkkion yli) |
-| `baseload_kwh_per_hour` | 0,8 | Vakio ei-joustava kulutus (~7 000 kWh/v tyypillisesti) |
+| `baseload_kwh_per_hour` | 0,8 (legacy oletus — katso huomautus) | Tyypillinen KOKONAISTUNTIKULUTUS (≈ vuosilasku_kWh / 8760). Keskiluokan suomalainen omakotitalo lämpöpumpulla ≈ 1,4 (≈ 12 000 kWh/v); kerrostalo ilman sähkölämmitystä lähempänä 0,5 (≈ 4 000 kWh/v). Oletusarvo säilytetty 0,8:ssa v2.3.x-yhteensopivuuden vuoksi mutta on liian alhainen useimmille lämpöpumpputaloille; viritä laskusi mukaan. |
 | `baseload_day_factor` | 1,2 | 07–22 kerroin |
 | `baseload_night_factor` | 0,7 | 22–07 kerroin |
 

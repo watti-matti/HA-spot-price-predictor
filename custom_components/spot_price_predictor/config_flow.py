@@ -233,9 +233,17 @@ class SpotPricePredictorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             title = f"Spot Price ({REGIONS.get(self._data.get(CONF_REGION, 'finland'), 'Finland')})"
             return self.async_create_entry(title=title, data=self._data)
 
-        # Description text shown to the user. Stability invariant is critical:
-        # baseload represents NON-FLEXIBLE consumption only. Flexible loads
-        # (heat pump, EV, sauna) are scheduled by the downstream optimizer.
+        # Stability invariant: baseload must be a deterministic function of
+        # (config, time) and must NEVER read from an HA entity that reflects
+        # optimizer-controlled load. The configured value should represent
+        # the user's TYPICAL TOTAL hourly household consumption (kWh) — the
+        # bill-derived total demand including heat pump, EV, sauna, water
+        # heater and everything else that runs on a typical day. Static
+        # configuration cannot create optimizer feedback because it never
+        # changes in response to observed consumption. Including typical
+        # flexible loads here makes the marginal-cost arithmetic
+        # self-consistent with EMHASS's planning (see TECHNICAL_GUIDE
+        # "PV-aware pricing" section for the worked example).
         schema = vol.Schema({
             vol.Optional(
                 CONF_PV_CAPACITY_KWP, default=DEFAULT_PV_CAPACITY_KWP,
