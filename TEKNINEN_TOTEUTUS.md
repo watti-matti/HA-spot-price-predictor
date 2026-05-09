@@ -58,18 +58,19 @@ Kaikki datalähteet konfiguroidaan tiedostossa `config/regions/finland.yaml`.
 
 ### Rajat ylittävät hintalähteet (ilmaiset, ei tunnistautumista)
 
-| Lähde | Alueet | Tarkoitus |
-|-------|--------|-----------|
-| [Elpriset](https://www.elprisetjustnu.se/api/v1/prices) | SE1, SE3 | Ruotsin spot-hinnat AR-malleihin |
-| [Elering API](https://dashboard.elering.ee/api/nps/price) | EE | Viron spot-hinnat AR-malleihin |
+| Lähde | Haetut alueet | Käytössä v2.2-mallissa? |
+|-------|---------------|-------------------------|
+| [Elpriset](https://www.elprisetjustnu.se/api/v1/prices) | SE3 | Kyllä — `ar_se3` + `export_potential_se3` |
+| [Elpriset](https://www.elprisetjustnu.se/api/v1/prices) | SE1 | Haetaan vain spread-/historiakontekstia varten; `ar_se1` karsittiin v2.2:ssa (kollineaarinen `ar_se3`:n kanssa, koska FI↔SE-siirtoyhteys päättyy SE3-alueelle) |
+| [Elering API](https://dashboard.elering.ee/api/nps/price) | EE | Kyllä — `ar_ee` |
 
-AR(2)-mallit sovitetaan naapurihintojen poikkeamiin tuntiprofiileista. Analyysissa vahvistettu vahva autokorrelaatio (viikkotason lag-1 r=0,54-0,73, suunnan pysyvyys 100%).
+AR(2)-mallit sovitetaan naapurihintojen poikkeamiin tuntiprofiileista. Analyysissa vahvistettu vahva autokorrelaatio (viikkotason lag-1 r = 0,54–0,73, suunnan pysyvyys 100 %).
 
 ### Valinnainen verkkodata (ilmainen API-avain)
 
 | Lähde | Tarkoitus |
 |-------|-----------|
-| [Fingrid Open Data](https://data.fingrid.fi) | Ydinvoimatuotanto (#188) nuclear_deficit- ja niukkuuspiirteisiin |
+| [Fingrid Open Data](https://data.fingrid.fi) | Ydinvoimatuotanto (#188) `nuclear_x_scarcity`-piirteen interaktiotermiin |
 
 Rekisteröidy ilmaiseksi osoitteessa data.fingrid.fi. Ilman Fingrid-avainta koulutus käyttää vain sää- ja rajat ylittäviä piirteitä, jolloin syntyvä malli jättää `nuclear_x_scarcity` -piirteen pois (8 mukana tulevasta 9:stä). Päättely voi silti ladata mukana tulevan v2.2:n 9-piirteisen mallin — `nuclear_x_scarcity` antaa arvon 0, kun ydinvoimadataa ei syötetä.
 
@@ -83,49 +84,50 @@ Rekisteröidy ilmaiseksi osoitteessa data.fingrid.fi. Ilman Fingrid-avainta koul
 
 ## Piirteiden suunnittelu
 
-Koulutusputki tukee enintään 17 merkkivalidoitua piirrettä, mutta **mukana tuleva v2.2-oletusmalli käyttää 9 piirrettä** sen jälkeen kun leave-one-out -redundanssianalyysi karsi 8 kollineaarista tai haitallista ehdokasta. v2.3 toimittaa saman 9-piirteisen mallin muuttumattomana. Kaikki säädettävät parametrit ovat `config/regions/finland.yaml` -tiedoston `features`-osiossa.
+Koulutusputki voi laskea enintään 17 merkkivalidoitua ehdokaspiirrettä, mutta v2.2:n leave-one-out -redundanssianalyysi osoitti, että **vain 9 niistä tuo itsenäistä signaalia** — loput 8 olivat joko kollineaarisia jäljelle jäävien kanssa tai eivät tuoneet mitattavaa parannusta walk-forward MAE -mittariin. Mukana tuleva v2.2-malli (toimitetaan muuttumattomana myös v2.3:ssa) käyttää tasan näitä 9 piirrettä. Kaikki säädettävät parametrit ovat `config/regions/finland.yaml` -tiedoston `features`-osiossa.
 
-### Peruspiirteet (11) — sää + kysyntä, ei API-avaimia
+### Mukana tulevat 9 piirrettä
 
-| Kategoria | Piirteet | Kertoimen etumerkki |
-|-----------|----------|:---:|
-| Tarjonta | `wind_speed_weighted`, `solar_irradiance_weighted` | negatiivinen (enemmän tarjontaa = alempi hinta) |
-| Aikajaksot | `hour_sin`, `hour_cos`, `month_sin`, `month_cos` | syklinen |
-| Kalenteri | `is_holiday` | negatiivinen (vähäisempi kysyntä) |
-| Lämpökysyntä | `hdd_sq` (lämmitystarveluvun neliö, kynnys 17°C) | positiivinen |
-| Tuulen epälineaarisuus | `wind_log_scarcity` = log1p(max(0, 8-tuuli)) | positiivinen (vähäinen tuuli = korkeampi hinta) |
-| Tuuli × kysyntä | `wind_calm_x_peak_am` = max(0, 6-tuuli) × aamuhuippu (klo 9, σ=1,8) | positiivinen |
-| Tuuli × kysyntä | `wind_calm_x_peak_pm` = max(0, 6-tuuli) × iltahuippu (klo 19, σ=2,0) | positiivinen |
+| # | Piirre | Kategoria | Lähde | Etumerkki | Tehtävä |
+|---|--------|-----------|-------|:---:|---------|
+| 1 | `wind_speed_weighted` | Tarjonta | Open-Meteo (7 kapasiteettipainotettua FI-pistettä) | − | Hinnan päävetäjä — enemmän tuulta, alempi spot |
+| 2 | `month_cos` | Kausivaihtelu | Kalenteri | syklinen | Vuotuinen lämmityskuormitus (talven huippu) |
+| 3 | `is_holiday` | Kalenteri | Pyhäpäivälaskuri / HA Workday | − | Pyhäpäivät → alempi teollisuuden kysyntä |
+| 4 | `hdd_sq` | Lämpökysyntä | Open-Meteo lämpötila | + | `max(0, 17°C − T)²` — kylmän epälineaarinen vahvistus |
+| 5 | `wind_log_scarcity` | Tuulen epälineaarisuus | Open-Meteo | + | `log1p(max(0, 8 − tuuli))` — terävä hintapiikki kun tuuli alle 8 m/s |
+| 6 | `ar_se3` | Rajat ylittävä | elprisetjustnu.se SE3 | + | AR(2) poikkeama SE3:n tuntityyppiprofiilista, normalisoitu ÷100 — kuvaa FI↔SE3-siirtoyhteyttä |
+| 7 | `ar_ee` | Rajat ylittävä | Elering EE | + | AR(2) poikkeama EE:n tuntityyppiprofiilista, normalisoitu ÷100 — kuvaa FI↔EE-yhteyttä |
+| 8 | `export_potential_se3` | Rajat ylittävä | SE3-hintaero | − | `max(0, −spread_7d_fi_se3)` — kun FI on halvempi kuin SE3, FI→SE3-vienti nostaa FI-hintaa |
+| 9 | `nuclear_x_scarcity` | Ydinvoima | Fingrid #188 + Nord Pool UMM | + | `nuclear_deficit × wind_log_scarcity` — seisokki vahvistaa sääpohjaista niukkuutta |
 
-### Rajat ylittävät piirteet (+4) — AR-naapurihinnat, ei API-avaimia
+AR(2)-mallit hajottavat naapurihinnat deterministiseen päiväprofiiliin (arkipäivä vs viikonloppu, 24 tuntia kumpaakin) plus stokastinen AR(2)-poikkeama. AR-poikkeama vaimennetaan (maksimijuuri < 0,95), joten useamman askeleen ennusteet konvergoituvat päiväprofiiliin noin 24 tunnissa, mikä takaa vakauden koko 170 tunnin ennusteikkunassa.
 
-AR(2)-mallit ennustavat rajat ylittäviä naapurihintoja käyttäen arkipäivä/viikonloppu-tuntiprofiileja ja vaimennettua autoregressiivista poikkeamaa.
+`nuclear_x_scarcity` vaatii ilmaisen Fingrid API-avaimen reaaliaikaiseen ydinvoimadataan; suunnitellut seisokkiaikataulut tulevat [Nord Pool UMM -alustalta](https://umm.nordpoolgroup.com/) (julkinen rajapinta, ei avainta). Ilman Fingrid-avainta koulutus jättää tämän yhden piirteen pois (mallissa 8 piirrettä) ja päättely voi silti ladata mukana tulevan 9-piirteisen mallin — piirre antaa vain arvon 0, kun ydinvoimadataa ei syötetä.
 
-| Piirre | Lähde | Menetelmä |
-|--------|-------|-----------|
-| `ar_se1` | Ruotsi SE1 | AR(2) poikkeamasta tuntityyppiprofiilista, normalisoitu ÷100 |
-| `ar_se3` | Ruotsi SE3 | AR(2) poikkeamasta tuntityyppiprofiilista, normalisoitu ÷100 |
-| `ar_ee` | Viro | AR(2) poikkeamasta tuntityyppiprofiilista, normalisoitu ÷100 |
-| `export_potential_se3` | SE3-hintaero | max(0, -spread_7d_fi_se3) |
+### v2.2:ssa karsitut piirteet (ja syy)
 
-AR-poikkeama vaimennetaan (maksimijuuri < 0,95), joten ennusteet konvergoituvat päiväprofiiliin 24 tunnissa, mikä takaa vakauden koko 170 tunnin ennusteikkunassa.
+Leave-one-out -pyyhkäisy poisti 8 ehdokasta v2.0/v2.1:n 17-piirteisestä joukosta:
 
-### Ydinvoimapiirteet (+0-2) — vaatii Fingrid API-avaimen
+| Karsittu piirre | Syy |
+|---|---|
+| `solar_irradiance_weighted` | Suomen aurinkoenergian osuus liian pieni vaikuttaakseen spot-hintaan; kerroin oli erottumaton nollasta. |
+| `hour_sin`, `hour_cos` | Tunti-vuorokaudessa-kuvio kaappautuu täysin AR(2):n päivätyyppiprofiileihin (`ar_se3` / `ar_ee`). |
+| `month_sin` | Vuoden kuukausi kaappautuu riittävästi pelkällä `month_cos`:lla (lämmityshuippu ↔ kosinin ääriarvo). |
+| `wind_calm_x_peak_am`, `wind_calm_x_peak_pm` | Voimakkaasti kollineaarisia `wind_log_scarcity`:n kanssa; lisäys-MAE-hyöty oli pyyhkäisyssä negatiivinen. |
+| `ar_se1` | Voimakkaasti kollineaarinen `ar_se3`:n kanssa. Fenno-Skan / Fenno-Skan 2 -kaapelit yhdistävät FI:n SE3-alueelle, eivät SE1:lle, joten SE3 hallitsee siirtosignaalia. SE1 haetaan edelleen spread-kontekstia varten mutta ei enää piirteenä. |
+| `nuclear_deficit` | Yksinään ydinvoimavajeesta tuli vain vähän hyötyä, kun `nuclear_x_scarcity` (interaktiotermi) säilytettiin. Molempien sisällyttäminen aiheutti multikollineaarisuutta. |
 
-| Piirre | Kaava | Merkitys |
-|--------|-------|----------|
-| `nuclear_deficit` | max(0, 1 - nuclear_mw/4372) | Ydinvoimakapasiteetin puuteosuus |
-| `nuclear_x_scarcity` | nuclear_deficit × niukkuusindikaattori | Ydinvoimaseisokki vahvistaa sääpohjaista niukkuutta |
+Karsinnan vaikutus (koulutuksen testijako, 4 vuoden historia): MAE 23,94 → 20,07 EUR/MWh (−16 %); R² 0,515 → 0,719 (+40 %). Walk-forward MAE 180 vrk testijaksolla on 20,99 EUR/MWh, selvästi alle pelkän AR(2):n naapurihintaperustason 37,82.
 
-**Ennakollinen seisokkiraportointi:** Suunnitellut seisokkiaikataulut haetaan [Nord Pool UMM -alustalta](https://umm.nordpoolgroup.com/) (julkinen rajapinta, ei avainta). Koordinaattori laskee ydinvoiman saatavuuden tunneittain ennustehorisontissa.
+### Mukana tuleva malli vs uudelleenkoulutus: piirremäärä
 
-### Piirteiden lukumäärä konfiguraation mukaan
+Mukana tuleva `model_coefs_default.json` on kiinteästi 9-piirteinen v2.2-malli riippumatta siitä mitä rajapintoja päättely tavoittaa. Jos koulutat paikallisesti uudelleen (`python -m src.train_model …`), syntyvä malli käyttää suurinta 9:n osajoukkoa, jonka datalähteesi tukevat:
 
-| Konfiguraatio | Piirteet | API-avaimet |
-|---------------|----------|-------------|
-| Vain sää | 11 | Ei mitään |
-| Sää + rajat ylittävät | 15 | Ei mitään |
-| Kaikki lähteet | 17 | 1 (Fingrid, ilmainen) |
+| Saatavilla oleva data | Koulutetut piirteet | Huomautukset |
+|---|:---:|---|
+| Vain Open-Meteo | 5 | Pudottaa `ar_se3`, `ar_ee`, `export_potential_se3`, `nuclear_x_scarcity` |
+| + elprisetjustnu.se (SE3) + Elering (EE) | 8 | Pudottaa `nuclear_x_scarcity` |
+| + Fingrid (ilmainen avain) | **9** | Täysi mukana tulevan mallin piirrejoukko |
 
 ---
 
@@ -133,17 +135,17 @@ AR-poikkeama vaimennetaan (maksimijuuri < 0,95), joten ennusteet konvergoituvat 
 
 ### Tuntimalli: Log-lineaarinen Ridge-regressio
 
-**Ennustekaava:** `hinta = skaala × max(0, exp(Σ kerroin_i × piirre_i + vakio) - 55) ^ potenssi`
+**Ennustekaava:** `hinta = skaala × max(0, exp(Σ kerroin_i × piirre_i + vakio) − log_offset) ^ potenssi`
 
 Log-muunnos käsittelee luonnollisesti epälineaarisen hinta-niukkuussuhteen: lähes lineaarinen matalilla hinnoilla, eksponentiaalinen vahvistus korkeilla hinnoilla.
 
-- Ridge-regressio kohteella log(hinta + 55)
-- 17 merkkivalidoitua piirrettä
-- Tehovenytys (skaala, eksponentti) sovitetaan Nelder-Mead-optimoinnilla
-- Aikapainotus: puoliintumisaika 120 päivää
-- Ridge alpha = 1,0, laajennettu matriisi (ei sakkoa vakiotermille)
+- Ridge-regressio kohteella `log(hinta + log_offset)` (v2.2 viritti `log_offset`-arvon 55 → 100 sopimaan paremmin 2025–2026 hintaregiimiin)
+- **9 merkkivalidoitua piirrettä** v2.2:n mukana tulevassa mallissa (8 ehdokaspiirrettä karsittiin leave-one-out -redundanssipyyhkäisyssä)
+- Tehovenytys (`skaala`, `eksponentti`) sovitetaan Nelder-Mead-optimoinnilla testijoukolla
+- Aikapainotus: puoliintumisaika 120 päivää (alueittain konfiguroitavissa)
+- Ridge α = 50, laajennettu matriisi (ei sakkoa vakiotermille)
 
-**Koulutus:** 4 vuoden historiallinen data, aikajärjestetty 85/15 jako, eräkäsittely (512 riviä).
+**Koulutus:** 4+ vuoden historiallinen data, aikajärjestetty 85/15 jako, eräpohjainen normaaliyhtälöiden ratkaisu (512 riviä). v2.3 toimittaa saman kerroinkartiotiedoston kuin v2.2 — PV-tietoiset tulosteet lasketaan koordinaattorissa, ei koulutetussa mallissa.
 
 ### Kestomalli: Segmenttihierarkkinen Ridge + PAVA
 
@@ -151,27 +153,28 @@ Ennustaa D(k) = keskimääräisen spot-hinnan halvimmille k tunnille päivässä
 
 **PAVA** (Pool Adjacent Violators Algorithm) on isotonisen regression menetelmä, joka pakottaa monotonisuuden. Koska D(k) on määritelmän mukaan ei-vähenevä — useampien tuntien lisääminen keskiarvoon voi sisältää vain yhtä kalliita tai kalliimpia tunteja — PAVA yhdistää itsenäisten Ridge-ennusteiden rikkomukset keskiarvoistamalla vierekkäisiä pareja kunnes D(1) ≤ D(2) ≤ ... ≤ D(N) toteutuu kaikkialla.
 
-**Arkkitehtuuri:**
-- 4 päiväsegmenttiä tariffirajojen mukaan: yö (22-07, 9h), aamu (07-12, 5h), keskipäivä (12-18, 6h), ilta (18-22, 4h)
-- Jokainen (segmentti, kestotaso): itsenäinen Ridge-malli 10 piirteellä
-- Log-lineaarinen kohde: log(D(k) + 55)
+**Arkkitehtuuri (Phase A halpa/kallis -kaksisuuntainen koulutus):**
+- 4 päiväsegmenttiä tariffirajojen mukaan: yö (22-07, 9 tasoa), aamu (07-12, 5 tasoa), keskipäivä (12-18, 6 tasoa), ilta (18-22, 4 tasoa). Yhteensä 24 tuntipaikkaa.
+- Jokainen `(segmentti, suunta, k)`: itsenäinen Ridge-malli. Jokainen segmentti sisältää `cheap_models` (k = 1..n_levels) ja `peak_models` (k = 1..n_levels). Mukana tulevia Ridge-sovituksia yhteensä = 2 × (9 + 5 + 6 + 4) = **48 pientä mallia**.
+- Segmenttikohtaiset **12 piirrettä** (segmentin tuntien yli laskettuja keskiarvoja):
+  `wind_mean`, `solar_mean`, `hdd_mean`, `se3_mean`, `se1_mean`, `nuclear_deficit`, `is_workday`, `month_sin`, `month_cos`, `wind_log_scarcity`, `net_load_mean`, `net_load_squared_mean`. Kaksi viimeistä asetetaan nollaksi kun Fingrid-kuormitusennusteita ei ole saatavilla, vastaten koulutuspuolen oletusarvoa.
+- Log-lineaarinen kohde v2.2:n uudelleen viritetyllä offsetilla: `log(D(k) + 100)`
 - Unohtamiskerroin λ = 0,960 (puoliintumisaika 17 päivää, optimoitu pyyhkäisyllä)
-- PAVA isotoninen jälkikäsittely: pakottaa D(1) ≤ D(2) ≤ ... ≤ D(N)
-- Segmentistä päivään -rekonstruktio: eristä lajitellut hinnat → yhdistä → uudelleenlajittelu → 24h D(k)
+- PAVA isotoninen jälkikäsittely suunnittain:
+  - Halpa pää: pakottaa `dk_cheap[0] ≤ dk_cheap[1] ≤ … ≤ dk_cheap[11]`
+  - Kallis pää: pakottaa `dk_peak[0] ≥ dk_peak[1] ≥ … ≥ dk_peak[11]`
+- Segmentistä päivään -rekonstruktio: jokainen segmentti tuottaa oman lajitellun hintavektorinsa; segmentit yhdistetään 24 tunnittaiseksi ennusteeksi; `compute_dk_cheap_peak()` tuottaa kaksi 12-elementtistä taulukkoa, jotka näkyvät sensorissa.
 
-**Kestomallin piirteet:**
-`wind_mean`, `solar_mean`, `hdd_mean`, `se3_mean`, `se1_mean`, `nuclear_deficit`, `is_workday`, `month_sin`, `month_cos`, `wind_log_scarcity`
+**Suorituskyky (Spearmanin järjestyskorrelaatio, viimeiset 365 päivää):**
 
-**Suorituskyky (Spearmanin järjestyskorrelaatio):**
+| Kestotaso | Käyttötapaus | ρ |
+|:-:|:-:|:-:|
+| D(1) | Halvin tunti | 0,898 |
+| D(4) | Halvimmat 4h | 0,930 |
+| D(8) | Halvimmat 8h | 0,937 |
+| D(24) | Päivän keskiarvo | 0,940 |
 
-| Kestotaso | Käyttötapaus | ρ (kaikki) | ρ (viim. 365 pv) |
-|:-:|:-:|:-:|:-:|
-| D(1) | Halvin tunti | 0,895 | 0,898 |
-| D(4) | Halvimmat 4h | 0,904 | 0,906 |
-| D(8) | Halvimmat 8h | 0,929 | 0,921 |
-| D(24) | Päivän keskiarvo | 0,935 | 0,937 |
-
-**Tuloste:** `model_coefs.json` sisältäen tuntimallin kertoimet, AR-mallin parametrit ja kestomallin kertoimet.
+**Tuloste:** `model_coefs.json` sisältäen tuntimallin Ridge-kertoimet (9-piirteinen v2.2 mukana tuleva), AR(2)-parametrit `ar_se3`:lle ja `ar_ee`:lle, sekä kaksisuuntaiset halpa/kallis-kestomallin kertoimet (48 segment-suunta-k Ridge-sovitusta).
 
 ---
 

@@ -58,18 +58,19 @@ All data sources are configured in `config/regions/finland.yaml`.
 
 ### Cross-border price sources (free, no authentication)
 
-| Source | Zones | Purpose |
-|--------|-------|---------|
-| [Elpriset](https://www.elprisetjustnu.se/api/v1/prices) | SE1, SE3 | Swedish spot prices for AR models |
-| [Elering API](https://dashboard.elering.ee/api/nps/price) | EE | Estonian spot prices for AR models |
+| Source | Zones fetched | Used in v2.2 model? |
+|--------|---------------|---------------------|
+| [Elpriset](https://www.elprisetjustnu.se/api/v1/prices) | SE3 | Yes — `ar_se3` + `export_potential_se3` |
+| [Elpriset](https://www.elprisetjustnu.se/api/v1/prices) | SE1 | Fetched for spread/historical context only; `ar_se1` was pruned in v2.2 (collinear with `ar_se3`, since the FI↔SE transmission corridor terminates in SE3) |
+| [Elering API](https://dashboard.elering.ee/api/nps/price) | EE | Yes — `ar_ee` |
 
-Used to fit AR(2) models on cross-border price deviations from hourly daytype profiles. Analysis confirmed strong autocorrelation (lag-1 weekly r=0.54-0.73, sign persistence 100%).
+Used to fit AR(2) models on cross-border price deviations from hourly daytype profiles. Analysis confirmed strong autocorrelation (lag-1 weekly r = 0.54–0.73, sign persistence 100%).
 
 ### Optional grid data (free API key)
 
 | Source | Purpose |
 |--------|---------|
-| [Fingrid Open Data](https://data.fingrid.fi) | Nuclear production (#188) for nuclear deficit and scarcity features |
+| [Fingrid Open Data](https://data.fingrid.fi) | Nuclear production (#188) for the `nuclear_x_scarcity` interaction feature |
 
 Register for free at data.fingrid.fi. Without the Fingrid key, training uses only weather + cross-border data and the resulting model omits the `nuclear_x_scarcity` feature (8 of the bundled 9). Inference can still load the bundled v2.2 9-feature model — `nuclear_x_scarcity` contributes 0 when no nuclear data is fed in.
 
@@ -83,49 +84,50 @@ Register for free at data.fingrid.fi. Without the Fingrid key, training uses onl
 
 ## Feature Engineering
 
-The training pipeline supports up to 17 sign-validated features selected via greedy forward selection with sign constraints, but the **bundled v2.2 default model uses 9 features** after a leave-one-out redundancy sweep pruned 8 collinear or harmful candidates. v2.3 ships the same 9-feature model unchanged. All tunable parameters are in `config/regions/finland.yaml` under the `features` section.
+The training pipeline can compute up to 17 sign-validated candidate features, but a v2.2 leave-one-out redundancy sweep showed that **only 9 of them carry independent signal** — the other 8 were either collinear with retained features or contributed nothing measurable to walk-forward MAE. The bundled v2.2 model (also shipped unchanged in v2.3) uses exactly these 9 features. All tunable parameters live in `config/regions/finland.yaml` under the `features` section.
 
-### Base features (11) — weather + demand, no API keys needed
+### The bundled 9 features
 
-| Category | Features | Coefficient sign |
-|----------|----------|:---:|
-| Supply | `wind_speed_weighted`, `solar_irradiance_weighted` | negative (more supply = lower price) |
-| Time cycles | `hour_sin`, `hour_cos`, `month_sin`, `month_cos` | cyclic |
-| Calendar | `is_holiday` | negative (lower demand) |
-| Thermal demand | `hdd_sq` (squared heating degree days, threshold 17°C) | positive |
-| Wind nonlinear | `wind_log_scarcity` = log1p(max(0, 8-wind)) | positive (low wind = higher price) |
-| Wind x demand | `wind_calm_x_peak_am` = max(0, 6-wind) × AM peak (9h, σ=1.8) | positive |
-| Wind x demand | `wind_calm_x_peak_pm` = max(0, 6-wind) × PM peak (19h, σ=2.0) | positive |
+| # | Feature | Category | Source | Sign | Role |
+|---|---------|----------|--------|:---:|------|
+| 1 | `wind_speed_weighted` | Supply | Open-Meteo (7 capacity-weighted FI sites) | − | Dominant price driver — more wind, lower spot |
+| 2 | `month_cos` | Seasonality | Calendar | cyclic | Annual heating-load seasonality (winter peak) |
+| 3 | `is_holiday` | Calendar | Holiday calculator / HA Workday | − | Public holidays → lower industrial demand |
+| 4 | `hdd_sq` | Thermal demand | Open-Meteo temperature | + | `max(0, 17°C − T)²` — nonlinear cold amplification |
+| 5 | `wind_log_scarcity` | Wind nonlinear | Open-Meteo | + | `log1p(max(0, 8 − wind))` — sharp price jump when wind drops below 8 m/s |
+| 6 | `ar_se3` | Cross-border | elprisetjustnu.se SE3 | + | AR(2) deviation from SE3 hourly daytype profile, normalized ÷100 — captures FI↔SE3 transmission coupling |
+| 7 | `ar_ee` | Cross-border | Elering EE | + | AR(2) deviation from EE hourly daytype profile, normalized ÷100 — captures FI↔EE coupling |
+| 8 | `export_potential_se3` | Cross-border | SE3 spread | − | `max(0, −spread_7d_fi_se3)` — when FI is cheaper than SE3, FI→SE3 export pulls FI price up |
+| 9 | `nuclear_x_scarcity` | Nuclear | Fingrid #188 + Nord Pool UMM | + | `nuclear_deficit × wind_log_scarcity` — outage amplifies weather scarcity |
 
-### Cross-border features (+4) — AR neighbor prices, no API keys needed
+The AR(2) cross-border models decompose neighbour prices into a deterministic daily profile (workday vs weekend, 24 hours each) plus a stochastic AR(2) deviation. The AR deviation is damped (max root < 0.95) so multi-step forecasts converge to the daily profile within ~24 hours, ensuring stability over the full 170-hour horizon.
 
-AR(2) models predict cross-border neighbor prices using workday/weekend hourly profiles with damped autoregressive deviation. This captures the European market coupling signal that drives Finnish prices.
+`nuclear_x_scarcity` requires a free Fingrid API key for live nuclear production data; planned outage schedules come from the [Nord Pool UMM platform](https://umm.nordpoolgroup.com/) (public API, no key). Without the Fingrid key, training omits this one feature (model has 8 features) and inference can still load the bundled 9-feature model — the feature simply contributes 0 when no nuclear data is fed in.
 
-| Feature | Source | Method |
-|---------|--------|--------|
-| `ar_se1` | Sweden SE1 | AR(2) on deviation from hourly daytype profile, normalized ÷100 |
-| `ar_se3` | Sweden SE3 | AR(2) on deviation from hourly daytype profile, normalized ÷100 |
-| `ar_ee` | Estonia | AR(2) on deviation from hourly daytype profile, normalized ÷100 |
-| `export_potential_se3` | SE3 spread | max(0, -spread_7d_fi_se3) |
+### Features pruned in v2.2 (and why)
 
-The AR models decompose neighbor prices into deterministic daily profiles (workday vs weekend, 24 hours each) plus a stochastic deviation modeled by AR(2). The AR deviation is damped (max root < 0.95) so predictions converge to the daily profile within 24 hours, ensuring stability over the full 170-hour forecast window.
+The leave-one-out sweep removed 8 candidates from the v2.0/v2.1 17-feature set:
 
-### Nuclear features (+0-2) — requires Fingrid API key
+| Pruned feature | Reason |
+|---|---|
+| `solar_irradiance_weighted` | Finland's solar share too small to move spot prices; coefficient was indistinguishable from zero. |
+| `hour_sin`, `hour_cos` | Hour-of-day pattern is fully captured by the AR(2) daytype profiles in `ar_se3` / `ar_ee`. |
+| `month_sin` | Month-of-year captured well enough by `month_cos` alone (heating peak ↔ cosine extremum). |
+| `wind_calm_x_peak_am`, `wind_calm_x_peak_pm` | Collinear with `wind_log_scarcity`; their incremental MAE benefit was negative under the sweep. |
+| `ar_se1` | Strongly collinear with `ar_se3`. The Fenno-Skan / FennoSkan-2 cables connect FI to SE3, not SE1, so SE3 dominates the transmission signal. SE1 is still fetched for spread context but no longer enters the model. |
+| `nuclear_deficit` | Standalone nuclear deficit added little once `nuclear_x_scarcity` (the interaction term) was retained. Including both caused multicollinearity. |
 
-| Feature | Formula | Meaning |
-|---------|---------|---------|
-| `nuclear_deficit` | max(0, 1 - nuclear_mw/4372) | Fraction of nuclear capacity offline |
-| `nuclear_x_scarcity` | nuclear_deficit × scarcity_indicator | Nuclear outage amplifies weather-driven scarcity |
+Effect of pruning (training test split, 4-year history): MAE 23.94 → 20.07 EUR/MWh (−16%); R² 0.515 → 0.719 (+40%). Walk-forward MAE on a 180-day holdout is 20.99 EUR/MWh, well below the AR(2)-only neighbour-price floor of 37.82.
 
-**Forward-looking outage data:** Planned outage schedules are fetched from the [Nord Pool UMM platform](https://umm.nordpoolgroup.com/) (public API, no key required). The coordinator computes per-hour nuclear availability for the forecast horizon.
+### Bundled vs retraining: feature count cheat sheet
 
-### Feature count by configuration
+The bundled `model_coefs_default.json` is fixed at the 9-feature v2.2 model regardless of which APIs the runtime can reach. If you retrain locally (`python -m src.train_model …`), the produced model uses the largest subset of the 9 that your data sources support:
 
-| Configuration | Features | API keys |
-|---------------|----------|----------|
-| Weather only | 11 | None |
-| Weather + cross-border | 15 | None |
-| All sources | 17 | 1 (Fingrid, free) |
+| Available data | Trained features | Notes |
+|---|:---:|---|
+| Open-Meteo only | 5 | Drops `ar_se3`, `ar_ee`, `export_potential_se3`, `nuclear_x_scarcity` |
+| + elprisetjustnu.se (SE3) + Elering (EE) | 8 | Drops `nuclear_x_scarcity` |
+| + Fingrid (free key) | **9** | Full bundled-model feature set |
 
 ---
 
@@ -156,29 +158,28 @@ The legacy 24-element cumulative D(k) — useful for k=1..12, indistinguishable 
 
 **PAVA** (Pool Adjacent Violators Algorithm) is an isotonic regression method that enforces monotonicity. The cheap end requires non-decreasing PAVA; the peak end requires non-increasing PAVA (mirrored). Both are applied independently per direction after the per-segment Ridge predictions.
 
-**Architecture:**
-- 4 day segments aligned with day/night tariff: night (22-07, 9h), morning (07-12, 5h), midday (12-18, 6h), evening (18-22, 4h)
-- Per `(segment, direction, duration level)`: independent Ridge model with 10 features (after Phase A retrain — currently the production model still uses single-direction Ridge per `(segment, k)` with cheap/peak derived from sorting hourly forecasts; see `src/train_model.py:train_duration_model` for the migration plan)
-- Log-linear target: `log(D(k) + 55)`
+**Architecture (Phase A dual cheap/peak training):**
+- 4 day segments aligned with day/night tariff boundaries: night (22-07, 9 levels), morning (07-12, 5 levels), midday (12-18, 6 levels), evening (18-22, 4 levels). Total = 24 hourly slots.
+- Per `(segment, direction, k)`: independent Ridge model. Each segment carries `cheap_models` (k = 1..n_levels) and `peak_models` (k = 1..n_levels). Total bundled Ridge fits = 2 × (9 + 5 + 6 + 4) = **48 small models**.
+- Per-segment **12 features** (segment-level aggregates over the segment's hours):
+  `wind_mean`, `solar_mean`, `hdd_mean`, `se3_mean`, `se1_mean`, `nuclear_deficit`, `is_workday`, `month_sin`, `month_cos`, `wind_log_scarcity`, `net_load_mean`, `net_load_squared_mean`. The last two are zero-padded when Fingrid net-load forecasts are unavailable, matching the training-side fallback.
+- Log-linear target with v2.2-retuned offset: `log(D(k) + 100)`
 - Forgetting factor λ = 0.960 (half-life 17 days, optimized via sweep)
 - PAVA isotonic post-processing per direction:
-  - Cheap end: enforces `dk_cheap[0] ≤ dk_cheap[1] ≤ ... ≤ dk_cheap[11]`
-  - Peak end:  enforces `dk_peak[0]  ≥ dk_peak[1]  ≥ ... ≥ dk_peak[11]`
-- Segment-to-day reconstruction: extract sorted prices from each segment → merge into 24 hourly forecasts → `compute_dk_cheap_peak()` produces the two 12-element arrays
+  - Cheap end: enforces `dk_cheap[0] ≤ dk_cheap[1] ≤ … ≤ dk_cheap[11]`
+  - Peak end:  enforces `dk_peak[0]  ≥ dk_peak[1]  ≥ … ≥ dk_peak[11]`
+- Segment-to-day reconstruction: each segment yields its own sorted-price vector; segments merge into 24 hourly forecasts; `compute_dk_cheap_peak()` produces the two 12-element arrays exposed at the sensor.
 
-**Duration model features:**
-`wind_mean`, `solar_mean`, `hdd_mean`, `se3_mean`, `se1_mean`, `nuclear_deficit`, `is_workday`, `month_sin`, `month_cos`, `wind_log_scarcity`
+**Performance (Spearman rank correlation, last 365 days):**
 
-**Performance (Spearman rank correlation):**
+| Duration level | Use case | ρ |
+|:-:|:-:|:-:|
+| D(1) | Cheapest 1h | 0.898 |
+| D(4) | Cheapest 4h | 0.930 |
+| D(8) | Cheapest 8h | 0.937 |
+| D(24) | Daily average | 0.940 |
 
-| Duration level | Use case | ρ (all) | ρ (last 365d) |
-|:-:|:-:|:-:|:-:|
-| D(1) | Cheapest 1h | 0.895 | 0.898 |
-| D(4) | Cheapest 4h | 0.904 | 0.906 |
-| D(8) | Cheapest 8h | 0.929 | 0.921 |
-| D(24) | Daily average | 0.935 | 0.937 |
-
-**Output:** `model_coefs.json` containing hourly model coefficients, AR model parameters, and duration model coefficients.
+**Output:** `model_coefs.json` containing hourly Ridge coefficients (9-feature v2.2 bundled), AR(2) parameters for `ar_se3` and `ar_ee`, and the dual cheap/peak duration-model coefficients (48 segment-direction-k Ridge fits).
 
 ---
 
