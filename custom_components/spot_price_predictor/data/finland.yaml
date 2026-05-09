@@ -254,6 +254,36 @@ consumer_pricing:
   default_operator: "Elenia"
 
 # ============================================================================
+# Household PV system + baseload (Phase 1, post-prediction transform)
+# ============================================================================
+# These defaults populate the integration's optional "PV system" config step.
+# The user can override every value in the HA config flow UI; the values here
+# are only fallbacks. When `pv_capacity_kwp = 0` and no external entity is
+# set, all PV-aware sensor outputs are silently omitted.
+#
+# STABILITY INVARIANT (do not relax in Phase 1):
+#   The price forecaster MUST NOT consume optimizer-influenced consumption
+#   signals. `baseload_kwh_per_hour` represents NON-flexible household
+#   consumption only. Heat pump, EV, sauna, etc. are scheduled by the
+#   downstream optimizer and must NOT be folded into baseload here, or the
+#   coupled forecast↔optimizer system can oscillate without converging.
+#
+# See TECHNICAL_GUIDE.md for the marginal-cost theorem and the cross-system
+# contract that this invariant enforces.
+
+pv_system:
+  capacity_kwp: 0.0                  # 0 disables PV-aware outputs (default off)
+  tilt_deg: 45.0                     # Matches Open-Meteo's default fetch tilt
+  azimuth_deg: 180.0                 # 0=N, 90=E, 180=S, 270=W
+  system_efficiency: 0.85            # Lumped DC/AC + soiling + losses
+  external_entity: ""                # Optional HA entity overriding internal estimator
+  export_grid_fee_eur_kwh: 0.0       # Extra grid fee on exported energy (above sell commission)
+
+  baseload_kwh_per_hour: 0.8         # ~7000 kWh/yr typical Finnish household
+  baseload_day_factor: 1.2           # 07-22 multiplier
+  baseload_night_factor: 0.7         # 22-07 multiplier
+
+# ============================================================================
 # Feature engineering parameters
 # ============================================================================
 # These thresholds define nonlinear feature transforms.

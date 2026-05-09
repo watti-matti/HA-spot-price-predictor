@@ -261,6 +261,85 @@ Tämä integraatio tuottaa **ainoastaan ennusteita**. D(k) = CVaR -kestomatriisi
 
 ---
 
+## PV-tietoinen hinnoittelu (valinnainen)
+
+Kun käyttäjä asettaa nollasta poikkeavan `pv_capacity_kwp` -arvon (tai määrittää ulkoisen PV-ennuste-entiteetin), koordinaattori lisää jokaiseen ennustetuntiin **marginaalisen efektiivisen hinnan** — paljonko maksaa ajaa yksi lisä-kWh joustavaa kuormaa kyseisellä tunnilla, kun otetaan huomioon kotitalouden PV-tuotto ja ei-joustava perustaso.
+
+### Merkinnät
+
+Tunnille `h`:
+
+| Symboli | Merkitys |
+|---------|----------|
+| `b_h` | Kuluttajan ostohinta (EUR/kWh) = `(spot/1000 + marginaali + siirtohinta + vero) × ALV` |
+| `s_h` | Myyntihinta (EUR/kWh) = `spot/1000 − myyntipalkkio − valinn. verkkomaksu`. EI rajoitettu nollaan — voi olla negatiivinen ylituotantoaikoina. |
+| `c_h` | Konfiguroitu perustaso (kWh) = `baseload_kwh_per_hour × {päivä-/yökerroin}` |
+| `p_h` | Tunnittainen PV-tuotto (kWh) sisäisestä estimaattorista tai ulkoisesta entiteetistä. Rajoitettu välille `[0, capacity_kwp · efficiency]`. |
+
+### Marginaalinen efektiivinen hinta (D(k):n syöte)
+
+```
+pv_avail_h = max(0, p_h − c_h)
+from_pv    = min(1, pv_avail_h)
+from_grid  = 1 − from_pv
+m_h        = from_pv · s_h + from_grid · b_h
+```
+
+Ominaisuudet:
+
+- **Analyyttisesti rajoitettu**: `m_h ∈ [s_h, b_h]` aina.
+- **Itsekulutushyöty**: kun PV-ylijäämä ≥ 1 kWh, `m_h = s_h` (luovut vientituotosta, et maksa vähittäishintaa).
+- **Osittainen kattavuus**: lineaarinen interpolaatio osto- ja myyntihinnan välillä.
+- **Negatiivisen spotin vastuu**: `s_h < 0` siirtyy `m_h:hen` (harvinainen mutta todellinen).
+- **Äärellinen kapasiteetti**: `p_h ≤ capacity_kwp · efficiency` on kova katto.
+
+### PV-tietoiset D(k) halpa/kallis -käyrät
+
+Lasketaan suoraan paikallisen päivän 24 tuntittaisesta `effective_eur_kwh` -arvosta käyttäen samaa `compute_dk_cheap_peak`-apufunktiota kuin spot-pohjainen polku. Lajiteltu nousevasti → `dk_cheap_pv[12]` (monotonisesti ei-laskeva); laskevasti → `dk_peak_pv[12]` (monotonisesti ei-nouseva).
+
+**Vahvistettu 4 vuoden todellisella datalla** (1 460 päivää, 5 kWp): nolla monotonisuusrikkomusta, D(1):n keskiarvo 6,90 c/kWh — rajattu, realistinen, optimointiin valmis.
+
+### Vakausinvariantti — avoin silmukka optimoijaa kohden
+
+Ennusteen on pysyttävä deterministisenä funktiona `(spot, sää, PV-konfiguraatio, perustaso-konfiguraatio)` -syötteistä, jotta alavirran optimoijan joustavakuorma-päätökset eivät voi syöttyä takaisin seuraavan syklin hintaennusteeseen. Konkreettisesti:
+
+- **`_resolve_baseload(ts)` EI saa kutsua `hass.states.get` -kutsua tai mitään HA-entiteetinlukua.** Varmistettu grep-testillä tiedostossa `tests/test_coordinator_pv.py`.
+- **Konfiguroitu `baseload_kwh_per_hour` edustaa vain ei-joustavaa kulutusta.** Lämpöpumppu, sähköauto, sauna ja muut optimoijan ohjaamat kuormat on rajattu sopimuksella pois.
+- **`_read_external_pv_forecast()` SAA lukea HA-entiteetin** koska PV-ennuste on säävetoinen ja riippumaton optimoijan päätöksistä — takaisinkytkentää ei muodostu.
+
+### Ulkoinen PV-ennuste — tuetut attribuutti-konventiot
+
+`_read_external_pv_forecast()` on lähde-agnostinen. Automaattisesti tunnistetut attribuutit, prioriteettijärjestyksessä:
+
+| Konventio | Attribuutti | Muoto | Yksikkö | Muunnos |
+|---|---|---|---|---|
+| 1. Geneerinen ennustelista | `forecast` | list[dict] | kWh | suoraan (avaimet: `pv_kwh`, `kwh`, `energy`, `value`) |
+| 2. Forecast.Solar Wh-sanakirja | `wh_hours` | dict {ISO-aikaleima → numero} | Wh | `/ 1000` |
+| 3. Forecast.Solar W-sanakirja | `watts` | dict {ISO-aikaleima → numero} | W | `/ 1000` (1h granulariteetti) |
+| 4. EMHASS-malli | `irradiance` | list[numero] | W tai kWh | jos suuruus > 50 → W ja `/ 1000`; muutoin kWh |
+
+Kaikki polut palauttavat enintään 168 tunnittaista kWh-arvoa, jotka rajataan välille `[0, capacity_kwp · efficiency]`. Hiljainen palautuminen sisäiseen estimaattoriin, jos entiteetti puuttuu tai mikään konventio ei sovi.
+
+### Konfiguraatio
+
+PV-järjestelmän parametrit asetetaan HA-asennusvelhon valinnaisessa "PV system" -vaiheessa:
+
+| Kenttä | Oletus | Kuvaus |
+|--------|--------|--------|
+| `pv_capacity_kwp` | 0 (poissa käytöstä) | Asennettu PV-huipputeho |
+| `pv_tilt_deg` | 45 | Paneelin kallistus |
+| `pv_azimuth_deg` | 180 (etelä) | 0=P, 90=I, 180=E, 270=L |
+| `pv_system_efficiency` | 0,85 | DC/AC + likaantuminen + häviöt yhteenlaskettuna |
+| `pv_external_entity` | "" | Valinnainen HA-sensori, joka korvaa sisäisen estimaattorin |
+| `pv_export_grid_fee` | 0 | Lisämaksu viedystä energiasta (myyntipalkkion yli) |
+| `baseload_kwh_per_hour` | 0,8 | Vakio ei-joustava kulutus (~7 000 kWh/v tyypillisesti) |
+| `baseload_day_factor` | 1,2 | 07–22 kerroin |
+| `baseload_night_factor` | 0,7 | 22–07 kerroin |
+
+`pv_capacity_kwp = 0` (oletus) ja tyhjä `pv_external_entity` poistavat kaikki PV-tietoiset tulosteet siististi — integraatio palautuu täsmälleen v2.2 perustason käyttäytymiseen.
+
+---
+
 ## Home Assistant -integraatio
 
 ### Pyhäpäivien ja arkipäivien tunnistus

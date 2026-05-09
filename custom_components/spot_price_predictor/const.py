@@ -26,6 +26,40 @@ CONF_PV_SELL_COMMISSION = "pv_sell_commission"
 
 DEFAULT_PV_SELL_COMMISSION = 0.002   # EUR/kWh (0.2 c/kWh)
 
+# ---------------------------------------------------------------------------
+# Household PV production forecast (Phase 1, post-prediction transform).
+#
+# When `pv_capacity_kwp > 0` the coordinator augments each forecast hour with
+# a marginal effective price `m_h` representing the cost of running 1
+# additional kWh of flexible load at that hour given (PV, baseload). PV-aware
+# D(k) cheap/peak duration curves are computed directly from the sorted
+# hourly `m_h` per day. See TECHNICAL_GUIDE.md for the theorem and stability
+# invariant.
+#
+# IMPORTANT: in Phase 1 baseload is a constant (with optional day/night
+# shape). The coordinator never reads HA energy entities for baseload —
+# this guarantees the price forecast is open-loop with respect to the
+# downstream optimizer (no schedule oscillation).
+# ---------------------------------------------------------------------------
+CONF_PV_CAPACITY_KWP        = "pv_capacity_kwp"          # 0 disables PV-aware outputs
+CONF_PV_TILT_DEG            = "pv_tilt_deg"
+CONF_PV_AZIMUTH_DEG         = "pv_azimuth_deg"
+CONF_PV_SYSTEM_EFFICIENCY   = "pv_system_efficiency"
+CONF_PV_EXTERNAL_ENTITY     = "pv_external_entity"       # optional, overrides internal
+CONF_PV_EXPORT_GRID_FEE     = "pv_export_grid_fee"       # extra EUR/kWh fee on exported energy
+CONF_BASELOAD_KWH_PER_HOUR  = "baseload_kwh_per_hour"
+CONF_BASELOAD_DAY_FACTOR    = "baseload_day_factor"
+CONF_BASELOAD_NIGHT_FACTOR  = "baseload_night_factor"
+
+DEFAULT_PV_CAPACITY_KWP        = 0.0     # 0 = PV awareness disabled
+DEFAULT_PV_TILT_DEG            = 45.0    # matches Open-Meteo fetch
+DEFAULT_PV_AZIMUTH_DEG         = 180.0   # south
+DEFAULT_PV_SYSTEM_EFFICIENCY   = 0.85
+DEFAULT_PV_EXPORT_GRID_FEE     = 0.0     # EUR/kWh extra fee on export (above sell commission)
+DEFAULT_BASELOAD_KWH_PER_HOUR  = 0.8     # ~7000 kWh/yr typical Finnish household
+DEFAULT_BASELOAD_DAY_FACTOR    = 1.2
+DEFAULT_BASELOAD_NIGHT_FACTOR  = 0.7
+
 # DtACI online calibration layer (Phase B v2). Off by default; enabling
 # wires up per-(direction, k) DtACI on FI consumer-price D(i) statistics
 # and runs neighbour-zone (SE1, SE3, EE) bundles for bias diagnostics.

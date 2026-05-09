@@ -161,6 +161,23 @@ class PriceForecastSensor(CoordinatorEntity, SensorEntity):
                 attrs["week_avg_eur_kwh"] = round(sum(prices) / len(prices), 4)
                 attrs["week_max_eur_kwh"] = round(max(prices), 4)
 
+        # PV-aware attributes (only when PV is configured). All keys are
+        # absent when pv_enabled=False so card templates can branch cleanly.
+        if data.get("pv_enabled"):
+            attrs["pv_capacity_kwp"] = data.get("pv_capacity_kwp")
+            attrs["pv_source"] = data.get("pv_source")
+            attrs["baseload_kwh_per_hour"] = data.get("baseload_kwh_per_hour")
+            attrs["current_effective_eur_kwh"] = data.get(
+                "current_effective_eur_kwh")
+            if forecast:
+                eff = [f["effective_eur_kwh"] for f in forecast
+                       if "effective_eur_kwh" in f]
+                if eff:
+                    attrs["week_min_effective_eur_kwh"] = round(min(eff), 4)
+                    attrs["week_avg_effective_eur_kwh"] = round(
+                        sum(eff) / len(eff), 4)
+                    attrs["week_max_effective_eur_kwh"] = round(max(eff), 4)
+
         attrs.update(_status_attributes(data))
         return attrs
 
@@ -262,6 +279,28 @@ class DurationForecastSensor(CoordinatorEntity, SensorEntity):
             attrs["today_peak_4h_eur_kwh"] = peak_vec[3]
             attrs["today_peak_8h_eur_kwh"] = peak_vec[7]
             attrs["today_peak_12h_eur_kwh"] = peak_vec[11]
+
+        # PV-aware D(k) scalars (only when PV is configured). The 12-element
+        # vectors `dk_cheap_pv_eur_kwh` / `dk_peak_pv_eur_kwh` already live
+        # inside each `daily_forecast[i]` dict from the coordinator.
+        cheap_pv_vec = first.get("dk_cheap_pv_eur_kwh") or []
+        peak_pv_vec = first.get("dk_peak_pv_eur_kwh") or []
+        if len(cheap_pv_vec) >= 12:
+            attrs["today_cheap_pv_1h_eur_kwh"] = cheap_pv_vec[0]
+            attrs["today_cheap_pv_4h_eur_kwh"] = cheap_pv_vec[3]
+            attrs["today_cheap_pv_8h_eur_kwh"] = cheap_pv_vec[7]
+            attrs["today_cheap_pv_12h_eur_kwh"] = cheap_pv_vec[11]
+        if len(peak_pv_vec) >= 12:
+            attrs["today_peak_pv_1h_eur_kwh"] = peak_pv_vec[0]
+            attrs["today_peak_pv_4h_eur_kwh"] = peak_pv_vec[3]
+            attrs["today_peak_pv_8h_eur_kwh"] = peak_pv_vec[7]
+            attrs["today_peak_pv_12h_eur_kwh"] = peak_pv_vec[11]
+        # Surface PV metadata at the duration sensor too for dashboard
+        # convenience (matches PriceForecastSensor)
+        if self.coordinator.data.get("pv_enabled"):
+            attrs["pv_capacity_kwp"] = self.coordinator.data.get(
+                "pv_capacity_kwp")
+            attrs["pv_source"] = self.coordinator.data.get("pv_source")
 
         # DtACI calibrated bands for today (consumer EUR/kWh). Only
         # populated when the layer is enabled and warmed up; missing

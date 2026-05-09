@@ -30,6 +30,23 @@ from .const import (
     DEFAULT_PV_SELL_COMMISSION,
     CONF_ENABLE_DTACI_DK,
     DEFAULT_ENABLE_DTACI_DK,
+    CONF_PV_CAPACITY_KWP,
+    CONF_PV_TILT_DEG,
+    CONF_PV_AZIMUTH_DEG,
+    CONF_PV_SYSTEM_EFFICIENCY,
+    CONF_PV_EXTERNAL_ENTITY,
+    CONF_PV_EXPORT_GRID_FEE,
+    CONF_BASELOAD_KWH_PER_HOUR,
+    CONF_BASELOAD_DAY_FACTOR,
+    CONF_BASELOAD_NIGHT_FACTOR,
+    DEFAULT_PV_CAPACITY_KWP,
+    DEFAULT_PV_TILT_DEG,
+    DEFAULT_PV_AZIMUTH_DEG,
+    DEFAULT_PV_SYSTEM_EFFICIENCY,
+    DEFAULT_PV_EXPORT_GRID_FEE,
+    DEFAULT_BASELOAD_KWH_PER_HOUR,
+    DEFAULT_BASELOAD_DAY_FACTOR,
+    DEFAULT_BASELOAD_NIGHT_FACTOR,
     REGIONS,
     OPERATORS,
     DEFAULT_VAT_MULTIPLIER,
@@ -166,8 +183,7 @@ class SpotPricePredictorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     CONF_ENABLE_DTACI_DK, DEFAULT_ENABLE_DTACI_DK
                 )
 
-                title = f"Spot Price ({REGIONS.get(self._data.get(CONF_REGION, 'finland'), 'Finland')})"
-                return self.async_create_entry(title=title, data=self._data)
+                return await self.async_step_pv_system()
 
         schema = vol.Schema({
             vol.Optional(CONF_FINGRID_API_KEY, default=""): str,
@@ -180,6 +196,82 @@ class SpotPricePredictorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="optional_apis", data_schema=schema, errors=errors
         )
+
+    async def async_step_pv_system(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.FlowResult:
+        """Step 4: Optional household PV system + baseload (skip if no PV)."""
+        if user_input is not None:
+            self._data[CONF_PV_CAPACITY_KWP] = float(
+                user_input.get(CONF_PV_CAPACITY_KWP, DEFAULT_PV_CAPACITY_KWP)
+            )
+            self._data[CONF_PV_TILT_DEG] = float(
+                user_input.get(CONF_PV_TILT_DEG, DEFAULT_PV_TILT_DEG)
+            )
+            self._data[CONF_PV_AZIMUTH_DEG] = float(
+                user_input.get(CONF_PV_AZIMUTH_DEG, DEFAULT_PV_AZIMUTH_DEG)
+            )
+            self._data[CONF_PV_SYSTEM_EFFICIENCY] = float(
+                user_input.get(CONF_PV_SYSTEM_EFFICIENCY, DEFAULT_PV_SYSTEM_EFFICIENCY)
+            )
+            self._data[CONF_PV_EXTERNAL_ENTITY] = user_input.get(
+                CONF_PV_EXTERNAL_ENTITY, ""
+            )
+            self._data[CONF_PV_EXPORT_GRID_FEE] = float(
+                user_input.get(CONF_PV_EXPORT_GRID_FEE, DEFAULT_PV_EXPORT_GRID_FEE)
+            )
+            self._data[CONF_BASELOAD_KWH_PER_HOUR] = float(
+                user_input.get(CONF_BASELOAD_KWH_PER_HOUR, DEFAULT_BASELOAD_KWH_PER_HOUR)
+            )
+            self._data[CONF_BASELOAD_DAY_FACTOR] = float(
+                user_input.get(CONF_BASELOAD_DAY_FACTOR, DEFAULT_BASELOAD_DAY_FACTOR)
+            )
+            self._data[CONF_BASELOAD_NIGHT_FACTOR] = float(
+                user_input.get(CONF_BASELOAD_NIGHT_FACTOR, DEFAULT_BASELOAD_NIGHT_FACTOR)
+            )
+
+            title = f"Spot Price ({REGIONS.get(self._data.get(CONF_REGION, 'finland'), 'Finland')})"
+            return self.async_create_entry(title=title, data=self._data)
+
+        # Description text shown to the user. Stability invariant is critical:
+        # baseload represents NON-FLEXIBLE consumption only. Flexible loads
+        # (heat pump, EV, sauna) are scheduled by the downstream optimizer.
+        schema = vol.Schema({
+            vol.Optional(
+                CONF_PV_CAPACITY_KWP, default=DEFAULT_PV_CAPACITY_KWP,
+                description={"suggested_value": DEFAULT_PV_CAPACITY_KWP},
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=50.0)),
+            vol.Optional(
+                CONF_PV_TILT_DEG, default=DEFAULT_PV_TILT_DEG,
+                description={"suggested_value": DEFAULT_PV_TILT_DEG},
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=90.0)),
+            vol.Optional(
+                CONF_PV_AZIMUTH_DEG, default=DEFAULT_PV_AZIMUTH_DEG,
+                description={"suggested_value": DEFAULT_PV_AZIMUTH_DEG},
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=360.0)),
+            vol.Optional(
+                CONF_PV_SYSTEM_EFFICIENCY, default=DEFAULT_PV_SYSTEM_EFFICIENCY,
+                description={"suggested_value": DEFAULT_PV_SYSTEM_EFFICIENCY},
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.5, max=1.0)),
+            vol.Optional(CONF_PV_EXTERNAL_ENTITY, default=""): str,
+            vol.Optional(
+                CONF_PV_EXPORT_GRID_FEE, default=DEFAULT_PV_EXPORT_GRID_FEE,
+                description={"suggested_value": DEFAULT_PV_EXPORT_GRID_FEE},
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=0.10)),
+            vol.Optional(
+                CONF_BASELOAD_KWH_PER_HOUR, default=DEFAULT_BASELOAD_KWH_PER_HOUR,
+                description={"suggested_value": DEFAULT_BASELOAD_KWH_PER_HOUR},
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.05, max=10.0)),
+            vol.Optional(
+                CONF_BASELOAD_DAY_FACTOR, default=DEFAULT_BASELOAD_DAY_FACTOR,
+                description={"suggested_value": DEFAULT_BASELOAD_DAY_FACTOR},
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.1, max=5.0)),
+            vol.Optional(
+                CONF_BASELOAD_NIGHT_FACTOR, default=DEFAULT_BASELOAD_NIGHT_FACTOR,
+                description={"suggested_value": DEFAULT_BASELOAD_NIGHT_FACTOR},
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.1, max=5.0)),
+        })
+        return self.async_show_form(step_id="pv_system", data_schema=schema)
 
     @staticmethod
     @callback
@@ -253,6 +345,34 @@ class SpotPriceOptionsFlow(config_entries.OptionsFlow):
                 new_data[CONF_PV_SELL_COMMISSION] = user_input.get(
                     CONF_PV_SELL_COMMISSION, DEFAULT_PV_SELL_COMMISSION
                 )
+                # Household PV system + baseload (Phase 1)
+                new_data[CONF_PV_CAPACITY_KWP] = float(user_input.get(
+                    CONF_PV_CAPACITY_KWP, DEFAULT_PV_CAPACITY_KWP
+                ))
+                new_data[CONF_PV_TILT_DEG] = float(user_input.get(
+                    CONF_PV_TILT_DEG, DEFAULT_PV_TILT_DEG
+                ))
+                new_data[CONF_PV_AZIMUTH_DEG] = float(user_input.get(
+                    CONF_PV_AZIMUTH_DEG, DEFAULT_PV_AZIMUTH_DEG
+                ))
+                new_data[CONF_PV_SYSTEM_EFFICIENCY] = float(user_input.get(
+                    CONF_PV_SYSTEM_EFFICIENCY, DEFAULT_PV_SYSTEM_EFFICIENCY
+                ))
+                new_data[CONF_PV_EXTERNAL_ENTITY] = user_input.get(
+                    CONF_PV_EXTERNAL_ENTITY, ""
+                )
+                new_data[CONF_PV_EXPORT_GRID_FEE] = float(user_input.get(
+                    CONF_PV_EXPORT_GRID_FEE, DEFAULT_PV_EXPORT_GRID_FEE
+                ))
+                new_data[CONF_BASELOAD_KWH_PER_HOUR] = float(user_input.get(
+                    CONF_BASELOAD_KWH_PER_HOUR, DEFAULT_BASELOAD_KWH_PER_HOUR
+                ))
+                new_data[CONF_BASELOAD_DAY_FACTOR] = float(user_input.get(
+                    CONF_BASELOAD_DAY_FACTOR, DEFAULT_BASELOAD_DAY_FACTOR
+                ))
+                new_data[CONF_BASELOAD_NIGHT_FACTOR] = float(user_input.get(
+                    CONF_BASELOAD_NIGHT_FACTOR, DEFAULT_BASELOAD_NIGHT_FACTOR
+                ))
 
                 self.hass.config_entries.async_update_entry(
                     self._config_entry, data=new_data
@@ -318,6 +438,50 @@ class SpotPriceOptionsFlow(config_entries.OptionsFlow):
                 default=current.get(CONF_PV_SELL_COMMISSION, DEFAULT_PV_SELL_COMMISSION),
                 description={"suggested_value": current.get(CONF_PV_SELL_COMMISSION, DEFAULT_PV_SELL_COMMISSION)},
             ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=0.10)),
+            vol.Optional(
+                CONF_PV_CAPACITY_KWP,
+                default=current.get(CONF_PV_CAPACITY_KWP, DEFAULT_PV_CAPACITY_KWP),
+                description={"suggested_value": current.get(CONF_PV_CAPACITY_KWP, DEFAULT_PV_CAPACITY_KWP)},
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=50.0)),
+            vol.Optional(
+                CONF_PV_TILT_DEG,
+                default=current.get(CONF_PV_TILT_DEG, DEFAULT_PV_TILT_DEG),
+                description={"suggested_value": current.get(CONF_PV_TILT_DEG, DEFAULT_PV_TILT_DEG)},
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=90.0)),
+            vol.Optional(
+                CONF_PV_AZIMUTH_DEG,
+                default=current.get(CONF_PV_AZIMUTH_DEG, DEFAULT_PV_AZIMUTH_DEG),
+                description={"suggested_value": current.get(CONF_PV_AZIMUTH_DEG, DEFAULT_PV_AZIMUTH_DEG)},
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=360.0)),
+            vol.Optional(
+                CONF_PV_SYSTEM_EFFICIENCY,
+                default=current.get(CONF_PV_SYSTEM_EFFICIENCY, DEFAULT_PV_SYSTEM_EFFICIENCY),
+                description={"suggested_value": current.get(CONF_PV_SYSTEM_EFFICIENCY, DEFAULT_PV_SYSTEM_EFFICIENCY)},
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.5, max=1.0)),
+            vol.Optional(
+                CONF_PV_EXTERNAL_ENTITY,
+                default=current.get(CONF_PV_EXTERNAL_ENTITY, ""),
+            ): str,
+            vol.Optional(
+                CONF_PV_EXPORT_GRID_FEE,
+                default=current.get(CONF_PV_EXPORT_GRID_FEE, DEFAULT_PV_EXPORT_GRID_FEE),
+                description={"suggested_value": current.get(CONF_PV_EXPORT_GRID_FEE, DEFAULT_PV_EXPORT_GRID_FEE)},
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=0.10)),
+            vol.Optional(
+                CONF_BASELOAD_KWH_PER_HOUR,
+                default=current.get(CONF_BASELOAD_KWH_PER_HOUR, DEFAULT_BASELOAD_KWH_PER_HOUR),
+                description={"suggested_value": current.get(CONF_BASELOAD_KWH_PER_HOUR, DEFAULT_BASELOAD_KWH_PER_HOUR)},
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.05, max=10.0)),
+            vol.Optional(
+                CONF_BASELOAD_DAY_FACTOR,
+                default=current.get(CONF_BASELOAD_DAY_FACTOR, DEFAULT_BASELOAD_DAY_FACTOR),
+                description={"suggested_value": current.get(CONF_BASELOAD_DAY_FACTOR, DEFAULT_BASELOAD_DAY_FACTOR)},
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.1, max=5.0)),
+            vol.Optional(
+                CONF_BASELOAD_NIGHT_FACTOR,
+                default=current.get(CONF_BASELOAD_NIGHT_FACTOR, DEFAULT_BASELOAD_NIGHT_FACTOR),
+                description={"suggested_value": current.get(CONF_BASELOAD_NIGHT_FACTOR, DEFAULT_BASELOAD_NIGHT_FACTOR)},
+            ): vol.All(vol.Coerce(float), vol.Range(min=0.1, max=5.0)),
         })
         return self.async_show_form(
             step_id="init", data_schema=schema, errors=errors

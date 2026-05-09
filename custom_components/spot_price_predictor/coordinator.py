@@ -24,8 +24,27 @@ from .const import (
     CONF_CUSTOM_VAT,
     CONF_CUSTOM_ENERGY_TAX,
     CONF_SELLER_MARGIN,
+    CONF_PV_SELL_COMMISSION,
+    CONF_PV_CAPACITY_KWP,
+    CONF_PV_TILT_DEG,
+    CONF_PV_AZIMUTH_DEG,
+    CONF_PV_SYSTEM_EFFICIENCY,
+    CONF_PV_EXTERNAL_ENTITY,
+    CONF_PV_EXPORT_GRID_FEE,
+    CONF_BASELOAD_KWH_PER_HOUR,
+    CONF_BASELOAD_DAY_FACTOR,
+    CONF_BASELOAD_NIGHT_FACTOR,
     DEFAULT_ENABLE_DTACI_DK,
     DEFAULT_SELLER_MARGIN,
+    DEFAULT_PV_SELL_COMMISSION,
+    DEFAULT_PV_CAPACITY_KWP,
+    DEFAULT_PV_TILT_DEG,
+    DEFAULT_PV_AZIMUTH_DEG,
+    DEFAULT_PV_SYSTEM_EFFICIENCY,
+    DEFAULT_PV_EXPORT_GRID_FEE,
+    DEFAULT_BASELOAD_KWH_PER_HOUR,
+    DEFAULT_BASELOAD_DAY_FACTOR,
+    DEFAULT_BASELOAD_NIGHT_FACTOR,
     DTACI_TARGET_COVERAGE,
     DTACI_ZONES,
     OPERATORS,
@@ -41,6 +60,11 @@ from .dk_utils import compute_dk_cheap_peak
 from .features import build_forecast_features
 from .holidays import build_holiday_set
 from .model import SpotPriceModel
+from .pv_estimate import (
+    estimate_pv_kwh_per_hour,
+    marginal_effective_eur_kwh,
+    net_household_cost_eur,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -88,6 +112,36 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
         self.enable_dtaci_dk = entry.data.get(
             CONF_ENABLE_DTACI_DK, DEFAULT_ENABLE_DTACI_DK,
         )
+
+        # ── Household PV system + baseload (Phase 1, post-prediction transform)
+        # When `pv_capacity_kwp > 0` the coordinator augments forecast hours
+        # with PV-aware marginal effective price `m_h` and per-day PV-aware
+        # D(k) cheap/peak duration curves. Baseload is a constant (with
+        # optional day/night shape) — coordinator NEVER reads HA energy
+        # entities for baseload (stability invariant: open-loop wrt the
+        # downstream optimizer; see TECHNICAL_GUIDE).
+        self.pv_capacity_kwp = float(entry.data.get(
+            CONF_PV_CAPACITY_KWP, DEFAULT_PV_CAPACITY_KWP))
+        self.pv_tilt_deg = float(entry.data.get(
+            CONF_PV_TILT_DEG, DEFAULT_PV_TILT_DEG))
+        self.pv_azimuth_deg = float(entry.data.get(
+            CONF_PV_AZIMUTH_DEG, DEFAULT_PV_AZIMUTH_DEG))
+        self.pv_efficiency = float(entry.data.get(
+            CONF_PV_SYSTEM_EFFICIENCY, DEFAULT_PV_SYSTEM_EFFICIENCY))
+        self.pv_external_entity = entry.data.get(
+            CONF_PV_EXTERNAL_ENTITY, "") or ""
+        self.pv_export_grid_fee = float(entry.data.get(
+            CONF_PV_EXPORT_GRID_FEE, DEFAULT_PV_EXPORT_GRID_FEE))
+        self.pv_sell_commission = float(entry.data.get(
+            CONF_PV_SELL_COMMISSION, DEFAULT_PV_SELL_COMMISSION))
+        self.baseload_kwh_per_hour = float(entry.data.get(
+            CONF_BASELOAD_KWH_PER_HOUR, DEFAULT_BASELOAD_KWH_PER_HOUR))
+        self.baseload_day_factor = float(entry.data.get(
+            CONF_BASELOAD_DAY_FACTOR, DEFAULT_BASELOAD_DAY_FACTOR))
+        self.baseload_night_factor = float(entry.data.get(
+            CONF_BASELOAD_NIGHT_FACTOR, DEFAULT_BASELOAD_NIGHT_FACTOR))
+        self._pv_enabled = self.pv_capacity_kwp > 0.0 or bool(
+            self.pv_external_entity)
 
         # DtACI per-D(i) bundles (one per zone). Lazy-loaded on first
         # use so cold-start doesn't block the initial coordinator
@@ -143,6 +197,173 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
         spot_kwh = max(0.0, spot_eur_mwh) / 1000.0
         return (spot_kwh + self.seller_margin + transfer + self.energy_tax) \
             * self.vat_multiplier
+
+    # ── PV-aware effective pricing (Phase 1) ──────────────────────
+
+    def _spot_to_sell_eur_kwh(self, spot_eur_mwh: float) -> float:
+        """Sell price (EUR/kWh) for excess PV exported to grid.
+
+        Note: `spot_eur_mwh` is NOT clipped at zero — when spot is negative,
+        `s_h` becomes negative and the user pays to export. The Phase 1
+        marginal-cost model handles this case correctly (m_h ∈ [s_h, b_h]
+        can include slightly negative values during deep oversupply).
+        """
+        return (float(spot_eur_mwh) / 1000.0
+                - self.pv_sell_commission
+                - self.pv_export_grid_fee)
+
+    def _resolve_baseload(self, ts_utc: datetime) -> float:
+        """Constant baseload with optional day/night shape (kWh/h).
+
+        STABILITY INVARIANT: this method must NEVER read Home Assistant
+        state entities (energy sensors, etc.). Baseload depends only on
+        configuration, so the price forecast is open-loop with respect to
+        the downstream optimizer's flexible-load decisions. Violating this
+        contract can cause schedule oscillation between layers.
+        """
+        local_hour = self._get_local_hour(ts_utc)
+        is_night = local_hour < 7 or local_hour >= 22
+        factor = self.baseload_night_factor if is_night else self.baseload_day_factor
+        return max(0.05, self.baseload_kwh_per_hour * factor)
+
+    def _read_external_pv_forecast(self) -> list[float] | None:
+        """Read up to 168 h of PV forecast from a configured HA entity.
+
+        Source-agnostic: auto-detects four common attribute conventions
+        published by HA PV-forecast integrations and templates. Returns a
+        list of hourly kWh values, or None if no convention matches —
+        coordinator silently falls back to the internal estimator.
+
+        Supported attribute conventions (checked in order):
+
+        1. ``forecast`` — list[dict] with hourly entries; keys searched:
+           ``pv_kwh``, ``kwh``, ``energy``, ``value``. Unit kWh.
+        2. ``wh_hours`` — dict {ISO timestamp -> Wh}. Sorted by timestamp,
+           divided by 1000 to convert to kWh.
+        3. ``watts`` — dict {ISO timestamp -> W}. Sorted by timestamp; at
+           1-hour granularity 1 W ≈ 0.001 kWh.
+        4. ``irradiance`` — list[number] of pre-multiplied PV power.
+           Unit auto-detected by magnitude: any value > 50 → assume W
+           (divide by 1000); otherwise treat as kWh.
+
+        Each value is clamped to ``[0, capacity_kwp · efficiency]`` so a
+        broken template can't propagate unrealistic spikes downstream.
+
+        Note: reading the entity itself is allowed because the PV forecast
+        is weather-driven and independent of optimizer decisions — no
+        feedback loop is created. (See stability invariant in
+        ``_resolve_baseload``.)
+        """
+        if not self.pv_external_entity:
+            return None
+        try:
+            state = self.hass.states.get(self.pv_external_entity)
+            if state is None:
+                return None
+            attrs = state.attributes
+
+            ceiling = (self.pv_capacity_kwp * self.pv_efficiency
+                       if self.pv_capacity_kwp > 0 else 100.0)
+
+            def _clamp(v: Any) -> float:
+                try:
+                    f = float(v)
+                except (TypeError, ValueError):
+                    return 0.0
+                if f != f:  # NaN
+                    return 0.0
+                return max(0.0, min(f, ceiling))
+
+            # 1) forecast = list of dicts in kWh
+            forecast_attr = attrs.get("forecast")
+            if isinstance(forecast_attr, list) and forecast_attr:
+                values: list[float] = []
+                for entry in forecast_attr:
+                    if isinstance(entry, dict):
+                        v = (entry.get("pv_kwh")
+                             or entry.get("kwh")
+                             or entry.get("energy")
+                             or entry.get("value")
+                             or 0.0)
+                    else:
+                        v = entry
+                    values.append(_clamp(v))
+                if values:
+                    return values
+
+            # 2) wh_hours = dict {ISO ts: Wh}
+            wh_hours = attrs.get("wh_hours")
+            if isinstance(wh_hours, dict) and wh_hours:
+                items = sorted(wh_hours.items(), key=lambda kv: kv[0])
+                return [_clamp(float(v) / 1000.0) for _, v in items]
+
+            # 3) watts = dict {ISO ts: W}; at 1-hour granularity 1 W ≈ 1 Wh
+            watts = attrs.get("watts")
+            if isinstance(watts, dict) and watts:
+                items = sorted(watts.items(), key=lambda kv: kv[0])
+                return [_clamp(float(v) / 1000.0) for _, v in items]
+
+            # 4) irradiance = list[number] (pre-multiplied PV power);
+            #    auto-detect W vs kWh by magnitude.
+            irr_attr = attrs.get("irradiance")
+            if isinstance(irr_attr, list) and irr_attr:
+                # Skip non-numeric entries when probing magnitude
+                numeric: list[float] = []
+                for v in irr_attr:
+                    try:
+                        numeric.append(float(v))
+                    except (TypeError, ValueError):
+                        continue
+                if not numeric:
+                    return None
+                # If the largest magnitude exceeds 50, assume Watts
+                divisor = 1000.0 if max(numeric) > 50.0 else 1.0
+                return [_clamp(v / divisor) for v in numeric]
+
+            return None
+        except Exception as err:
+            _LOGGER.warning(
+                "PV external entity '%s' read failed: %s; "
+                "falling back to internal estimator",
+                self.pv_external_entity, err)
+            return None
+
+    def _compute_pv_forecast(
+        self,
+        weather: list[dict[str, Any]],
+        n_hours: int,
+    ) -> list[float]:
+        """Build per-hour PV production forecast (kWh).
+
+        Returns a list of length `n_hours`. External-entity output is
+        truncated/extended with zeros to match `n_hours`. When PV is
+        disabled (capacity_kwp = 0 and no external entity), returns all
+        zeros (caller should treat this as PV-aware path being inactive).
+        """
+        if not self._pv_enabled:
+            return [0.0] * n_hours
+
+        # Try external entity first
+        external = self._read_external_pv_forecast()
+        if external:
+            out = list(external[:n_hours])
+            while len(out) < n_hours:
+                out.append(0.0)
+            return out
+
+        # Internal estimator from Open-Meteo solar irradiance
+        out: list[float] = []
+        for i in range(n_hours):
+            irr = (weather[i].get("solar_weighted", 0.0)
+                   if i < len(weather) else 0.0)
+            out.append(estimate_pv_kwh_per_hour(
+                irradiance_w_m2=float(irr),
+                capacity_kwp=self.pv_capacity_kwp,
+                tilt_deg=self.pv_tilt_deg,
+                azimuth_deg=self.pv_azimuth_deg,
+                efficiency=self.pv_efficiency,
+            ))
+        return out
 
     # ── DtACI per-D(i) calibration layer ──────────────────────────
 
@@ -466,7 +687,10 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
             # Run model inference
             predictions = self.model.predict_batch(feature_rows)
 
-            # Build unified forecast: spot + consumer + weather per hour
+            # Build PV forecast (length = number of predictions; all zeros when PV disabled)
+            pv_kwh = self._compute_pv_forecast(weather, len(predictions))
+
+            # Build unified forecast: spot + consumer + weather (+ PV-aware) per hour
             forecast = []
             for i, pred in enumerate(predictions):
                 ts = now + timedelta(hours=i)
@@ -482,6 +706,31 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                     "solar": round(weather[i].get("solar_weighted", 0), 0) if i < len(weather) else None,
                     "temp": round(weather[i].get("temp_weighted", 0), 1) if i < len(weather) else None,
                 }
+
+                # PV-aware augmentation (only when capacity > 0 or external entity)
+                if self._pv_enabled:
+                    p_h = pv_kwh[i]
+                    c_h = self._resolve_baseload(ts)
+                    s_h = self._spot_to_sell_eur_kwh(pred)
+                    m_h = marginal_effective_eur_kwh(
+                        buy_eur_kwh=consumer,
+                        sell_eur_kwh=s_h,
+                        pv_kwh=p_h,
+                        baseload_kwh=c_h,
+                    )
+                    n_h = net_household_cost_eur(
+                        buy_eur_kwh=consumer,
+                        sell_eur_kwh=s_h,
+                        pv_kwh=p_h,
+                        consumption_kwh=c_h,
+                    )
+                    entry["pv_production_kwh"] = round(p_h, 3)
+                    entry["baseload_kwh"] = round(c_h, 3)
+                    entry["effective_eur_kwh"] = round(m_h, 4)
+                    entry["net_household_cost_eur"] = round(n_h, 4)
+                    entry["is_export_hour"] = bool(p_h > c_h)
+                    entry["sell_eur_kwh"] = round(s_h, 4)
+
                 forecast.append(entry)
 
             # D(k) duration curve forecast (7-day daily curves)
@@ -563,6 +812,20 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                 "last_update": now.isoformat(),
                 "stale": False,
                 "data_age_minutes": 0,
+                # PV-aware metadata (always emitted; flags downstream)
+                "pv_enabled": bool(self._pv_enabled),
+                "pv_capacity_kwp": self.pv_capacity_kwp if self._pv_enabled else 0.0,
+                "pv_source": (
+                    "external" if (self._pv_enabled and self.pv_external_entity)
+                    else ("internal" if self._pv_enabled else "disabled")
+                ),
+                "baseload_kwh_per_hour": (
+                    self.baseload_kwh_per_hour if self._pv_enabled else 0.0
+                ),
+                "current_effective_eur_kwh": (
+                    forecast[0].get("effective_eur_kwh")
+                    if (self._pv_enabled and forecast) else None
+                ),
             }
 
             # Cache successful result and restore normal interval
@@ -857,6 +1120,35 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                 "dk_consumer_eur_kwh": dk_consumer,
                 "dk_spot_eur_mwh": [round(v, 2) for v in dk_spot],
             }
+
+            # ── Phase 1 PV-aware D(k) cheap/peak ────────────────────
+            # Computed directly from the 24 hourly `effective_eur_kwh`
+            # (marginal cost) values for this date in the hourly forecast.
+            # This bypasses the duration model intermediate — order
+            # statistics over m_h are mathematically clean (Theorem in
+            # TECHNICAL_GUIDE) and bounded in [s_h, b_h] per hour.
+            if self._pv_enabled:
+                day_effectives: list[float] = []
+                for h in day_hours:
+                    idx = h["forecast_idx"]
+                    if idx < len(forecast):
+                        m_val = forecast[idx].get("effective_eur_kwh")
+                        if m_val is not None:
+                            day_effectives.append(float(m_val))
+                if len(day_effectives) == 24:
+                    try:
+                        dk_cheap_pv, dk_peak_pv = compute_dk_cheap_peak(
+                            day_effectives)
+                        day_entry["dk_cheap_pv_eur_kwh"] = [
+                            round(v, 4) for v in dk_cheap_pv]
+                        day_entry["dk_peak_pv_eur_kwh"] = [
+                            round(v, 4) for v in dk_peak_pv]
+                    except ValueError as exc:
+                        _LOGGER.warning(
+                            "PV-aware cheap/peak D(k) failed for %s: %s",
+                            date_str, exc,
+                        )
+
             result.append(day_entry)
 
         _LOGGER.info("Duration forecast computed: %d days", len(result))

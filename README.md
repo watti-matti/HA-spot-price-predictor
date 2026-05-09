@@ -12,6 +12,7 @@
 
 - **170-hour consumer price forecast** — predict your electricity cost (EUR/kWh) for the next 7 days, including spot price, transfer tariff, seller margin, energy tax, and VAT
 - **D(k) cheap/peak duration curves** — 7-day forecast of two complementary 12-level curves: `dk_cheap[k]` = mean price of the cheapest k hours (best achievable cost for deferrable load) and `dk_peak[k]` = mean price of the priciest k hours (worst-case planning cost). Equivalent to CVaR at α=k/24 in both tails of the daily price distribution.
+- **Optional PV-aware effective price** — configure your rooftop solar (kWp, tilt, azimuth, efficiency) and the integration produces an `effective_eur_kwh` per hour and PV-aware D(k) cheap/peak curves. Captures both self-consumption savings and export revenue, including the rare "negative spot + high PV" liability case. Uses Open-Meteo irradiance internally; can also read an external PV forecast entity (e.g. Forecast.Solar, custom templates) for users with multi-array setups or shading.
 - **Works out-of-the-box** — pre-trained model included, no setup beyond choosing your distribution operator
 - **Modular data sources** — starts with free weather + cross-border data, optionally adds Fingrid nuclear data for the full 9-feature model
 - **Sign-validated features** — all model coefficients match economic theory (more wind = lower price, more scarcity = higher price)
@@ -109,6 +110,27 @@ The **Duration Forecast** sensor provides daily duration curves split into a che
 **Optional online calibration (DtACI).** Enable the `enable_dtaci_dk` option to wrap the duration forecast with adaptive conformal prediction intervals (Gibbs & Candes, JMLR 2024) plus per-D(i) online bias correction. When on, each daily forecast entry gains four 12-element band attributes — `dk_cheap_lower/upper_eur_kwh` and `dk_peak_lower/upper_eur_kwh` — that achieve 90% marginal coverage and adapt to regime shifts. A `dtaci_diagnostics` attribute exposes per-(direction, k) coverage / bias EMA / dominant gamma / weight entropy for monitoring; see [docs/yaml_examples/dtaci_diagnostics_card.yaml](docs/yaml_examples/dtaci_diagnostics_card.yaml) for a Lovelace card. Calibrated intervals appear after approximately 5 days of reconciled actuals (v2.2: warmup lowered from ~14 days).
 
 **Design principle:** This integration provides *forecasts only*. The cheap/peak curves are the primary API for downstream systems — thermal optimization, load scheduling, and heat pump control consume `dk_cheap` for cost-minimization and `dk_peak` for risk-aware planning.
+
+#### Optional PV-aware effective price (configure in setup UI)
+
+When a non-zero `pv_capacity_kwp` is set in the optional "PV system" config step, every `forecast[i]` entry gains:
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `pv_production_kwh` | float | Estimated PV output for the hour (kWh) |
+| `baseload_kwh` | float | Configured non-flexible household consumption for that hour |
+| `effective_eur_kwh` | float | **Marginal cost of running 1 additional kWh of flexible load** at this hour given PV. Bounded in `[s_h, b_h]` (sell ≤ effective ≤ buy). |
+| `net_household_cost_eur` | float | Informational raw EUR/h flow (export revenue ↔ grid import). Not used for D(k). |
+| `is_export_hour` | bool | True when PV exceeds baseload |
+| `sell_eur_kwh` | float | Sell price = spot − commission − optional grid fee. Can be negative during deep oversupply. |
+
+The duration sensor gains parallel `dk_cheap_pv_eur_kwh[12]` / `dk_peak_pv_eur_kwh[12]` curves and matching `today_cheap_pv_{1,4,8,12}h_eur_kwh` / `today_peak_pv_{1,4,8,12}h_eur_kwh` scalars derived from the sorted hourly `effective_eur_kwh` per day.
+
+**PV input modes:**
+- **Internal estimator (default)** — uses Open-Meteo `global_tilted_irradiance_instant` × your configured `kwp` × tilt/azimuth correction × `efficiency`. Free, 7-day horizon, no rate limit.
+- **External entity (override)** — set `pv_external_entity` to any HA sensor whose attributes match one of: `forecast` list-of-dict (kWh), `wh_hours` dict (Wh), `watts` dict (W), or `irradiance` list (auto-detected W/kWh). Forecast.Solar, custom Open-Meteo templates, and similar publishers all just work. Use this if you have multi-array setups or want shading-aware values.
+
+**Stability invariant.** The `baseload_kwh_per_hour` configuration value represents *non-flexible* consumption only (lighting, fridge, base appliances). **Do NOT** include heat pump, EV, sauna, or any other load that a downstream optimizer schedules — the integration would otherwise see its own decisions reflected back in baseload, breaking the open-loop guarantee and potentially causing schedule oscillation. See [TECHNICAL_GUIDE.md](TECHNICAL_GUIDE.md#pv-aware-pricing) for the full cross-system contract.
 
 ### Actual Price Sensors (optional, when Nordpool entity is configured)
 

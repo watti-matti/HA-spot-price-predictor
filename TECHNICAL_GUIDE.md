@@ -274,6 +274,95 @@ The **Duration Forecast** sensor exposes the cheap/peak curves for optimization 
 
 ---
 
+## PV-aware pricing
+
+When the user configures a non-zero `pv_capacity_kwp` (or supplies an external PV forecast entity) the coordinator augments every forecast hour with a **marginal effective price** representing the cost of running 1 additional kWh of flexible load given the household's PV production and non-flexible baseload.
+
+### Notation
+
+For each hour `h`:
+
+| Symbol | Meaning |
+|--------|---------|
+| `b_h` | Consumer buy price (EUR/kWh) = `(spot/1000 + margin + transfer + tax) × VAT`. Always > 0 in practice. |
+| `s_h` | Sell price (EUR/kWh) = `spot/1000 − pv_sell_commission − pv_export_grid_fee`. NOT clipped at zero — can be negative during deep oversupply. |
+| `c_h` | Configured baseload (kWh) = `baseload_kwh_per_hour × {day_factor or night_factor}`. Constant in time per hour-of-day. |
+| `p_h` | Hourly PV production (kWh), from internal estimator or external entity. Bounded in `[0, capacity_kwp · efficiency]`. |
+
+### Marginal effective price (the metric that feeds D(k))
+
+```
+pv_avail_h = max(0, p_h − c_h)            # PV surplus available to extra load
+from_pv    = min(1, pv_avail_h)           # fraction of new 1 kWh covered by PV
+from_grid  = 1 − from_pv
+m_h        = from_pv · s_h + from_grid · b_h
+```
+
+Properties:
+
+- **Bounded analytically**: `m_h ∈ [s_h, b_h]` for all (b, s, p, c). No baseload-divisor pathology.
+- **Captures self-consumption gain**: when PV surplus ≥ 1 kWh, `m_h = s_h` (you forgo export revenue, not retail spend).
+- **Captures partial cover**: linear interpolation between sell and buy prices.
+- **Captures negative-spot liability**: `s_h < 0` propagates to `m_h < 0` (rare but real).
+- **Captures finite capacity**: `p_h ≤ capacity_kwp · efficiency` is a hard ceiling enforced in `pv_estimate.py`.
+
+### PV-aware D(k) cheap/peak
+
+Computed directly from the 24 hourly `effective_eur_kwh` values per local day, using the same `compute_dk_cheap_peak` utility as the spot-only path. Sorted ascending → `dk_cheap_pv[12]` (monotone non-decreasing); sorted descending → `dk_peak_pv[12]` (monotone non-increasing).
+
+**Validation on 4 years of real data** (1,460 days, 5 kWp configuration): zero monotonicity violations, mean D(1) = 6.90 c/kWh (p01 = −0.7 c/kWh, p99 = 30.8 c/kWh) — bounded, realistic, optimization-ready.
+
+### Stability invariant — open-loop wrt the optimizer
+
+The forecast must remain a deterministic function of `(spot, weather, PV config, baseload config)` so the downstream optimizer's flexible-load decisions cannot feed back into next cycle's price forecast. Concretely:
+
+- **`_resolve_baseload(ts)` MUST NOT call `hass.states.get` or any HA entity-read API.** Enforced by a grep test in `tests/test_coordinator_pv.py`.
+- **The configured `baseload_kwh_per_hour` represents non-flexible consumption only.** Heat pump, EV, sauna, and any other optimizer-controlled load are excluded by contract.
+- **`_read_external_pv_forecast()` MAY read an HA entity** because the PV forecast is weather-driven and independent of optimizer decisions — no feedback loop is created.
+
+If a user includes a flexible-load sensor in baseload (Phase 2 will allow this opt-in with explicit warnings), the coupled forecast↔optimizer system can oscillate: optimizer schedules into cheap hours → those hours' baseload rises → next forecast shifts cheap hours → schedule chases. Phase 1 prevents this by construction.
+
+### External PV forecast — supported attribute conventions
+
+`_read_external_pv_forecast()` is source-agnostic. Auto-detected attribute conventions, in priority order:
+
+| Convention | Attribute | Shape | Unit | Conversion |
+|---|---|---|---|---|
+| 1. Generic forecast list | `forecast` | list[dict] | kWh | direct (keys: `pv_kwh`, `kwh`, `energy`, `value`) |
+| 2. Forecast.Solar Wh dict | `wh_hours` | dict {ISO ts → number} | Wh | `/ 1000` |
+| 3. Forecast.Solar W dict | `watts` | dict {ISO ts → number} | W | `/ 1000` (1-hour granularity) |
+| 4. EMHASS template list | `irradiance` | list[number] | W or kWh | magnitude > 50 → assume W and `/ 1000`; else kWh |
+
+All paths return up to 168 hourly kWh values clamped to `[0, capacity_kwp · efficiency]`. Silent fallback to internal estimator if the entity is missing or none of the conventions match.
+
+### Configuration
+
+PV system parameters live in `consumer_pricing` adjacent fields and the optional "PV system" step of the HA config flow:
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `pv_capacity_kwp` | 0 (disabled) | Installed PV peak power |
+| `pv_tilt_deg` | 45 | Panel tilt; matches Open-Meteo's fetch tilt so default = no correction |
+| `pv_azimuth_deg` | 180 (south) | 0=N, 90=E, 180=S, 270=W |
+| `pv_system_efficiency` | 0.85 | Lumped DC/AC + soiling + losses |
+| `pv_external_entity` | "" | Optional HA sensor that overrides internal estimator |
+| `pv_export_grid_fee` | 0 | Extra EUR/kWh fee on exported energy (above seller commission) |
+| `baseload_kwh_per_hour` | 0.8 | Constant non-flexible household consumption (~7000 kWh/yr typical) |
+| `baseload_day_factor` | 1.2 | 07–22 multiplier |
+| `baseload_night_factor` | 0.7 | 22–07 multiplier |
+
+Setting `pv_capacity_kwp = 0` (the default) and leaving `pv_external_entity` empty disables all PV-aware outputs cleanly — the integration falls back to byte-identical v2.2 baseline behaviour.
+
+### Out of scope (Phase 1)
+
+- **Battery storage** — adds a temporal state variable; defer to Phase 2.
+- **Capacitated water-filling D(k)** — for very large flexible loads relative to PV capacity, the marginal-1-kWh model under-counts by ~`(load − pv_avail) × s_h` per hour. Acceptable for typical residential loads (heat pump, EV).
+- **HA energy entity for baseload** — Phase 2 only, opt-in with stability warnings, requires user-classified non-flexible sensor.
+- **Per-tilt second Open-Meteo fetch** — current implementation reuses the integration's existing 45°-S irradiance fetch with scalar correction. Phase 2 may add a per-system fetch for sharper accuracy.
+- **Spot-model retraining with PV** — model unchanged; PV is a post-prediction transform.
+
+---
+
 ## Home Assistant Integration
 
 ### Holiday and workday detection
