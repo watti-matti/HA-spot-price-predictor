@@ -1,29 +1,36 @@
-# Tekninen toteutus: HA-spot-price-predictor
+# Tekninen toteutus: HA-spot-price-predictor (v2.3.0)
 
-Sähkön kuluttajahinnan ja D(k) = CVaR -kestokustannusten ennustaminen Home Assistantiin. Tuottaa 170 tunnin kuluttajahintaennusteen (EUR/kWh) ja 7 vrk × 24 tason D(k)-kestomatriisin kuormanohjauksen kustannusoptimointiin, käyttäen log-lineaarista Ridge-regressiota fysiikkapohjaisilla piirteillä ja useiden datalähteiden integrointia.
+Sähkön kuluttajahinnan ja D(k) = CVaR -kestokustannusten ennustaminen Home Assistantiin. Tuottaa 170 tunnin kuluttajahintaennusteen (EUR/kWh) ja 7 vrk D(k) halpa/kallis -kestokäyrät kuormanohjauksen kustannusoptimointiin, käyttäen log-lineaarista Ridge-regressiota fysiikkapohjaisilla piirteillä ja useiden datalähteiden integrointia. Valinnaisesti rikastaa jokaisen ennustetunnin PV-tietoisella marginaalisella efektiivisellä hinnalla `m_h` ja PV-tietoisilla D(k)-käyrillä, kun käyttäjä konfiguroi kotitalouden aurinkopaneelit.
 
 ## Arkkitehtuuri
 
-Järjestelmä koostuu kahdesta vaiheesta: **koulutus** (Python, ajetaan ajoittain PC:llä) ja **päättely** (Home Assistant -integraatio, jatkuvasti päällä).
+Järjestelmä koostuu kahdesta vaiheesta: **koulutus** (Python, ajetaan ajoittain PC:llä) ja **päättely** (Home Assistant -integraatio, jatkuvasti päällä). v2.3 lisää valinnaisen **päättelyn jälkeisen PV-muunnoksen**, joka ei vaadi uudelleenkoulutusta.
 
-### Koulutusputki
+### Koulutusputki (muuttumaton v2.2:sta)
 
 ```
 Sahkotin API  ──┐
 Open-Meteo API ─┼──> Piirteiden käsittely ──> Log-lineaarinen Ridge ──> model_coefs.json
-Elpriset API ───┤    (17 validoitua            + Tehovenytys            (tunti- ja kesto-
-Elering API ────┤     piirrettä)                + Kestomalli)            mallin kertoimet)
-Fingrid API ────┘ (valinnainen)
+Elpriset API ───┤    (9 merkkivalidoitua       + Tehovenytys            (tunti- ja kesto-
+Elering API ────┤     piirrettä v2.2-           + Kestomalli)            mallin kertoimet)
+Fingrid API ────┘     karsinnan jälkeen)
 ```
 
 ### Home Assistant -käyttöönotto
 
 ```
 Open-Meteo  ──┐
-Elpriset    ──┼──> Piirrerakentaja ──> Tuntimalli     ──> Hintaennuste (170h)
-Elering     ──┤    (puhdas Python)     + Kestomalli       + D(k) kestokäyrät (7 vrk)
-Fingrid     ──┘                        (puhdas Python)    + Kojelauta
-Nord Pool UMM ─────────────────────────┘
+Elpriset    ──┼──> Piirrerakentaja ──> Tuntimalli     ──> Spot-/kuluttajahinta-ennuste (170h)
+Elering     ──┤    (puhdas Python)     + Kestomalli       + D(k) halpa/kallis (7 vrk)
+Fingrid     ──┘                        (puhdas Python)    │
+Nord Pool UMM ─────────────────────────┘                  │
+                                                          │
+                                                          v
+                              (v2.3) PV-tietoinen muunnos ┴─> + effective_eur_kwh per tunti
+                              [valinnainen]                    + dk_cheap_pv / dk_peak_pv (7 vrk)
+                              ↑
+                              └── Open-Meteo irradianssi (sisäinen)
+                                  TAI pv_external_entity (Forecast.Solar / EMHASS / malli)
 ```
 
 ### Kojelaudat
@@ -64,7 +71,7 @@ AR(2)-mallit sovitetaan naapurihintojen poikkeamiin tuntiprofiileista. Analyysis
 |-------|-----------|
 | [Fingrid Open Data](https://data.fingrid.fi) | Ydinvoimatuotanto (#188) nuclear_deficit- ja niukkuuspiirteisiin |
 
-Rekisteröidy ilmaiseksi osoitteessa data.fingrid.fi. Ilman avainta malli koulutetaan sää- ja rajat ylittävillä piirteillä (15 piirrettä).
+Rekisteröidy ilmaiseksi osoitteessa data.fingrid.fi. Ilman Fingrid-avainta koulutus käyttää vain sää- ja rajat ylittäviä piirteitä, jolloin syntyvä malli jättää `nuclear_x_scarcity` -piirteen pois (8 mukana tulevasta 9:stä). Päättely voi silti ladata mukana tulevan v2.2:n 9-piirteisen mallin — `nuclear_x_scarcity` antaa arvon 0, kun ydinvoimadataa ei syötetä.
 
 ### Ydinvoimaseisokkiaikataulu (ilmainen, ei avainta)
 
@@ -76,7 +83,7 @@ Rekisteröidy ilmaiseksi osoitteessa data.fingrid.fi. Ilman avainta malli koulut
 
 ## Piirteiden suunnittelu
 
-Malli v2.0 tukee enintään 17 merkkivalidoitua piirrettä. Mukana tuleva oletusmalli käyttää sää- ja rajat ylittäviä piirteitä (15 piirrettä). Kaikki säädettävät parametrit ovat `config/regions/finland.yaml` -tiedoston `features`-osiossa.
+Koulutusputki tukee enintään 17 merkkivalidoitua piirrettä, mutta **mukana tuleva v2.2-oletusmalli käyttää 9 piirrettä** sen jälkeen kun leave-one-out -redundanssianalyysi karsi 8 kollineaarista tai haitallista ehdokasta. v2.3 toimittaa saman 9-piirteisen mallin muuttumattomana. Kaikki säädettävät parametrit ovat `config/regions/finland.yaml` -tiedoston `features`-osiossa.
 
 ### Peruspiirteet (11) — sää + kysyntä, ei API-avaimia
 
@@ -199,7 +206,7 @@ Konfiguroitavissa operaattorikohtaisesti tiedostossa `finland.yaml`. Oletus: Ele
 | Sensori | Tila | Yksikkö | Kuvaus |
 |---------|------|---------|--------|
 | Price Forecast | Nykyinen kuluttajahinta | EUR/kWh | 170h tuntiennuste: spot, kuluttajahinta, sää per tunti |
-| Duration Forecast | Tämän päivän D(4) | EUR/kWh | 7 vrk × 24 tason D(k) = CVaR -kestomatriisi |
+| Duration Forecast | Tämän päivän D(4) | EUR/kWh | 7 vrk D(k) halpa/kallis -kestokäyrät (12 tasoa kumpaankin suuntaan), valinnaisesti PV-tietoiset |
 
 #### Price Forecast -attribuutit
 
@@ -336,7 +343,7 @@ PV-järjestelmän parametrit asetetaan HA-asennusvelhon valinnaisessa "PV system
 | `baseload_day_factor` | 1,2 | 07–22 kerroin |
 | `baseload_night_factor` | 0,7 | 22–07 kerroin |
 
-`pv_capacity_kwp = 0` (oletus) ja tyhjä `pv_external_entity` poistavat kaikki PV-tietoiset tulosteet siististi — integraatio palautuu täsmälleen v2.2 perustason käyttäytymiseen.
+`pv_capacity_kwp = 0` (oletus) ja tyhjä `pv_external_entity` poistavat kaikki PV-tietoiset tulosteet siististi — integraatio tuottaa tavupareittain identtiset PV:ttömät tulokset, jotka vastaavat v2.2:n käyttäytymistä.
 
 ---
 
@@ -379,24 +386,25 @@ Katso englanninkielisestä dokumentaatiosta ([TECHNICAL_GUIDE.md](TECHNICAL_GUID
 
 ## Tarkkuus ja uudelleenkoulutus
 
-### Nykyinen suorituskyky (v2.0, sää + rajat ylittävät, 15 piirrettä, 4 vuoden koulutusdata, 120 päivän puoliintumisaika)
+### Nykyinen suorituskyky (v2.3.0 — mukana tuleva v2.2:n 9-piirteinen karsittu malli, 4 vuoden koulutusdata)
 
 **Tuntimalli:**
 
-| Mittari | Arvo |
-|---------|:---:|
-| MAE | 24,7 EUR/MWh |
-| R² | 0,39 |
+| Mittari | v2.1 (17 piirrettä) | v2.2 / v2.3 (9 piirrettä) | Muutos |
+|---|:---:|:---:|:---:|
+| MAE (koulutuksen testijako) | 23,94 EUR/MWh | **20,07 EUR/MWh** | −16 % |
+| R² | 0,515 | **0,719** | +40 % |
+| Walk-forward MAE (180 vrk testijakso) | — | **20,99 EUR/MWh** | vs. AR(2)-perustaso 37,82 |
 
 **Kestomalli (Spearmanin ρ, viimeiset 365 päivää):**
 
 | D(k) | Käyttötapaus | ρ |
 |:---:|:-:|:---:|
-| D(4) | Halvimmat 4h | 0,908 |
-| D(8) | Halvimmat 8h | 0,921 |
-| D(24) | Päivän keskiarvo | 0,937 |
+| D(4) | Halvimmat 4h | 0,930 |
+| D(8) | Halvimmat 8h | 0,937 |
+| D(24) | Päivän keskiarvo | 0,940 |
 
-Uudelleenkoulutus Fingrid-ydinvoimadatalla (ilmainen API-avain) lisää 2 piirrettä ja parantaa tuntitarkkuutta.
+**v2.3 PV-tietoisen D(k):n vahvistus** (päättelyn jälkeinen muunnos, ei uudelleenkoulutusta; 5 kWp / 1 kWh-h perustasoa, 4 vuoden takautuva testaus 1 460 päivällä): nolla PAVA-monotonisuusrikkomusta, PV-tietoisen D(1):n keskiarvo 6,90 c/kWh (keskihajonta 6,0), analyyttisesti rajattu välille `[s_h, b_h]` jokaiselle tunnille. Arvioitu vuosittainen säästö pelkän verkko-D(4):n yli ≈ 600 EUR/v.
 
 ### Suositeltu uudelleenkoulutustaajuus
 
@@ -459,7 +467,7 @@ HA-spot-price-predictor/
 ├── model_dashboard.py           # Seurantakojelauta
 ├── forecast_dashboard.py        # Ennustekojelauta
 ├── studies/                     # Arkistoidut analyysiskriptit
-├── tests/                       # 164 yksikkötestiä
+├── tests/                       # 267 yksikkötestiä (33 PV-tietoista v2.3:ssa)
 └── output/                      # Tuotetut artefaktit
     ├── model_coefs.json
     ├── model_dashboard.html

@@ -1,29 +1,36 @@
-# Documentation: HA-spot-price-predictor
+# Documentation: HA-spot-price-predictor (v2.3.0)
 
-Consumer electricity price and D(k) = CVaR duration cost forecasting for Home Assistant. Produces 170-hour consumer price forecasts (EUR/kWh) and 7-day × 24-level D(k) duration matrices for cost-optimal load scheduling, using log-linear Ridge regression with physics-based features and multi-source data integration.
+Consumer electricity price and D(k) = CVaR duration cost forecasting for Home Assistant. Produces 170-hour consumer price forecasts (EUR/kWh) and 7-day D(k) cheap/peak duration curves for cost-optimal load scheduling, using log-linear Ridge regression with physics-based features and multi-source data integration. Optionally augments every forecast hour with a PV-aware marginal effective price `m_h` and parallel PV-aware D(k) curves when the user configures household solar.
 
 ## Architecture
 
-The system has two phases: **training** (Python, run periodically on PC) and **inference** (Home Assistant custom integration, always-on).
+The system has two phases: **training** (Python, run periodically on PC) and **inference** (Home Assistant custom integration, always-on). v2.3 adds an optional **post-prediction PV transform** that does not require retraining.
 
-### Training Pipeline
+### Training Pipeline (unchanged from v2.2)
 
 ```
 Sahkotin API  ──┐
 Open-Meteo API ─┼──> Feature Engineering ──> Log-linear Ridge ──> model_coefs.json
-Elpriset API ───┤    (17 sign-validated       + Power stretch      (hourly + duration
-Elering API ────┤     features)                + Duration model)     model coefficients)
-Fingrid API ────┘ (optional)
+Elpriset API ───┤    (9 sign-validated        + Power stretch      (hourly + duration
+Elering API ────┤     features after v2.2     + Duration model)     model coefficients)
+Fingrid API ────┘ pruning, optional)
 ```
 
 ### Home Assistant Deployment
 
 ```
 Open-Meteo  ──┐
-Elpriset    ──┼──> Feature Builder ──> Hourly Model  ──> Price Forecast (170h)
-Elering     ──┤    (pure Python)       + Duration Model   + D(k) Duration Curves (7d)
-Fingrid     ──┘                        (pure Python)      + Dashboard
-Nord Pool UMM ─────────────────────────┘
+Elpriset    ──┼──> Feature Builder ──> Hourly Model  ──> Spot/Consumer Forecast (170h)
+Elering     ──┤    (pure Python)       + Duration Model   + D(k) cheap/peak (7d)
+Fingrid     ──┘                        (pure Python)      │
+Nord Pool UMM ─────────────────────────┘                  │
+                                                          │
+                                                          v
+                              (v2.3) PV-aware Transform ──┴─> + effective_eur_kwh per hour
+                              [optional]                       + dk_cheap_pv / dk_peak_pv (7d)
+                              ↑
+                              └── Open-Meteo irradiance (internal)
+                                  OR pv_external_entity (Forecast.Solar / EMHASS / template)
 ```
 
 ### Dashboards
@@ -64,7 +71,7 @@ Used to fit AR(2) models on cross-border price deviations from hourly daytype pr
 |--------|---------|
 | [Fingrid Open Data](https://data.fingrid.fi) | Nuclear production (#188) for nuclear deficit and scarcity features |
 
-Register for free at data.fingrid.fi. Without this key, the model trains on weather + cross-border features only (15 features).
+Register for free at data.fingrid.fi. Without the Fingrid key, training uses only weather + cross-border data and the resulting model omits the `nuclear_x_scarcity` feature (8 of the bundled 9). Inference can still load the bundled v2.2 9-feature model — `nuclear_x_scarcity` contributes 0 when no nuclear data is fed in.
 
 ### Nuclear outage schedule (free, no key)
 
@@ -76,7 +83,7 @@ Register for free at data.fingrid.fi. Without this key, the model trains on weat
 
 ## Feature Engineering
 
-Model v2.0 supports up to 17 sign-validated features selected via greedy forward selection with sign constraints. The bundled default model uses weather + cross-border features (15 features). All tunable parameters are in `config/regions/finland.yaml` under the `features` section.
+The training pipeline supports up to 17 sign-validated features selected via greedy forward selection with sign constraints, but the **bundled v2.2 default model uses 9 features** after a leave-one-out redundancy sweep pruned 8 collinear or harmful candidates. v2.3 ships the same 9-feature model unchanged. All tunable parameters are in `config/regions/finland.yaml` under the `features` section.
 
 ### Base features (11) — weather + demand, no API keys needed
 
@@ -126,17 +133,17 @@ The AR models decompose neighbor prices into deterministic daily profiles (workd
 
 ### Hourly model: Log-linear Ridge regression
 
-**Prediction formula:** `price = scale × max(0, exp(Σ coef_i × feat_i + intercept) - 55) ^ power`
+**Prediction formula:** `price = scale × max(0, exp(Σ coef_i × feat_i + intercept) − log_offset) ^ power`
 
 The log transform naturally handles the nonlinear price-scarcity relationship: nearly linear at low prices, exponential amplification at high prices.
 
-- Ridge regression on log(price + 55) target
-- 17 sign-validated features (all bootstrap-stable)
-- Power stretch (scale, exponent) fitted via Nelder-Mead on test set
-- Time-decay weighting: half-life 120 days
-- Ridge alpha = 1.0, augmented matrix (no penalty on intercept)
+- Ridge regression on `log(price + log_offset)` target (v2.2 retuned `log_offset` from 55 → 100 to better fit the 2025–2026 price regime)
+- **9 sign-validated features** in the v2.2 bundled model (16 candidate features pruned by leave-one-out redundancy sweep)
+- Power stretch (`scale`, `exponent`) fitted via Nelder-Mead on the test set
+- Time-decay weighting: half-life 120 days (configurable per region)
+- Ridge α = 50, augmented matrix (no penalty on intercept)
 
-**Training:** 4 years historical data, 85/15 time-ordered split, batch processing (512 rows).
+**Training:** 4+ years of historical data, 85/15 time-ordered split, batched normal-equation solve (512 rows). v2.3 ships the same coefficient file as v2.2 — PV-aware outputs are computed by the coordinator, not the trained model.
 
 ### Duration model: Segment-hierarchical Ridge + PAVA (cheap/peak split)
 
@@ -351,7 +358,7 @@ PV system parameters live in `consumer_pricing` adjacent fields and the optional
 | `baseload_day_factor` | 1.2 | 07–22 multiplier |
 | `baseload_night_factor` | 0.7 | 22–07 multiplier |
 
-Setting `pv_capacity_kwp = 0` (the default) and leaving `pv_external_entity` empty disables all PV-aware outputs cleanly — the integration falls back to byte-identical v2.2 baseline behaviour.
+Setting `pv_capacity_kwp = 0` (the default) and leaving `pv_external_entity` empty disables all PV-aware outputs cleanly — the integration produces byte-identical no-PV outputs, equivalent to v2.2 behaviour.
 
 ### Out of scope (Phase 1)
 
@@ -423,24 +430,25 @@ building stock.
 
 ## Accuracy and Retraining
 
-### Current performance (v2.0, weather + cross-border, 15 features, 4-year training, 120-day half-life)
+### Current performance (v2.3.0 — bundled v2.2 9-feature pruned model, 4-year training)
 
 **Hourly model:**
 
-| Metric | Value |
-|--------|:---:|
-| MAE | 24.7 EUR/MWh |
-| R² | 0.39 |
+| Metric | v2.1 (17 features) | v2.2 / v2.3 (9 features) | Change |
+|---|:---:|:---:|:---:|
+| MAE (training test split) | 23.94 EUR/MWh | **20.07 EUR/MWh** | −16% |
+| R² | 0.515 | **0.719** | +40% |
+| Walk-forward MAE (180-day holdout) | — | **20.99 EUR/MWh** | vs. AR(2) floor 37.82 |
 
 **Duration model (Spearman ρ, last 365 days):**
 
 | D(k) | Use case | ρ |
 |:---:|:-:|:---:|
-| D(4) | Cheapest 4h | 0.908 |
-| D(8) | Cheapest 8h | 0.921 |
-| D(24) | Daily avg | 0.937 |
+| D(4) | Cheapest 4h | 0.930 |
+| D(8) | Cheapest 8h | 0.937 |
+| D(24) | Daily avg | 0.940 |
 
-Retraining with Fingrid nuclear data (free API key) adds 2 features and improves hourly accuracy.
+**v2.3 PV-aware D(k) validation** (post-prediction transform, no retraining; 5 kWp / 1 kWh-h baseload reference, 4-year backtest on 1,460 complete days): zero PAVA-monotonicity violations, PV-aware D(1) mean 6.90 c/kWh (std 6.0), bounded analytically in `[s_h, b_h]` per hour. Estimated annual savings vs grid-only D(4) ≈ 600 EUR/yr.
 
 ### Recommended retraining frequency
 
@@ -503,7 +511,7 @@ HA-spot-price-predictor/
 ├── model_dashboard.py           # Model monitoring dashboard generator
 ├── forecast_dashboard.py        # Live forecast dashboard generator
 ├── studies/                     # Archived analysis scripts
-├── tests/                       # 164 unit tests
+├── tests/                       # 267 unit tests (33 PV-aware in v2.3)
 └── output/                      # Generated artifacts
     ├── model_coefs.json
     ├── model_dashboard.html

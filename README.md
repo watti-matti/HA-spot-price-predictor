@@ -2,7 +2,7 @@
 
 [![HACS Integration](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-2.2.0-blue.svg)](https://github.com/watti-matti/HA-spot-price-predictor/releases/tag/v2.2.0)
+[![Version](https://img.shields.io/badge/version-2.3.0-blue.svg)](https://github.com/watti-matti/HA-spot-price-predictor/releases/tag/v2.3.0)
 
 **Forecast consumer electricity costs and D(k) duration curves up to 7 days ahead** using machine learning with physics-based weather features, cross-border trade analysis, and nuclear outage awareness.
 
@@ -157,7 +157,7 @@ An additional [ApexCharts-only dashboard](docs/yaml_examples/apexcharts_dashboar
 
 ## Data Sources & Features
 
-The v2.2 bundled model uses **9 features** selected by leave-one-out redundancy analysis — a pruning that improved walk-forward MAE by 16% over the previous 17-feature v2.1 model. The feature set scales with available data sources:
+The v2.2 bundled model uses **9 features** selected by leave-one-out redundancy analysis — a pruning that improved walk-forward MAE by 16% over the previous 17-feature v2.1 model. v2.3 carries this model forward unchanged and adds an optional household-PV layer on top as a post-prediction transform; no retraining is involved. The feature set scales with available data sources:
 
 | Data Sources | Features | API Keys Required |
 |-------------|:---:|:---:|
@@ -176,9 +176,9 @@ The v2.2 bundled model uses **9 features** selected by leave-one-out redundancy 
 
 ## Model Performance
 
-**v2.2.0 bundled model:**
+**v2.2.0 bundled model (unchanged in v2.3):**
 
-| Metric | v2.1.0 | v2.2.0 | Change |
+| Metric | v2.1.0 | v2.2.0 / v2.3.0 | Change |
 |--------|:---:|:---:|:---:|
 | Hourly Ridge features | 17 | **9** | -8 redundant features pruned |
 | MAE (training test split) | 23.94 EUR/MWh | **20.07 EUR/MWh** | -16% |
@@ -187,6 +187,18 @@ The v2.2 bundled model uses **9 features** selected by leave-one-out redundancy 
 | Walk-forward MAE (180d holdout) | — | **20.99 EUR/MWh** | vs. AR(2) floor 37.82 |
 
 The walk-forward evaluation (weekly refit on 540-day rolling window, tested on the most recent 180 days including the Jan-Mar 2026 Finnish price spike at 113 EUR/MWh mean) confirms that the 9-feature pruned model outperforms both the v2.1 baseline and the AR(2) neighbour-price floor across all tracked metrics.
+
+**v2.3.0 PV-aware D(k) validation** (5 kWp, 1 kWh-h baseload, 4-year backtest on 1,460 complete days):
+
+| Metric | Value |
+|---|:---:|
+| PAVA monotonicity violations | 0 / 1,460 days |
+| Mean PV-aware D(1) | 6.90 c/kWh |
+| Std PV-aware D(1) | 6.0 c/kWh |
+| Hours where PV reduces marginal cost | 54.8 % |
+| Estimated annual savings vs grid-only D(4) | ~600 EUR/yr |
+
+Test suite: **267 tests** (33 new for the PV layer in v2.3.0, all passing alongside the 234 carried forward from v2.2).
 
 **Duration model D(k) ranking accuracy (Spearman rho):**
 
@@ -283,7 +295,8 @@ To adapt for another country, create a new region YAML file and retrain. The mod
 - [TEKNINEN_TOTEUTUS.md](TEKNINEN_TOTEUTUS.md) — Arkkitehtuuri, piirre-engineering, mallin kuvaus (suomeksi)
 - [docs/dk_cheap_peak_migration.md](docs/dk_cheap_peak_migration.md) — D(k) schema migration guide for downstream consumers
 - [docs/dtaci_layer.md](docs/dtaci_layer.md) — DtACI online calibration: algorithm details, state persistence, troubleshooting
-- [studies/results/V2_2_RELEASE_NOTES.md](studies/results/V2_2_RELEASE_NOTES.md) — v2.2.0 full release notes with sweep results
+- [studies/results/V2_3_RELEASE_NOTES.md](studies/results/V2_3_RELEASE_NOTES.md) — v2.3.0 release notes (PV-aware duration forecasts)
+- [studies/results/V2_2_RELEASE_NOTES.md](studies/results/V2_2_RELEASE_NOTES.md) — v2.2.0 release notes (9-feature pruning + cheap/peak migration)
 
 ## License
 
