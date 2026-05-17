@@ -111,6 +111,26 @@ The deployed model is actually **better** than the time-varying-capacity fit, be
 
 The `predict_solar_mw(timestamps, cloud_cover_pct, artifact)` helper in `solar_clear_sky.py` is the runtime inference entry point. Reloads JSON, no Fingrid call, pure numpy.
 
+## Visual analysis (`studies/solar_visualization.py`)
+
+Three deployment-grade figures generated from the cached data + deployed artifact (no Fingrid call — figures regenerate offline):
+
+| Figure | What it shows |
+|---|---|
+| `figures/solar_tracking.png` | Four seasonal two-week windows (Jan / Apr / Jul / Oct 2025) with the deployed prediction overlaid on actual production, plus cloud-cover overlay. Diurnal cycle is tracked tightly; spring & summer peaks match well; autumn shows good shape with occasional cloud-pass under-prediction. |
+| `figures/solar_accuracy.png` | Test-set diagnostics, daylight hours only: scatter density vs `y=x`, residual distribution with Gaussian overlay (residuals are close-to-Gaussian, σ ≈ 98 MW, mean +14 MW), residual binned by cloud cover (no systematic shape — model handles all cloud regimes uniformly), residual binned by clear-sky GHI level (slight under-prediction at the highest GHI bins, consistent with the rooftop-orientation mix hypothesis). |
+| `figures/solar_temporal.png` | The most informative: monthly produced energy (actual vs predicted bars across the full 2023–2026 window), monthly MAE + bias trace, and installed-capacity drift vs the artifact's `capacity_ref`. **Reveals the deployment story end-to-end** — see "Refit signal" below. |
+
+### Refit signal — what the temporal figure tells us
+
+The shipped artifact is calibrated to `capacity_ref = 1367 MW`. The capacity panel shows the dashed reference line crossed by the actual capacity (Fingrid 267) in mid-2025 — exactly when the bias trace settles near zero. By April 2026 the actual capacity is **1741 MW (≈ +27 % above the baked value)** and the bias is starting to dip negative (model now slightly under-predicts).
+
+**Recommendation**: refresh the artifact when actual capacity exceeds `capacity_ref` by more than ~20 %, i.e. when actual ≳ 1640 MW. This threshold is already met as of the v2.5.3 release; a refit is justified now and the visualization makes the trigger condition obvious.
+
+The 2023 monthly aggregates show very large over-prediction (~+200 MW bias) — this is exactly the "frozen capacity above actual" effect operating in the opposite direction. The deployed model's accuracy quality is therefore non-uniform across history: it is best when actual capacity ≈ baked capacity (mid-2025 onwards) and degrades as the gap widens in either direction.
+
+This is the price of the Fingrid-free deployment contract — and it's a price worth paying as long as the refit cadence keeps up.
+
 ## Tests
 
 **349 / 349 passing** (326 prior + 23 new clear-sky tests, including 7 new tests for `build_artifact()` / `predict_solar_mw()` runtime inference).
