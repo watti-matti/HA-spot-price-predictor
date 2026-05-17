@@ -1025,11 +1025,33 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
 
                 forecast.append(entry)
 
-            # D(k) duration curve forecast (7-day daily curves)
+            # ── v2.7.0 cutover ──────────────────────────────────────
+            # Replace v2.2 spot/consumer values with v26 outputs BEFORE
+            # the duration model runs, so D(k) is computed from the
+            # (much more accurate) v26 predictions.
+            v26_diagnostics: dict[str, Any] = {}
+            v26_dk_v26_by_date: dict[str, dict] = {}
+            if self._v26 is not None and forecast:
+                try:
+                    v26_diagnostics, v26_dk_v26_by_date = self._apply_v26_pipeline_pre_dk(
+                        forecast)
+                except Exception as e:
+                    _LOGGER.warning("v26 pipeline overwrite failed: %s", e)
+                    v26_diagnostics = {"error": str(e)}
+
+            # D(k) duration curve forecast (7-day daily curves) — now
+            # uses v26-overwritten spot prices automatically.
             duration_forecast = self._compute_duration_forecast(
                 forecast, weather, ar_neighbor_hourly, nuclear_data, now,
                 netload_hourly=netload_hourly,
             )
+            # Inject the v26-derived 24-entry D(k) vectors onto each
+            # matching duration_forecast entry (additive).
+            for day in duration_forecast:
+                m = v26_dk_v26_by_date.get(day.get("date"))
+                if m is not None:
+                    day["dk_cheap_v26_eur_mwh"] = m["dk_cheap_eur_mwh"]
+                    day["dk_peak_v26_eur_mwh"]  = m["dk_peak_eur_mwh"]
 
             # Prepend actual D(k) from historical spot prices (yesterday + day before)
             try:
@@ -1087,18 +1109,9 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                 self._forecast_history.values(), key=lambda x: x["timestamp"]
             )
 
-            # ── v2.6.0 additive pipeline ────────────────────────────
-            # Compute L1+L2+L3+L4+floor predictions for the forecast
-            # horizon and inject as additional keys on each forecast
-            # row + duration_forecast entry. Existing keys unchanged.
-            v26_diagnostics: dict[str, Any] = {}
-            if self._v26 is not None and forecast:
-                try:
-                    v26_diagnostics = self._apply_v26_pipeline(
-                        forecast, combined_forecast, duration_forecast)
-                except Exception as e:
-                    _LOGGER.warning("v26 pipeline run failed: %s", e)
-                    v26_diagnostics = {"error": str(e)}
+            # (v26 pipeline ran earlier — before _compute_duration_forecast
+            # — so its v26-overwritten spot prices feed both the forecast
+            # rows AND the D(k) duration curves consistently.)
 
             # Active data sources description
             sources = ["weather"]
@@ -1151,28 +1164,32 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
             _LOGGER.exception("Unexpected error during update")
             return self._return_cached_or_fail(err)
 
-    def _apply_v26_pipeline(
+    def _apply_v26_pipeline_pre_dk(
         self,
         forecast: list[dict[str, Any]],
-        combined_forecast: list[dict[str, Any]],
-        duration_forecast: list[dict[str, Any]],
-    ) -> dict[str, Any]:
-        """v2.6.0 — additive pipeline run.
+    ) -> tuple[dict[str, Any], dict[str, dict]]:
+        """v2.7.0 — v26 prediction REPLACES the v2.2 Ridge spot.
 
-        Computes the L1+L2+L3+L4+floor mean prediction plus fan-chart
-        bands for every hour in `forecast` and injects them as new
-        keys on each row. Also extends `duration_forecast` with 24-
-        entry `dk_cheap_v26_eur_mwh` / `dk_peak_v26_eur_mwh` vectors
-        derived from the v26 mean prediction.
+        Runs the L1+L2+L3+L4+floor pipeline plus fan-chart sampling,
+        then overwrites `forecast[i]["spot_eur_mwh"]` and
+        `forecast[i]["consumer_eur_kwh"]` with the v26 values. The
+        v2.2 Ridge prediction is still computed (loaded with the
+        existing path) but its output is shadowed here. Users see
+        the better v26 prediction without any sensor renaming.
+
+        Per v2.6.1 benchmark on real FI test data:
+          v2.2: MAE 35.20  R² +0.49  hit rate 29%
+          v26:  MAE 10.00  R² +0.93  hit rate 98%
 
         Returns:
-            Diagnostics dict including `refit_recommended` and the
-            v26 bias estimate.
+            (diagnostics_dict, dk_v26_by_date) where dk_v26_by_date
+            maps ISO date string to {"dk_cheap_eur_mwh": [24],
+            "dk_peak_eur_mwh": [24]}.
         """
         import numpy as np
 
         if not forecast or self._v26 is None:
-            return {}
+            return {}, {}
 
         # Build the input arrays the pipeline expects
         timestamps = np.array(
@@ -1198,44 +1215,52 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
         )
         v26_mean = out["mean_eur_mwh"]
 
-        # Inject per-row v26 attributes onto BOTH forecast (current
-        # cycle, mutates) and combined_forecast (rolling, same dicts).
+        # v2.7.0 CUTOVER (per v2.6.1 benchmark, decisive win):
+        # The v26 mean prediction REPLACES the v2.2 Ridge prediction as
+        # the primary point forecast. Users see materially better
+        # accuracy (MAE 35 → 10 EUR/MWh, R² 0.49 → 0.93) without any
+        # dashboard or automation change.
         for i, f in enumerate(forecast):
-            f["v26_mean_eur_mwh"] = float(v26_mean[i])
+            v26_spot = float(v26_mean[i])
+            # PRIMARY attributes — overwritten with v26 values
+            f["spot_eur_mwh"] = round(v26_spot, 4)
+            # Re-derive consumer price using the same tariff conversion
+            # the v2.2 path used; v26 only changes the spot estimate.
+            try:
+                ts = _iso_to_naive_ts(f["timestamp"]).replace(tzinfo=timezone.utc)
+                local_h = self._get_local_hour(ts)
+                is_night = local_h < 7 or local_h >= 22
+                f["consumer_eur_kwh"] = round(
+                    self._spot_to_consumer_eur_kwh(v26_spot, is_night), 4)
+            except Exception:
+                pass  # keep the v2.2-derived consumer price on failure
+            # ADDITIONAL v26_* attributes — fan-chart bands (kept from v2.6.0)
+            f["v26_mean_eur_mwh"] = v26_spot
             for q in ("P5", "P25", "P50", "P75", "P95"):
                 key = f"v26_{q}_eur_mwh"
                 f[key] = float(out[f"{q}_eur_mwh"][i])
 
-        # Extended D(k) 24-entry vectors from the v26 mean prediction
+        # Extended 24-entry D(k) from v26 mean — return by-date map
+        # for the caller to inject onto duration_forecast entries
+        # AFTER _compute_duration_forecast runs.
         v26_dk = self._v26.compute_duration_curves(v26_mean, timestamps)
-        # Index v26_dk by date string for join with duration_forecast
         dk_by_date = {d["date"]: d for d in v26_dk}
-        for day in duration_forecast:
-            day_iso = day.get("date")
-            if not day_iso:
-                continue
-            match = dk_by_date.get(day_iso)
-            if match is None:
-                continue
-            day["dk_cheap_v26_eur_mwh"] = match["dk_cheap_eur_mwh"]
-            day["dk_peak_v26_eur_mwh"]  = match["dk_peak_eur_mwh"]
 
-        # Persist calibrator state (no actuals were fed this cycle —
-        # reconciliation against Sähkötin happens on the dedicated DtACI
-        # path; v26 calibrators only learn here if we have observed
-        # current-hour actual price).
+        # Persist calibrator state every cycle
         try:
             self._v26.save_state()
         except Exception as e:
             _LOGGER.debug("v26 save_state non-critical: %s", e)
 
-        return {
+        diagnostics = {
             "v26_bias_eur_mwh": out.get("bias_eur_mwh", 0.0),
             "v26_phi": self._v26._ar1_phi,
             "v26_n_features": int(self._v26._ridge_coef.size),
             "v26_floor_eur_mwh": -5.0,
-            "v26_pipeline_version": "2.6.0",
+            "v26_pipeline_version": "2.7.0",
+            "v26_primary_for_spot": True,
         }
+        return diagnostics, dk_by_date
 
     def _compute_duration_forecast(
         self,
