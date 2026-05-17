@@ -2,7 +2,7 @@
 
 [![HACS Integration](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-2.4.0-blue.svg)](https://github.com/watti-matti/HA-spot-price-predictor/releases/tag/v2.4.0)
+[![Version](https://img.shields.io/badge/version-2.5.0-blue.svg)](https://github.com/watti-matti/HA-spot-price-predictor/releases/tag/v2.5.0)
 
 **Forecast consumer electricity costs and D(k) duration curves up to 7 days ahead** using machine learning with physics-based weather features, cross-border trade analysis, and nuclear outage awareness.
 
@@ -302,8 +302,16 @@ To adapt for another country, create a new region YAML file and retrain. The mod
 - [TEKNINEN_TOTEUTUS.md](TEKNINEN_TOTEUTUS.md) — Arkkitehtuuri, piirre-engineering, mallin kuvaus (suomeksi)
 - [docs/dk_cheap_peak_migration.md](docs/dk_cheap_peak_migration.md) — D(k) schema migration guide for downstream consumers
 - [docs/dtaci_layer.md](docs/dtaci_layer.md) — DtACI online calibration: algorithm details, state persistence, troubleshooting
-- [studies/results/V2_3_RELEASE_NOTES.md](studies/results/V2_3_RELEASE_NOTES.md) — v2.3.0 release notes (PV-aware duration forecasts)
-- [studies/results/V2_2_RELEASE_NOTES.md](studies/results/V2_2_RELEASE_NOTES.md) — v2.2.0 release notes (9-feature pruning + cheap/peak migration)
+- [studies/results/V2_5_0_RELEASE_NOTES.md](studies/results/V2_5_0_RELEASE_NOTES.md) — **v2.5.0 (CURRENT)** — Phase 3 methodology milestone; SE3 accepted, EE/FI rejected, solar deferred
+- [studies/results/V2_4_5_RELEASE_NOTES.md](studies/results/V2_4_5_RELEASE_NOTES.md) — v2.4.5 alt. solar (DEFERRED pending cloudiness)
+- [studies/results/V2_4_4_RELEASE_NOTES.md](studies/results/V2_4_4_RELEASE_NOTES.md) — v2.4.4 FI model revision (REJECTED)
+- [studies/results/V2_4_3_RELEASE_NOTES.md](studies/results/V2_4_3_RELEASE_NOTES.md) — v2.4.3 EE model (REJECTED)
+- [studies/results/V2_4_2_RELEASE_NOTES.md](studies/results/V2_4_2_RELEASE_NOTES.md) — v2.4.2 SE3 model (ACCEPT, +3.07pp)
+- [studies/results/V2_4_1_RELEASE_NOTES.md](studies/results/V2_4_1_RELEASE_NOTES.md) — v2.4.1 NPK-CVaR validation framework
+- [studies/results/V2_4_0_RELEASE_NOTES.md](studies/results/V2_4_0_RELEASE_NOTES.md) — v2.4.0 friendlier baseload UX (annual_consumption_kwh)
+- [studies/results/V2_3_1_RELEASE_NOTES.md](studies/results/V2_3_1_RELEASE_NOTES.md) — v2.3.1 doc-fix (baseload guidance correction)
+- [studies/results/V2_3_RELEASE_NOTES.md](studies/results/V2_3_RELEASE_NOTES.md) — v2.3.0 PV-aware duration forecasts
+- [studies/results/V2_2_RELEASE_NOTES.md](studies/results/V2_2_RELEASE_NOTES.md) — v2.2.0 9-feature pruning + cheap/peak migration
 
 ## License
 
