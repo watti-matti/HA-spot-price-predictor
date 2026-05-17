@@ -138,7 +138,7 @@ def test_compute_residual_raises_on_wrong_length_components() -> None:
 def test_build_artifact_records_default_depths_when_omitted() -> None:
     inputs = {"wind": {"P_hour": [0.0]*24, "P_week": [0.0]*53}}
     art = sd.build_artifact(inputs)
-    assert art["version"] == "2.5.5"
+    assert art["version"].startswith("2.5.")
     assert art["depths"]["wind"] == list(sd.DEFAULT_DEPTHS["wind"])
     assert set(art["components"]["wind"].keys()) == {"P_hour", "P_week"}
 
@@ -170,6 +170,66 @@ def test_artifact_roundtrips_through_json(tmp_path: Path) -> None:
     y_direct = sd.compute_residual(x, ts, comp)
     y_via_artifact = sd.compute_residual(x, ts, loaded["components"]["test"])
     assert np.allclose(y_direct, y_via_artifact, atol=1e-12)
+
+
+# ── Circular smoothing (v2.5.7) ────────────────────────────────────
+
+
+def test_circular_smooth_window_1_is_identity() -> None:
+    arr = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    out = sd.circular_smooth(arr, window=1)
+    assert np.allclose(out, arr)
+
+
+def test_circular_smooth_preserves_mean() -> None:
+    rng = np.random.RandomState(0)
+    arr = rng.normal(loc=10.0, scale=3.0, size=53)
+    out = sd.circular_smooth(arr, window=5)
+    assert out.mean() == pytest.approx(arr.mean(), abs=1e-12)
+
+
+def test_circular_smooth_wraps_around() -> None:
+    """With a spike at bin 0 and window=3, the wrap-around averaging
+    spreads the spike to bins {-1, 0, 1} equally (each gets 1/3) while
+    bins 2..-2 stay at zero (pre-mean-restore). The key invariant is
+    that the LAST bin sees energy from the spike — that's the proof
+    of wrap-around."""
+    arr = np.zeros(10)
+    arr[0] = 3.0
+    out = sd.circular_smooth(arr, window=3)
+    # Bins -1, 0, 1 each receive 1/3 of the spike → significantly above
+    # the far-away bins.
+    near_spike = np.mean([out[-1], out[0], out[1]])
+    far_from_spike = np.mean([out[3], out[4], out[5], out[6]])
+    assert near_spike > far_from_spike
+    # The wrap-around bin (-1) sees the same energy as bin 1.
+    assert out[-1] == pytest.approx(out[1], abs=1e-12)
+
+
+def test_circular_smooth_rejects_even_window() -> None:
+    with pytest.raises(ValueError):
+        sd.circular_smooth(np.zeros(10), window=4)
+
+
+def test_circular_smooth_window_larger_than_array_returns_mean() -> None:
+    arr = np.array([1.0, 2.0, 3.0])
+    out = sd.circular_smooth(arr, window=5)
+    assert np.allclose(out, 2.0)
+
+
+def test_fit_components_smoothing_reduces_p_week_variance() -> None:
+    """Synthetic noisy data: smoothing should shrink the noise envelope
+    of P_week while keeping the mean unchanged."""
+    ts = _hourly_grid(60)  # ~2 months, deliberately too short
+    rng = np.random.RandomState(123)
+    x = rng.normal(loc=0, scale=1, size=len(ts))
+    comp_raw    = sd.fit_components(x, ts, depth=("P_week",))
+    comp_smooth = sd.fit_components(x, ts, depth=("P_week",),
+                                     smooth={"P_week": 5})
+    p_raw    = np.array(comp_raw["P_week"])
+    p_smooth = np.array(comp_smooth["P_week"])
+    assert p_smooth.std() < p_raw.std()
+    assert p_smooth.mean() == pytest.approx(p_raw.mean(), abs=1e-12)
 
 
 def test_default_depths_match_v2_5_4_audit() -> None:

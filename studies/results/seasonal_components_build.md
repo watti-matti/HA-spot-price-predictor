@@ -1,21 +1,21 @@
 # Seasonal components build — v2.5.5
 
 **Window:** 2023-01-01 → 2026-04-27 (29,112 aligned hourly rows)
-**Artifact:** `custom_components/spot_price_predictor/data/seasonal_components_default.json` (22,655 bytes)
+**Artifact:** `custom_components/spot_price_predictor/data/seasonal_components_default.json` (23,737 bytes)
 
 ## Per-input fit results
 
 | Input | Depth | σ_raw | σ_Y | Var reduction | E[Y] |
 |---|---|---:|---:|---:|---:|
 | `fi` | P_hour + P_day + P_week | 64.63 | 57.06 | 22.1% | -2.50e-16 |
-| `se3` | P_hour + P_day + P_week | 44.84 | 36.22 | 34.8% | +2.50e-16 |
-| `se1` | P_day + P_week | 34.91 | 30.37 | 24.3% | +0.00e+00 |
-| `ee` | P_hour + P_day + P_week | 72.82 | 62.27 | 26.9% | +2.50e-16 |
-| `wind` | P_hour + P_week | 2.32 | 2.16 | 13.8% | +4.69e-17 |
-| `solar` | P_hour + P_week | 201.12 | 121.23 | 63.7% | -1.75e-15 |
-| `temp` | P_hour + P_week | 9.80 | 4.00 | 83.4% | -9.37e-17 |
-| `cloud` | P_week | 27.44 | 24.69 | 19.0% | -1.47e-15 |
-| `ghi_cs` | P_hour + P_week | 219.78 | 101.43 | 78.7% | -2.56e-15 |
+| `se3` | P_hour + P_day + P_week | 44.84 | 37.07 | 31.6% | -2.60e+00 |
+| `se1` | P_day + P_week | 34.91 | 31.86 | 16.7% | -1.74e+00 |
+| `ee` | P_hour + P_day + P_week | 72.82 | 62.27 | 26.9% | +1.30e-03 |
+| `wind` | P_hour + P_week | 2.32 | 2.20 | 10.0% | -4.89e-02 |
+| `solar` | P_hour + P_week | 201.12 | 123.05 | 62.6% | -8.37e+00 |
+| `temp` | P_hour + P_week | 9.80 | 4.41 | 79.8% | +2.46e-01 |
+| `cloud` | P_week | 27.44 | 25.94 | 10.7% | +5.58e-01 |
+| `ghi_cs` | P_hour + P_week | 219.78 | 101.47 | 78.7% | -3.48e-01 |
 
 ## Deployment story
 

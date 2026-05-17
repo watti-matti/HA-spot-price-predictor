@@ -86,10 +86,50 @@ def _week_of_year_index(ts: np.ndarray) -> np.ndarray:
 # ── Fitting (offline) ──────────────────────────────────────────────
 
 
+def circular_smooth(arr: np.ndarray, window: int) -> np.ndarray:
+    """Wrap-around centred moving average for periodic seasonal vectors.
+
+    `arr` is treated as a circular sequence (P_hour: bin 23 is adjacent
+    to bin 0; P_week: bin 52 is adjacent to bin 0). The output has the
+    same length as the input; preserves the mean.
+
+    Used after :func:`fit_components` for inputs where short averaging
+    history makes per-bin estimates noisy (typically weather inputs
+    with only 3-8 years of history). For inputs with strong physical
+    structure (P_hour for solar, P_week for temperature) smoothing is
+    unnecessary — the fit is already dominated by signal not noise.
+
+    Args:
+        arr: 1-D periodic vector (length 24 / 7 / 53).
+        window: smoothing window length in bins. Must be odd; `window=1`
+            returns the input unchanged.
+
+    Returns:
+        Smoothed copy of `arr`, same length, same mean.
+    """
+    if window <= 1:
+        return arr.copy()
+    if window % 2 == 0:
+        raise ValueError(f"window must be odd; got {window}")
+    n = len(arr)
+    if window >= n:
+        return np.full(n, float(arr.mean()))
+    half = window // 2
+    # Tile + roll for true circular boundary handling
+    padded = np.concatenate([arr[-half:], arr, arr[:half]])
+    kernel = np.ones(window) / window
+    smoothed = np.convolve(padded, kernel, mode="valid")
+    assert len(smoothed) == n
+    # Restore exact mean to preserve sequential-subtraction guarantees
+    smoothed = smoothed - smoothed.mean() + float(arr.mean())
+    return smoothed
+
+
 def fit_components(
     x: np.ndarray,
     timestamps: np.ndarray,
     depth: Iterable[str] = ("P_hour", "P_day", "P_week"),
+    smooth: Mapping[str, int] | None = None,
 ) -> dict[str, list[float]]:
     """Fit the Moazeni-Powell sequential additive decomposition.
 
@@ -117,6 +157,7 @@ def fit_components(
             f"got {x.shape} vs {timestamps.shape}"
         )
     depth_set = set(depth)
+    smooth = smooth or {}
     out: dict[str, list[float]] = {}
 
     residual = x.copy()
@@ -127,6 +168,8 @@ def fit_components(
             mask = h == k
             if mask.any():
                 p_hour[k] = float(residual[mask].mean())
+        if smooth.get("P_hour", 1) > 1:
+            p_hour = circular_smooth(p_hour, int(smooth["P_hour"]))
         residual = residual - p_hour[h]
         out["P_hour"] = p_hour.tolist()
 
@@ -137,6 +180,10 @@ def fit_components(
             mask = d == k
             if mask.any():
                 p_day[k] = float(residual[mask].mean())
+        # P_day has only 7 bins; smoothing is rarely useful and is left
+        # off by default. Caller can still pass smooth={"P_day": 3}.
+        if smooth.get("P_day", 1) > 1:
+            p_day = circular_smooth(p_day, int(smooth["P_day"]))
         residual = residual - p_day[d]
         out["P_day"] = p_day.tolist()
 
@@ -147,6 +194,8 @@ def fit_components(
             mask = w == k
             if mask.any():
                 p_week[k] = float(residual[mask].mean())
+        if smooth.get("P_week", 1) > 1:
+            p_week = circular_smooth(p_week, int(smooth["P_week"]))
         residual = residual - p_week[w]
         out["P_week"] = p_week.tolist()
 
@@ -233,7 +282,7 @@ def build_artifact(
         for k in inputs
     }
     return {
-        "version": "2.5.5",
+        "version": "2.5.7",
         "train_window": list(train_window) if train_window else None,
         "depths": depths_resolved,
         "components": dict(inputs),
