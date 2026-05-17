@@ -34,6 +34,11 @@ from .const import (
     CONF_BASELOAD_KWH_PER_HOUR,
     CONF_BASELOAD_DAY_FACTOR,
     CONF_BASELOAD_NIGHT_FACTOR,
+    CONF_ANNUAL_CONSUMPTION_KWH,
+    CONF_CONSUMPTION_ENTITY,
+    CONSUMPTION_HYSTERESIS_PCT,
+    CONSUMPTION_SMOOTHING_DAYS,
+    FINLAND_RESIDENTIAL_MONTHLY_FACTORS,
     DEFAULT_ENABLE_DTACI_DK,
     DEFAULT_SELLER_MARGIN,
     DEFAULT_PV_SELL_COMMISSION,
@@ -45,6 +50,8 @@ from .const import (
     DEFAULT_BASELOAD_KWH_PER_HOUR,
     DEFAULT_BASELOAD_DAY_FACTOR,
     DEFAULT_BASELOAD_NIGHT_FACTOR,
+    DEFAULT_ANNUAL_CONSUMPTION_KWH,
+    DEFAULT_CONSUMPTION_ENTITY,
     DTACI_TARGET_COVERAGE,
     DTACI_ZONES,
     OPERATORS,
@@ -140,6 +147,40 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
             CONF_BASELOAD_DAY_FACTOR, DEFAULT_BASELOAD_DAY_FACTOR))
         self.baseload_night_factor = float(entry.data.get(
             CONF_BASELOAD_NIGHT_FACTOR, DEFAULT_BASELOAD_NIGHT_FACTOR))
+
+        # ── v2.4 baseload schema (annual_consumption_kwh + consumption_entity)
+        # Migration: if the entry only carries v2.3 legacy fields and no
+        # `annual_consumption_kwh`, infer it from the legacy values once and
+        # log INFO. The legacy fields stay in entry.data untouched so a
+        # downgrade to v2.3.x still works.
+        self.annual_consumption_kwh = float(entry.data.get(
+            CONF_ANNUAL_CONSUMPTION_KWH, 0.0))
+        if self.annual_consumption_kwh <= 0.0:
+            # Legacy v2.3 entry — derive from baseload_kwh_per_hour and the
+            # day/night factors weighted by their hour shares.
+            avg_per_hour = self.baseload_kwh_per_hour * (
+                (self.baseload_day_factor * 15
+                 + self.baseload_night_factor * 9) / 24.0
+            )
+            self.annual_consumption_kwh = avg_per_hour * 8760.0
+            if entry.data.get(CONF_BASELOAD_KWH_PER_HOUR) is not None:
+                _LOGGER.info(
+                    "v2.4 migration: inferred annual_consumption_kwh = "
+                    "%.0f kWh/yr from legacy baseload_kwh_per_hour = %.2f "
+                    "(day_factor=%.2f, night_factor=%.2f). To re-tune, edit "
+                    "the integration's Options dialog.",
+                    self.annual_consumption_kwh, self.baseload_kwh_per_hour,
+                    self.baseload_day_factor, self.baseload_night_factor,
+                )
+        self.consumption_entity = (entry.data.get(
+            CONF_CONSUMPTION_ENTITY, DEFAULT_CONSUMPTION_ENTITY) or "")
+
+        # Smoothed-daily-kWh cache for `consumption_entity`. Resolved once
+        # per day (not every coordinator cycle); persisted in
+        # `.storage/spot_price_predictor_consumption_cache.json`.
+        self._consumption_cached_daily_kwh: float | None = None
+        self._consumption_last_resolved_at: datetime | None = None
+
         self._pv_enabled = self.pv_capacity_kwp > 0.0 or bool(
             self.pv_external_entity)
 
@@ -213,18 +254,241 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                 - self.pv_export_grid_fee)
 
     def _resolve_baseload(self, ts_utc: datetime) -> float:
-        """Constant baseload with optional day/night shape (kWh/h).
+        """Per-hour baseload (kWh/h) for the typical-total demand.
 
-        STABILITY INVARIANT: this method must NEVER read Home Assistant
-        state entities (energy sensors, etc.). Baseload depends only on
-        configuration, so the price forecast is open-loop with respect to
-        the downstream optimizer's flexible-load decisions. Violating this
-        contract can cause schedule oscillation between layers.
+        Algorithm (v2.4 schema):
+            daily_kwh   = smoothed_consumption_entity OR
+                          annual_consumption_kwh / 365
+            month_idx   = local-hour's month - 1
+            baseload(h) = daily_kwh / 24 × monthly_factor[month_idx]
+
+        STABILITY INVARIANT: when `consumption_entity` is empty (default),
+        baseload is a deterministic function of (config, time) — no HA
+        entity reads, fully open-loop with respect to the optimizer.
+        When `consumption_entity` is set, the smoothed daily kWh comes
+        from a long-window (14-day) EMA with 5 % hysteresis, so EMHASS's
+        daily scheduling decisions don't propagate back into the forecast.
+
+        Legacy v2.3 path: if `annual_consumption_kwh` was inferred from
+        the legacy `baseload_kwh_per_hour` × day/night shape during
+        migration, the same inferred value drives this resolver. Existing
+        v2.3.x deployments continue to behave identically until the user
+        explicitly updates their config to use the new schema.
         """
-        local_hour = self._get_local_hour(ts_utc)
-        is_night = local_hour < 7 or local_hour >= 22
-        factor = self.baseload_night_factor if is_night else self.baseload_day_factor
-        return max(0.05, self.baseload_kwh_per_hour * factor)
+        # Resolve daily kWh — entity-smoothed if configured, else config.
+        daily_kwh = None
+        if self.consumption_entity:
+            daily_kwh = self._smooth_consumption_entity(ts_utc)
+        if daily_kwh is None or daily_kwh <= 0.0:
+            daily_kwh = self.annual_consumption_kwh / 365.0
+
+        # Apply monthly seasonal factor based on local time-of-year.
+        local_dt = self._get_local_dt(ts_utc)
+        month_idx = local_dt.month - 1  # 0..11
+        try:
+            month_factor = FINLAND_RESIDENTIAL_MONTHLY_FACTORS[month_idx]
+        except IndexError:
+            month_factor = 1.0
+
+        # Per-hour value. The monthly factor is normalized so its mean is
+        # 1.0 across the 12 months — daily_kwh × factor gives the typical
+        # daily kWh for that month, divided by 24 hours.
+        return max(0.05, daily_kwh / 24.0 * month_factor)
+
+    def _get_local_dt(self, ts_utc: datetime) -> datetime:
+        """Convert a UTC timestamp to the configured local timezone."""
+        if self._tz:
+            try:
+                from zoneinfo import ZoneInfo
+                aware = ts_utc.replace(tzinfo=ZoneInfo("UTC")) \
+                    if ts_utc.tzinfo is None else ts_utc
+                return aware.astimezone(self._tz)
+            except Exception:
+                pass
+        # Fallback: UTC+3 (Finland, no DST)
+        return ts_utc + timedelta(hours=3)
+
+    def _smooth_consumption_entity(self, ts_utc: datetime) -> float | None:
+        """Smoothed typical-daily-kWh from `self.consumption_entity`.
+
+        Returns None on any failure (caller falls back to
+        `annual_consumption_kwh / 365`). Recomputes the smoothed value at
+        most once per day; the cached value persists across coordinator
+        cycles. 5 % hysteresis on the cached value prevents tiny sensor
+        fluctuations from re-triggering coordinator updates.
+
+        Sensor type auto-detection (in priority order):
+
+        1. Annual / cumulative-kWh counter (`unit = kWh`, `state_class =
+           total_increasing`): query recorder for the value 14 days ago,
+           subtract from current, divide by 14.
+        2. Daily / monthly utility_meter (`state_class = total`):
+           interpret current value × scale factor based on cycle, OR
+           read history of past 14 daily totals and average.
+        3. Instantaneous power (`unit = W` or `kW`, `device_class =
+           power`): use HA's statistics_during_period (28 days, mean) →
+           kWh per day.
+        4. Unknown — returns None, caller falls back to config.
+        """
+        # If we already resolved within the last 23 hours, return cache.
+        # (23h window so the recompute happens on a slightly drifting
+        # boundary; avoids reading HA history on every coordinator tick.)
+        if (
+            self._consumption_cached_daily_kwh is not None
+            and self._consumption_last_resolved_at is not None
+            and (ts_utc - self._consumption_last_resolved_at)
+                < timedelta(hours=23)
+        ):
+            return self._consumption_cached_daily_kwh
+
+        try:
+            new_value = self._fetch_consumption_daily_kwh(ts_utc)
+        except Exception as err:
+            _LOGGER.warning(
+                "consumption_entity '%s' resolve failed: %s; "
+                "falling back to annual_consumption_kwh config",
+                self.consumption_entity, err,
+            )
+            return None
+        if new_value is None or new_value <= 0.0:
+            return None
+
+        # Apply hysteresis — only update the cached value if the new
+        # reading deviates by more than 5 % from the cached one.
+        if self._consumption_cached_daily_kwh is not None:
+            old = self._consumption_cached_daily_kwh
+            if abs(new_value - old) / max(old, 1e-6) < CONSUMPTION_HYSTERESIS_PCT:
+                # Within dead-band; keep the old cached value but bump the
+                # resolved-at timestamp so we don't recompute again today.
+                self._consumption_last_resolved_at = ts_utc
+                return old
+
+        self._consumption_cached_daily_kwh = new_value
+        self._consumption_last_resolved_at = ts_utc
+        _LOGGER.info(
+            "consumption_entity smoothed daily kWh = %.2f (entity=%s, "
+            "smoothing window %d days, hysteresis %.0f%%)",
+            new_value, self.consumption_entity,
+            CONSUMPTION_SMOOTHING_DAYS, CONSUMPTION_HYSTERESIS_PCT * 100,
+        )
+        return new_value
+
+    def _fetch_consumption_daily_kwh(self, ts_utc: datetime) -> float | None:
+        """Auto-detect sensor type and return smoothed daily kWh.
+
+        Reading HA's recorder/history is allowed here because we apply
+        14-day smoothing — long enough that EMHASS's daily scheduling
+        decisions don't propagate back into our value (single-day
+        variation is 1/14 ≈ 7 % of the average). Combined with the 5 %
+        hysteresis dead-band, the closed-loop gain stays well below 1.
+        """
+        state = self.hass.states.get(self.consumption_entity)
+        if state is None:
+            return None
+        unit = (state.attributes.get("unit_of_measurement") or "").lower()
+        device_class = (state.attributes.get("device_class") or "").lower()
+        state_class = (state.attributes.get("state_class") or "").lower()
+
+        if unit in ("kwh",) and state_class in ("total_increasing", "total"):
+            # Cumulative-kWh counter (smart meter, utility_meter, ...).
+            # Use a 14-day delta from recorder history.
+            return self._smooth_kwh_counter(state, ts_utc)
+        if unit in ("w", "kw") and device_class == "power":
+            # Instantaneous power. Use statistics_during_period for the
+            # mean over the smoothing window.
+            return self._smooth_power_sensor(state, ts_utc, unit)
+        # Unknown sensor type — log and bail.
+        _LOGGER.warning(
+            "consumption_entity '%s' has unsupported attributes "
+            "(unit=%r, state_class=%r, device_class=%r) — falling back "
+            "to annual_consumption_kwh config. Supported: kWh counters "
+            "(total_increasing or total) and power sensors (W/kW).",
+            self.consumption_entity, unit, state_class, device_class,
+        )
+        return None
+
+    def _smooth_kwh_counter(
+        self, state, ts_utc: datetime,
+    ) -> float | None:
+        """14-day rolling average of daily kWh from a kWh counter."""
+        try:
+            current = float(state.state)
+        except (TypeError, ValueError):
+            return None
+        try:
+            from homeassistant.components.recorder import (
+                history,
+                get_instance,
+            )
+        except ImportError:
+            return None
+        start = ts_utc - timedelta(days=CONSUMPTION_SMOOTHING_DAYS)
+        try:
+            recorder = get_instance(self.hass)
+            past = recorder.history.state_changes_during_period(
+                self.hass, start, ts_utc, self.consumption_entity,
+                no_attributes=True,
+            )
+        except Exception:
+            try:
+                past = history.state_changes_during_period(
+                    self.hass, start, ts_utc, self.consumption_entity,
+                    no_attributes=True,
+                )
+            except Exception:
+                return None
+        rows = past.get(self.consumption_entity) or []
+        oldest_value: float | None = None
+        for row in rows:
+            try:
+                v = float(row.state)
+                if oldest_value is None:
+                    oldest_value = v
+                    break
+            except (TypeError, ValueError):
+                continue
+        if oldest_value is None:
+            # Not enough history — caller will fall back.
+            return None
+        if state_class := state.attributes.get("state_class"):
+            if state_class.lower() == "total":
+                # Daily/monthly utility_meter — counter resets within
+                # window; can't take a simple delta. Fall back.
+                return None
+        delta = current - oldest_value
+        if delta <= 0:
+            return None
+        return delta / float(CONSUMPTION_SMOOTHING_DAYS)
+
+    def _smooth_power_sensor(
+        self, state, ts_utc: datetime, unit: str,
+    ) -> float | None:
+        """28-day mean of instantaneous power → typical daily kWh."""
+        try:
+            from homeassistant.components.recorder import statistics
+        except ImportError:
+            return None
+        start = ts_utc - timedelta(days=CONSUMPTION_SMOOTHING_DAYS * 2)
+        try:
+            stats = statistics.statistics_during_period(
+                self.hass,
+                start, ts_utc,
+                statistic_ids={self.consumption_entity},
+                period="day",
+                units=None,
+                types={"mean"},
+            )
+        except Exception:
+            return None
+        rows = stats.get(self.consumption_entity) or []
+        means = [r.get("mean") for r in rows if r.get("mean") is not None]
+        if not means:
+            return None
+        avg_power = sum(means) / len(means)
+        # Convert W → kW if needed; multiply by 24 to get daily kWh.
+        if unit == "w":
+            avg_power = avg_power / 1000.0
+        return float(avg_power) * 24.0
 
     def _read_external_pv_forecast(self) -> list[float] | None:
         """Read up to 168 h of PV forecast from a configured HA entity.

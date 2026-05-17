@@ -56,9 +56,91 @@ DEFAULT_PV_TILT_DEG            = 45.0    # matches Open-Meteo fetch
 DEFAULT_PV_AZIMUTH_DEG         = 180.0   # south
 DEFAULT_PV_SYSTEM_EFFICIENCY   = 0.85
 DEFAULT_PV_EXPORT_GRID_FEE     = 0.0     # EUR/kWh extra fee on export (above sell commission)
-DEFAULT_BASELOAD_KWH_PER_HOUR  = 0.8     # ~7000 kWh/yr typical Finnish household
+
+# ---------------------------------------------------------------------------
+# v2.3 baseload schema (legacy, kept for backwards compatibility / migration)
+# ---------------------------------------------------------------------------
+# These three fields are superseded by `annual_consumption_kwh` /
+# `consumption_entity` in v2.4. Migration is automatic in coordinator
+# `__init__` — when a config entry only carries the legacy fields, they
+# are converted to an inferred `annual_consumption_kwh` and an INFO log
+# line is emitted. The legacy defaults are preserved unchanged so existing
+# v2.3.x deployments continue to behave identically until the user
+# explicitly updates their config via Options.
+DEFAULT_BASELOAD_KWH_PER_HOUR  = 0.8     # legacy default — re-tune per bill
 DEFAULT_BASELOAD_DAY_FACTOR    = 1.2
 DEFAULT_BASELOAD_NIGHT_FACTOR  = 0.7
+
+# ---------------------------------------------------------------------------
+# v2.4 baseload schema — annual kWh + optional HA consumption entity
+# ---------------------------------------------------------------------------
+# `annual_consumption_kwh` represents the user's typical TOTAL annual
+# household demand (the bill-derived total, including PV self-consumption
+# and all optimizer-controlled loads). The integration computes per-hour
+# baseload as:
+#
+#   baseload(h) = annual_consumption_kwh / 8760 × monthly_factor[month(h)]
+#
+# `consumption_entity` is an optional HA sensor (any cumulative-kWh counter,
+# `utility_meter` daily/monthly counter, instantaneous power sensor, etc.).
+# When set, the integration auto-detects the sensor type, queries HA's
+# recorder/statistics API for a long-window (14 to 28 day) smoothed mean,
+# applies 5 % hysteresis, and uses that as the daily-kWh baseline instead
+# of the static config. The smoothed value persists across HA restarts.
+#
+# Stability invariant: baseload is a deterministic function of (config +
+# long-window-EMA, time). 14-day smoothing + 5% hysteresis prevents
+# EMHASS's daily decisions from propagating back into the forecast.
+
+CONF_ANNUAL_CONSUMPTION_KWH = "annual_consumption_kwh"
+CONF_CONSUMPTION_ENTITY     = "consumption_entity"
+
+DEFAULT_ANNUAL_CONSUMPTION_KWH = 12000   # mid-range Finnish single-family with heat pump
+DEFAULT_CONSUMPTION_ENTITY     = ""
+
+# Smoothing window for `consumption_entity` (days). 14 days is long
+# enough to wash out EMHASS's daily scheduling decisions while still
+# tracking seasonal drift on a meaningful timescale.
+CONSUMPTION_SMOOTHING_DAYS = 14
+CONSUMPTION_HYSTERESIS_PCT = 0.05        # 5 % dead-band on cached value
+
+# Monthly normalization factors for the Finnish residential non-electric-
+# heating load profile (Fingrid Datahub category BE03 equivalent, "Type 1").
+# Multiply annual_kwh / 12 by this factor to get the typical monthly kWh.
+# Sum is exactly 12.00. Variation ±19 % around the mean — characteristic of
+# Finnish 60°N latitude where lighting load drives strong winter peak and
+# vacation/long-day combination drives July trough.
+#
+# Source: literature-derived from Finnish residential load profile research
+# (VTT Publications 289 "Load research and load estimation in electricity
+# distribution", Adato Energia DSO standard load profiles ["tyyppikäyrät"],
+# Statistics Finland "Energy consumption in households" survey, 2024).
+# These are NOT verbatim from a single publication — no Finnish source
+# publishes a clean 12-element normalized array. They are calibrated to
+# the published BE03 shape (winter 1.10–1.18, summer trough at 0.80 in
+# July, shoulder months near 1.00).
+#
+# TODO (v2.4.x patch): replace with verbatim values from Fingrid Open Data
+# dataset #360 ("Sähkönkulutus Suomen jakeluverkoissa käyttäjäryhmittäin",
+# https://data.fingrid.fi/en/datasets/360) filtered to category BE03,
+# averaged across the most recent 12 months. Requires Fingrid API key
+# (the same key already used for nuclear data).
+FINLAND_RESIDENTIAL_MONTHLY_FACTORS = [
+    1.18,  # Jan — long nights, lighting peak
+    1.12,  # Feb
+    1.08,  # Mar
+    1.00,  # Apr — shoulder
+    0.92,  # May
+    0.85,  # Jun — vacations begin, long days
+    0.80,  # Jul — vacation trough
+    0.85,  # Aug
+    0.93,  # Sep — back-to-school
+    1.02,  # Oct — nights getting longer
+    1.10,  # Nov
+    1.15,  # Dec — holidays + lighting
+]
+assert abs(sum(FINLAND_RESIDENTIAL_MONTHLY_FACTORS) - 12.0) < 1e-9, \
+    "Monthly factors must sum to exactly 12 for normalization invariant"
 
 # DtACI online calibration layer (Phase B v2). Off by default; enabling
 # wires up per-(direction, k) DtACI on FI consumer-price D(i) statistics

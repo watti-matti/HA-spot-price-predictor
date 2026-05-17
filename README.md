@@ -2,7 +2,7 @@
 
 [![HACS Integration](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-2.3.0-blue.svg)](https://github.com/watti-matti/HA-spot-price-predictor/releases/tag/v2.3.0)
+[![Version](https://img.shields.io/badge/version-2.4.0-blue.svg)](https://github.com/watti-matti/HA-spot-price-predictor/releases/tag/v2.4.0)
 
 **Forecast consumer electricity costs and D(k) duration curves up to 7 days ahead** using machine learning with physics-based weather features, cross-border trade analysis, and nuclear outage awareness.
 
@@ -130,9 +130,14 @@ The duration sensor gains parallel `dk_cheap_pv_eur_kwh[12]` / `dk_peak_pv_eur_k
 - **Internal estimator (default)** — uses Open-Meteo `global_tilted_irradiance_instant` × your configured `kwp` × tilt/azimuth correction × `efficiency`. Free, 7-day horizon, no rate limit.
 - **External entity (override)** — set `pv_external_entity` to any HA sensor whose attributes match one of: `forecast` list-of-dict (kWh), `wh_hours` dict (Wh), `watts` dict (W), or `irradiance` list (auto-detected W/kWh). Forecast.Solar, custom Open-Meteo templates, and similar publishers all just work. Use this if you have multi-array setups or want shading-aware values.
 
-**Stability invariant.** The `baseload_kwh_per_hour` configuration value represents the user's **typical TOTAL hourly consumption** — bill-derived total demand including all loads (heat pump, EV, sauna, water heater, etc.). The static configured value cannot create optimizer feedback because it doesn't depend on observed consumption; including typical flexible loads makes the marginal-cost arithmetic self-consistent with the optimizer's planning. The actual stability requirement is only about what the predictor **reads** (no HA entities reflecting optimizer-controlled load), not what the static value **represents**. See [TECHNICAL_GUIDE.md](TECHNICAL_GUIDE.md#pv-aware-pricing) for the full cross-system contract and a worked Case A vs Case B example.
+**Configuration (v2.4):** the PV system step accepts two baseload-related fields:
 
-*Note (v2.3 → v2.3.1 doc fix): the v2.3.0 release shipped with help text saying baseload should be "non-flexible only" — that guidance was incorrect. Users following it get a systematic optimism bias on heat-pump days. Please raise your `baseload_kwh_per_hour` to typical TOTAL hourly consumption (≈ annual_bill_kWh / 8760). v2.4.0 will replace these three fields with `annual_consumption_kwh` directly.*
+- **`annual_consumption_kwh`** (default 12 000) — the user's typical TOTAL annual household demand from the electricity bill, including PV self-consumption and optimizer-controlled loads (heat pump, EV, sauna, water heater). The integration multiplies by a built-in Finnish residential monthly seasonal profile (Fingrid Datahub BE03 typing curve, range ±19 % around the mean) to get per-hour baseload. No day/night split — that's the optimizer's domain.
+- **`consumption_entity`** (optional, e.g. `sensor.energy_yesterday`) — any HA consumption sensor: cumulative-kWh counter (smart meter, `utility_meter`), HA Energy Dashboard's daily/yearly counters, or instantaneous-power sensor (W / kW). The integration auto-detects the sensor type and applies internal long-window smoothing (14-day rolling average + 5 % hysteresis), so EMHASS's daily scheduling decisions don't propagate back into the forecast. No `filter:` template required.
+
+**Stability invariant.** Baseload is a deterministic function of `(config + long-window EMA, time)`. With `consumption_entity` empty, baseload comes purely from the static `annual_consumption_kwh` × seasonal profile — fully open-loop wrt the optimizer. With `consumption_entity` set, the 14-day smoothing window plus 5 % hysteresis keep the closed-loop gain well below 1, so EMHASS's daily decisions cannot create oscillation. See [TECHNICAL_GUIDE.md](TECHNICAL_GUIDE.md#pv-aware-pricing) for the worked Case A vs Case B example and the cross-system contract.
+
+**Migration from v2.3.x:** the legacy `baseload_kwh_per_hour` + day/night factor fields are auto-migrated to an inferred `annual_consumption_kwh` on first load (logs an INFO line). Users following the misleading v2.3.0 "non-flexible only" guidance will see a low inferred value (~7000 kWh/yr); please re-tune to your actual annual bill via Options.
 
 ### Actual Price Sensors (optional, when Nordpool entity is configured)
 

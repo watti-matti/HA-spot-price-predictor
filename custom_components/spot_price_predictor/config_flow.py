@@ -39,6 +39,8 @@ from .const import (
     CONF_BASELOAD_KWH_PER_HOUR,
     CONF_BASELOAD_DAY_FACTOR,
     CONF_BASELOAD_NIGHT_FACTOR,
+    CONF_ANNUAL_CONSUMPTION_KWH,
+    CONF_CONSUMPTION_ENTITY,
     DEFAULT_PV_CAPACITY_KWP,
     DEFAULT_PV_TILT_DEG,
     DEFAULT_PV_AZIMUTH_DEG,
@@ -47,6 +49,8 @@ from .const import (
     DEFAULT_BASELOAD_KWH_PER_HOUR,
     DEFAULT_BASELOAD_DAY_FACTOR,
     DEFAULT_BASELOAD_NIGHT_FACTOR,
+    DEFAULT_ANNUAL_CONSUMPTION_KWH,
+    DEFAULT_CONSUMPTION_ENTITY,
     REGIONS,
     OPERATORS,
     DEFAULT_VAT_MULTIPLIER,
@@ -54,6 +58,25 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _infer_legacy_annual_kwh(current: dict) -> float:
+    """Compute annual_consumption_kwh equivalent of legacy v2.3 baseload.
+
+    Used to populate the Options form's default when migrating an entry
+    that was created in v2.3.x. Mirrors the inference in coordinator
+    `__init__` so the user sees a consistent number.
+    """
+    if CONF_ANNUAL_CONSUMPTION_KWH in current:
+        return float(current[CONF_ANNUAL_CONSUMPTION_KWH])
+    base = float(current.get(
+        CONF_BASELOAD_KWH_PER_HOUR, DEFAULT_BASELOAD_KWH_PER_HOUR))
+    day = float(current.get(
+        CONF_BASELOAD_DAY_FACTOR, DEFAULT_BASELOAD_DAY_FACTOR))
+    night = float(current.get(
+        CONF_BASELOAD_NIGHT_FACTOR, DEFAULT_BASELOAD_NIGHT_FACTOR))
+    avg = base * ((day * 15 + night * 9) / 24.0)
+    return round(avg * 8760.0, 0) or DEFAULT_ANNUAL_CONSUMPTION_KWH
 
 
 class SpotPricePredictorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -220,30 +243,27 @@ class SpotPricePredictorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._data[CONF_PV_EXPORT_GRID_FEE] = float(
                 user_input.get(CONF_PV_EXPORT_GRID_FEE, DEFAULT_PV_EXPORT_GRID_FEE)
             )
-            self._data[CONF_BASELOAD_KWH_PER_HOUR] = float(
-                user_input.get(CONF_BASELOAD_KWH_PER_HOUR, DEFAULT_BASELOAD_KWH_PER_HOUR)
+            self._data[CONF_ANNUAL_CONSUMPTION_KWH] = float(
+                user_input.get(CONF_ANNUAL_CONSUMPTION_KWH,
+                               DEFAULT_ANNUAL_CONSUMPTION_KWH)
             )
-            self._data[CONF_BASELOAD_DAY_FACTOR] = float(
-                user_input.get(CONF_BASELOAD_DAY_FACTOR, DEFAULT_BASELOAD_DAY_FACTOR)
-            )
-            self._data[CONF_BASELOAD_NIGHT_FACTOR] = float(
-                user_input.get(CONF_BASELOAD_NIGHT_FACTOR, DEFAULT_BASELOAD_NIGHT_FACTOR)
-            )
+            self._data[CONF_CONSUMPTION_ENTITY] = (user_input.get(
+                CONF_CONSUMPTION_ENTITY, DEFAULT_CONSUMPTION_ENTITY) or "")
 
             title = f"Spot Price ({REGIONS.get(self._data.get(CONF_REGION, 'finland'), 'Finland')})"
             return self.async_create_entry(title=title, data=self._data)
 
-        # Stability invariant: baseload must be a deterministic function of
-        # (config, time) and must NEVER read from an HA entity that reflects
-        # optimizer-controlled load. The configured value should represent
-        # the user's TYPICAL TOTAL hourly household consumption (kWh) — the
-        # bill-derived total demand including heat pump, EV, sauna, water
-        # heater and everything else that runs on a typical day. Static
-        # configuration cannot create optimizer feedback because it never
-        # changes in response to observed consumption. Including typical
-        # flexible loads here makes the marginal-cost arithmetic
-        # self-consistent with EMHASS's planning (see TECHNICAL_GUIDE
-        # "PV-aware pricing" section for the worked example).
+        # Stability invariant: the price forecaster's baseload must be a
+        # deterministic function of (config + long-window EMA, time). The
+        # `annual_consumption_kwh` value represents typical TOTAL annual
+        # household demand including PV self-consumption AND optimizer-
+        # controlled loads (heat pump, EV, sauna, water heater). Static
+        # config cannot create optimizer feedback. The optional
+        # `consumption_entity` reads any HA consumption sensor and
+        # internally smooths it over a 14-day window with 5 % hysteresis,
+        # long enough that EMHASS's daily decisions don't propagate back.
+        # See TECHNICAL_GUIDE "PV-aware pricing" for the worked Case A vs
+        # Case B example.
         schema = vol.Schema({
             vol.Optional(
                 CONF_PV_CAPACITY_KWP, default=DEFAULT_PV_CAPACITY_KWP,
@@ -266,18 +286,16 @@ class SpotPricePredictorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_PV_EXPORT_GRID_FEE, default=DEFAULT_PV_EXPORT_GRID_FEE,
                 description={"suggested_value": DEFAULT_PV_EXPORT_GRID_FEE},
             ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=0.10)),
+            # v2.4 baseload schema (replaces 3 v2.3 fields).
             vol.Optional(
-                CONF_BASELOAD_KWH_PER_HOUR, default=DEFAULT_BASELOAD_KWH_PER_HOUR,
-                description={"suggested_value": DEFAULT_BASELOAD_KWH_PER_HOUR},
-            ): vol.All(vol.Coerce(float), vol.Range(min=0.05, max=10.0)),
+                CONF_ANNUAL_CONSUMPTION_KWH,
+                default=DEFAULT_ANNUAL_CONSUMPTION_KWH,
+                description={"suggested_value": DEFAULT_ANNUAL_CONSUMPTION_KWH},
+            ): vol.All(vol.Coerce(float), vol.Range(min=500.0, max=50000.0)),
             vol.Optional(
-                CONF_BASELOAD_DAY_FACTOR, default=DEFAULT_BASELOAD_DAY_FACTOR,
-                description={"suggested_value": DEFAULT_BASELOAD_DAY_FACTOR},
-            ): vol.All(vol.Coerce(float), vol.Range(min=0.1, max=5.0)),
-            vol.Optional(
-                CONF_BASELOAD_NIGHT_FACTOR, default=DEFAULT_BASELOAD_NIGHT_FACTOR,
-                description={"suggested_value": DEFAULT_BASELOAD_NIGHT_FACTOR},
-            ): vol.All(vol.Coerce(float), vol.Range(min=0.1, max=5.0)),
+                CONF_CONSUMPTION_ENTITY,
+                default=DEFAULT_CONSUMPTION_ENTITY,
+            ): str,
         })
         return self.async_show_form(step_id="pv_system", data_schema=schema)
 
@@ -372,15 +390,22 @@ class SpotPriceOptionsFlow(config_entries.OptionsFlow):
                 new_data[CONF_PV_EXPORT_GRID_FEE] = float(user_input.get(
                     CONF_PV_EXPORT_GRID_FEE, DEFAULT_PV_EXPORT_GRID_FEE
                 ))
-                new_data[CONF_BASELOAD_KWH_PER_HOUR] = float(user_input.get(
-                    CONF_BASELOAD_KWH_PER_HOUR, DEFAULT_BASELOAD_KWH_PER_HOUR
+                new_data[CONF_ANNUAL_CONSUMPTION_KWH] = float(user_input.get(
+                    CONF_ANNUAL_CONSUMPTION_KWH,
+                    DEFAULT_ANNUAL_CONSUMPTION_KWH
                 ))
-                new_data[CONF_BASELOAD_DAY_FACTOR] = float(user_input.get(
-                    CONF_BASELOAD_DAY_FACTOR, DEFAULT_BASELOAD_DAY_FACTOR
-                ))
-                new_data[CONF_BASELOAD_NIGHT_FACTOR] = float(user_input.get(
-                    CONF_BASELOAD_NIGHT_FACTOR, DEFAULT_BASELOAD_NIGHT_FACTOR
-                ))
+                new_data[CONF_CONSUMPTION_ENTITY] = (user_input.get(
+                    CONF_CONSUMPTION_ENTITY,
+                    DEFAULT_CONSUMPTION_ENTITY
+                ) or "")
+                # Drop legacy v2.3 baseload fields when the user re-saves
+                # via Options. The coordinator's migration logic still
+                # honours them on first load if present, but once the user
+                # touches Options we move cleanly to the v2.4 schema.
+                for k in (CONF_BASELOAD_KWH_PER_HOUR,
+                          CONF_BASELOAD_DAY_FACTOR,
+                          CONF_BASELOAD_NIGHT_FACTOR):
+                    new_data.pop(k, None)
 
                 self.hass.config_entries.async_update_entry(
                     self._config_entry, data=new_data
@@ -475,21 +500,26 @@ class SpotPriceOptionsFlow(config_entries.OptionsFlow):
                 default=current.get(CONF_PV_EXPORT_GRID_FEE, DEFAULT_PV_EXPORT_GRID_FEE),
                 description={"suggested_value": current.get(CONF_PV_EXPORT_GRID_FEE, DEFAULT_PV_EXPORT_GRID_FEE)},
             ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=0.10)),
+            # v2.4 baseload schema. If the entry only carries legacy v2.3
+            # `baseload_kwh_per_hour`, infer the equivalent annual value
+            # for the form default; the user can keep it or re-tune.
             vol.Optional(
-                CONF_BASELOAD_KWH_PER_HOUR,
-                default=current.get(CONF_BASELOAD_KWH_PER_HOUR, DEFAULT_BASELOAD_KWH_PER_HOUR),
-                description={"suggested_value": current.get(CONF_BASELOAD_KWH_PER_HOUR, DEFAULT_BASELOAD_KWH_PER_HOUR)},
-            ): vol.All(vol.Coerce(float), vol.Range(min=0.05, max=10.0)),
+                CONF_ANNUAL_CONSUMPTION_KWH,
+                default=current.get(
+                    CONF_ANNUAL_CONSUMPTION_KWH,
+                    _infer_legacy_annual_kwh(current),
+                ),
+                description={"suggested_value": current.get(
+                    CONF_ANNUAL_CONSUMPTION_KWH,
+                    _infer_legacy_annual_kwh(current),
+                )},
+            ): vol.All(vol.Coerce(float), vol.Range(min=500.0, max=50000.0)),
             vol.Optional(
-                CONF_BASELOAD_DAY_FACTOR,
-                default=current.get(CONF_BASELOAD_DAY_FACTOR, DEFAULT_BASELOAD_DAY_FACTOR),
-                description={"suggested_value": current.get(CONF_BASELOAD_DAY_FACTOR, DEFAULT_BASELOAD_DAY_FACTOR)},
-            ): vol.All(vol.Coerce(float), vol.Range(min=0.1, max=5.0)),
-            vol.Optional(
-                CONF_BASELOAD_NIGHT_FACTOR,
-                default=current.get(CONF_BASELOAD_NIGHT_FACTOR, DEFAULT_BASELOAD_NIGHT_FACTOR),
-                description={"suggested_value": current.get(CONF_BASELOAD_NIGHT_FACTOR, DEFAULT_BASELOAD_NIGHT_FACTOR)},
-            ): vol.All(vol.Coerce(float), vol.Range(min=0.1, max=5.0)),
+                CONF_CONSUMPTION_ENTITY,
+                default=current.get(
+                    CONF_CONSUMPTION_ENTITY, DEFAULT_CONSUMPTION_ENTITY,
+                ),
+            ): str,
         })
         return self.async_show_form(
             step_id="init", data_schema=schema, errors=errors

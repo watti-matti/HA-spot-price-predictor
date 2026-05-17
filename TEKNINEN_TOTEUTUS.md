@@ -1,4 +1,4 @@
-# Tekninen toteutus: HA-spot-price-predictor (v2.3.0)
+# Tekninen toteutus: HA-spot-price-predictor (v2.4.0)
 
 Sähkön kuluttajahinnan ja D(k) = CVaR -kestokustannusten ennustaminen Home Assistantiin. Tuottaa 170 tunnin kuluttajahintaennusteen (EUR/kWh) ja 7 vrk D(k) halpa/kallis -kestokäyrät kuormanohjauksen kustannusoptimointiin, käyttäen log-lineaarista Ridge-regressiota fysiikkapohjaisilla piirteillä ja useiden datalähteiden integrointia. Valinnaisesti rikastaa jokaisen ennustetunnin PV-tietoisella marginaalisella efektiivisellä hinnalla `m_h` ja PV-tietoisilla D(k)-käyrillä, kun käyttäjä konfiguroi kotitalouden aurinkopaneelit.
 
@@ -332,7 +332,35 @@ PV:n ollessa vain 2 kWh, Tapaus B palauttaa oikein m_h ≈ 14 c/kWh (PV pääosi
 
 v2.3.0 -julkaisu sisälsi virheellisen ohjeen "vain ei-joustava". **Ohje oli väärä** — se sekoitti kaksi erillistä vakaushuolta. Varsinainen vaatimus koskee vain sitä mitä ennustaja LUKEE (ei optimoijan vaikuttamia HA-entiteettejä), ei sitä mitä staattinen arvo EDUSTAA. Vanhaa ohjetta noudattavat käyttäjät saavat Tapauksen A optimismivinouman lämpöpumppupäivinä. Nosta `baseload_kwh_per_hour` tyypilliseen KOKONAISKULUTUKSEEN (≈ vuosilasku_kWh / 8760).
 
-Tuleva v2.4.0 -skeemauudistus korvaa nämä kolme kenttää yhdellä `annual_consumption_kwh` -arvolla (oletus 12 000) plus valinnaisella `consumption_entity` -kentällä HA-anturipohjaista tasausta varten — paljon ystävällisempi UX oikealle semantiikalle.
+#### v2.4.0 perustasoskeemauudistus
+
+v2.4.0 korvaa kolme v2.3-kenttää (`baseload_kwh_per_hour`, `baseload_day_factor`, `baseload_night_factor`) kahdella ystävällisemmällä:
+
+- **`annual_consumption_kwh`** (oletus 12 000) — käyttäjän tyypillinen KOKONAISKULUTUS vuodessa sähkölaskun mukaan. Yksi käyttäjäystävällinen luku. Sisäisesti:
+
+  ```
+  baseload(h) = annual_consumption_kwh / 8760 × monthly_factor[month_of_h]
+  ```
+
+  jossa `monthly_factor` on 12-elementtinen suomalaisen ei-sähkölämmitteisen asuinrakennuksen kausiprofiili `const.py`:ssä (`FINLAND_RESIDENTIAL_MONTHLY_FACTORS`). Kerroinsumma = 12,00 tarkasti (normalisointi-invariantti); vaihteluväli ≈ ±19 % keskiarvon ympärillä (60°N leveysasteen kuvio: valaistuksen vetämä talvihuippu joulu/tammikuussa, loma-ajan/pitkien päivien aallonpohja heinäkuussa). Lähde: kirjallisuuspohjainen estimaatti suomalaisesta tutkimuksesta (VTT Publications 289, Adato Energia, Tilastokeskus 2024). **TODO**: korvaa Fingrid Open Data -aineisto #360:n (BE03 tyyppikäyrä) sanasta-sanaan-arvoilla v2.4.x-päivityksessä.
+
+- **`consumption_entity`** (valinnainen) — mikä tahansa HA-kulutusanturi; integraatio tunnistaa tyypin ja tasaa sisäisesti:
+
+  | Tunnistettu tyyppi | Tunnistus (HA-attr) | Tasausstrategia |
+  |---|---|---|
+  | Kumulatiivinen kWh-laskuri | `unit = kWh`, `state_class = total_increasing` | 14 päivän delta jaettuna 14:llä → päiväkohtainen kWh |
+  | Päivä/kuukausi `utility_meter` | `state_class = total` cycle-attribuutilla | Historiaikkunan keskiarvo päiväkohtaisista summista |
+  | Hetkellinen teho | `unit = W` tai `kW`, `device_class = power` | `statistics_during_period(28 d, mean)` × 24 |
+  | Tuntematon | (varatoiminto) | Hiljainen palautuminen `annual_consumption_kwh` -konfiguraatioon; loki varoitus |
+
+  Tasattu arvo välimuistissa `.storage/spot_price_predictor_consumption_cache.json`:issa, lasketaan uudelleen enintään kerran päivässä. 5 % hysteresis-aluekielto välimuistissa olevalle arvolle estää pieniä anturimelu-värähtelyitä laukaisemasta uudelleen koordinaattorin päivityksiä.
+
+**Vakaustarkistus v2.4-skeemalla**:
+
+- **Oletustila** (`consumption_entity = ""`): `baseload(h)` on deterministinen funktio vain `(annual_consumption_kwh, h)` -syötteistä — ei HA-entiteetinlukua, täysin avoin silmukka. Identtinen turvaominaisuus Phase 1:n kanssa.
+- **HA-anturitila**: 14 päivän liukuva keskiarvo vaimentaa yksittäisen päivän häiriön `1/14 ≈ 7 %`:iin. Yhdistettynä 5 % hysteresis-aluekieltoon, EMHASS:n 5 kWh kuorman uudelleenajoittaminen päivien välillä tuottaa `5/14 ≈ 0,36 kWh` liukuvan muutoksen, vain ~3 % 12 kWh/päivä perustasosta — alueen sisällä, joten välimuistissa oleva perustaso ei muutu ja EMHASS näkee vakaan ennusteen.
+
+**Migraatio v2.3.x:stä**: kun konfiguraatiomerkintä sisältää vain vanhan `baseload_kwh_per_hour` -kentän, koordinaattorin `__init__` päättelee vastaavan vuosittaisen arvon ja kirjaa INFO-rivin. Vanhat kentät säilyvät `entry.data`:ssa kunnes käyttäjä avaa Asetukset-dialogin ja tallentaa uudelleen. v2.3.0:n oletusta noudattanut käyttäjä saa noin 7660 kWh/v päättelyn — selvästi alhainen tyypilliselle suomalaiselle lämpöpumpputalolle, mikä kannustaa virittämään todelliseen laskuun.
 
 ### Ulkoinen PV-ennuste — tuetut attribuutti-konventiot
 
@@ -359,9 +387,11 @@ PV-järjestelmän parametrit asetetaan HA-asennusvelhon valinnaisessa "PV system
 | `pv_system_efficiency` | 0,85 | DC/AC + likaantuminen + häviöt yhteenlaskettuna |
 | `pv_external_entity` | "" | Valinnainen HA-sensori, joka korvaa sisäisen estimaattorin |
 | `pv_export_grid_fee` | 0 | Lisämaksu viedystä energiasta (myyntipalkkion yli) |
-| `baseload_kwh_per_hour` | 0,8 (legacy oletus — katso huomautus) | Tyypillinen KOKONAISTUNTIKULUTUS (≈ vuosilasku_kWh / 8760). Keskiluokan suomalainen omakotitalo lämpöpumpulla ≈ 1,4 (≈ 12 000 kWh/v); kerrostalo ilman sähkölämmitystä lähempänä 0,5 (≈ 4 000 kWh/v). Oletusarvo säilytetty 0,8:ssa v2.3.x-yhteensopivuuden vuoksi mutta on liian alhainen useimmille lämpöpumpputaloille; viritä laskusi mukaan. |
-| `baseload_day_factor` | 1,2 | 07–22 kerroin |
-| `baseload_night_factor` | 0,7 | 22–07 kerroin |
+| `annual_consumption_kwh` (v2.4) | 12 000 | Tyypillinen KOKONAISKULUTUS vuodessa laskun mukaan, mukaan lukien PV-itsekulutus JA optimoijan ohjaamat kuormat. Kerrotaan sisäänrakennetulla suomalaisella asuinrakennuksen kuukausittaisella kausiprofiilla per-tunti-perustasoa varten. |
+| `consumption_entity` (v2.4, valinnainen) | "" | Mikä tahansa HA-kulutusanturi (kumulatiivinen kWh-laskuri, päivä/kuukausi-utility_meter, hetkellinen teho). Integraatio tunnistaa tyypin ja tasaa sisäisesti 14 päivän liukuvalla keskiarvolla + 5 % hysteresiksellä. Suositeltu placeholder: `sensor.energy_yesterday`. |
+| `baseload_kwh_per_hour` (v2.3, vanha) | 0,8 | Auto-migroidaan `annual_consumption_kwh`-arvoon latauksessa. Säilytetty taaksepäin yhteensopivuuden vuoksi. |
+| `baseload_day_factor` (v2.3, vanha) | 1,2 | Auto-migroidaan; sivuutetaan v2.4:ssä. |
+| `baseload_night_factor` (v2.3, vanha) | 0,7 | Auto-migroidaan; sivuutetaan v2.4:ssä. |
 
 `pv_capacity_kwp = 0` (oletus) ja tyhjä `pv_external_entity` poistavat kaikki PV-tietoiset tulosteet siististi — integraatio tuottaa tavupareittain identtiset PV:ttömät tulokset, jotka vastaavat v2.2:n käyttäytymistä.
 

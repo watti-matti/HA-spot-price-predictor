@@ -292,17 +292,24 @@ pv_system:
   external_entity: ""                # Optional HA entity overriding internal estimator
   export_grid_fee_eur_kwh: 0.0       # Extra grid fee on exported energy (above sell commission)
 
-  # baseload values represent TYPICAL TOTAL hourly household consumption
-  # (the bill-derived total demand including all loads). Day/night factors
-  # split this average between 07-22 and 22-07 — they are NOT a model of
-  # optimizer behavior, just the unavoidable diurnal demand pattern of
-  # lighting, cooking, occupancy etc.
-  #
-  # Default value is the previous v2.3.0 value preserved for backwards
-  # compatibility. Users following the corrected guidance should configure
-  # baseload_kwh_per_hour ≈ annual_kwh / 8760 — e.g. 12000/8760 ≈ 1.4 for
-  # a mid-range Finnish single-family house. v2.4.0 schema overhaul will
-  # replace these three fields with `annual_consumption_kwh` directly.
+  # ---- v2.4 baseload schema (current) ----
+  # `annual_consumption_kwh` is the user's typical TOTAL annual household
+  # demand including PV self-consumption AND optimizer-controlled loads
+  # (heat pump, EV, sauna, water heater). Bill-derived number.
+  # The integration multiplies by a fixed Finnish residential monthly
+  # seasonal profile (Fingrid Datahub BE03 typing curve, see
+  # FINLAND_RESIDENTIAL_MONTHLY_FACTORS in const.py). No day/night split
+  # in the predictor — that's the optimizer's domain.
+  annual_consumption_kwh: 12000      # mid-range Finnish single-family
+  consumption_entity: ""             # optional HA sensor (auto-smoothed)
+
+  # ---- v2.3 baseload schema (LEGACY, kept for backwards compatibility) ----
+  # These three fields are superseded by `annual_consumption_kwh` above.
+  # Migration in coordinator __init__ infers the equivalent annual value
+  # from these legacy fields when annual_consumption_kwh is missing.
+  # Existing v2.3.x entries continue to work unchanged; a downgrade from
+  # v2.4 back to v2.3.x also keeps working since the legacy fields are
+  # preserved in the entry data when the user re-saves Options.
   baseload_kwh_per_hour: 0.8         # legacy default — re-tune per your bill
   baseload_day_factor: 1.2           # 07-22 multiplier
   baseload_night_factor: 0.7         # 22-07 multiplier
