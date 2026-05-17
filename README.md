@@ -2,7 +2,7 @@
 
 [![HACS Integration](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-2.7.0-blue.svg)](https://github.com/watti-matti/HA-spot-price-predictor/releases/tag/v2.7.0)
+[![Version](https://img.shields.io/badge/version-2.8.0-blue.svg)](https://github.com/watti-matti/HA-spot-price-predictor/releases/tag/v2.8.0)
 
 **Forecast consumer electricity costs and D(k) duration curves up to 7 days ahead** using machine learning with physics-based weather features, cross-border trade analysis, and nuclear outage awareness.
 
@@ -302,7 +302,8 @@ To adapt for another country, create a new region YAML file and retrain. The mod
 - [TEKNINEN_TOTEUTUS.md](TEKNINEN_TOTEUTUS.md) — Arkkitehtuuri, piirre-engineering, mallin kuvaus (suomeksi)
 - [docs/dk_cheap_peak_migration.md](docs/dk_cheap_peak_migration.md) — D(k) schema migration guide for downstream consumers
 - [docs/dtaci_layer.md](docs/dtaci_layer.md) — DtACI online calibration: algorithm details, state persistence, troubleshooting
-- [studies/results/V2_7_0_RELEASE_NOTES.md](studies/results/V2_7_0_RELEASE_NOTES.md) — **v2.7.0 (CURRENT)** — Cutover: v26 L1+L2+L3+L4+floor REPLACES v2.2 9-feature Ridge as the primary spot prediction. Sensor entity_ids unchanged. MAE 35→10 EUR/MWh, R² 0.49→0.93 for every user on update.
+- [studies/results/V2_8_0_RELEASE_NOTES.md](studies/results/V2_8_0_RELEASE_NOTES.md) — **v2.8.0 (CURRENT)** — Consolidated retraining: new HA service `spot_price_predictor.retrain_models` refits L1 seasonal + L2/L3/L4 spike + solar sub-model from HA-side. Atomic artifact writes; V26Pipeline auto-reload. Fires `spot_price_predictor_models_retrained` event on completion.
+- [studies/results/V2_7_0_RELEASE_NOTES.md](studies/results/V2_7_0_RELEASE_NOTES.md) — v2.7.0 Cutover: v26 L1+L2+L3+L4+floor REPLACES v2.2 9-feature Ridge as the primary spot prediction. Sensor entity_ids unchanged. MAE 35→10 EUR/MWh, R² 0.49→0.93 for every user on update.
 - [studies/results/V2_6_1_BENCHMARK.md](studies/results/V2_6_1_BENCHMARK.md) — v2.6.1 Head-to-head v2.2 vs v2.6.0 on real FI test data: v2.6.0 wins decisively (MAE 35→10, R² 0.49→0.93, hit rate 29%→98%, ALL 48 D(k) indices). v2.7.0 cutover gated and approved.
 - [studies/results/V2_6_0_RELEASE_NOTES.md](studies/results/V2_6_0_RELEASE_NOTES.md) — v2.6.0 Production coordinator wiring of the L1+L2+L3+L4+floor+calibrators pipeline. Additive integration: existing sensor attributes unchanged; new `v26_*` keys + fan-chart P5/P25/P50/P75/P95 bands + extended 24-entry D(k) appear alongside.
 - [studies/results/V2_5_17_DK_FULL_RANGE.md](studies/results/V2_5_17_DK_FULL_RANGE.md) — v2.5.17 Extended D(k) to full i=0..23 range; v2.6.0 schema locked. R² ≥ 0.95 at EVERY index; cheap_23 = peak_23 = daily mean by definition (verified to 1e-13).

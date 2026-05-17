@@ -43,3 +43,36 @@ force_refresh:
     Trigger an immediate data refresh outside the normal 6-hour cycle.
     Fetches fresh weather, spot prices, and cross-border data, then
     reruns model inference. Useful for debugging or after network recovery.
+
+retrain_models:
+  name: Retrain v26 model artifacts
+  description: >
+    Refit the L1 seasonal components, L2+L3+L4 spike-tail model, and
+    (optionally) the solar sub-model from the latest cached data.
+    Replaces the shipped JSON artifacts atomically and reloads the
+    V26Pipeline on every active coordinator without an HA restart.
+    Fires the spot_price_predictor_models_retrained event on completion.
+  fields:
+    layers:
+      name: Layers to retrain
+      description: >
+        Subset of {seasonal, spike, solar}. If omitted, all three are
+        retrained. The "solar" layer requires a Fingrid API key.
+      required: false
+      example: '["seasonal", "spike"]'
+      selector:
+        select:
+          multiple: true
+          options:
+            - "seasonal"
+            - "spike"
+            - "solar"
+    fingrid_api_key:
+      name: Fingrid API key (solar layer only)
+      description: >
+        Free instant key at https://developer-data.fingrid.fi/. If
+        omitted, the FINGRID_API_KEY env var is used. If neither is
+        available, the solar layer is skipped (other layers proceed).
+      required: false
+      selector:
+        text:

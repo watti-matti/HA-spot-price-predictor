@@ -26,10 +26,19 @@ SERVICE_UPLOAD_COEFFICIENTS = "upload_coefficients"
 SERVICE_RESET_COEFFICIENTS = "reset_coefficients"
 SERVICE_MODEL_INFO = "model_info"
 SERVICE_FORCE_REFRESH = "force_refresh"
+# v2.8.0 — consolidated retraining of the L1+L2+L3+L4 pipeline
+SERVICE_RETRAIN_MODELS = "retrain_models"
 
 UPLOAD_SCHEMA = vol.Schema({
     vol.Optional("file_path"): cv.string,
     vol.Optional("json_data"): cv.string,
+})
+
+RETRAIN_SCHEMA = vol.Schema({
+    # Subset of {"seasonal", "spike", "solar"}. Omit for all three.
+    vol.Optional("layers"): vol.All(cv.ensure_list, [cv.string]),
+    # Fingrid API key for solar layer (otherwise read from FINGRID_API_KEY env).
+    vol.Optional("fingrid_api_key"): cv.string,
 })
 
 
@@ -71,6 +80,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.services.async_remove(DOMAIN, SERVICE_RESET_COEFFICIENTS)
         hass.services.async_remove(DOMAIN, SERVICE_MODEL_INFO)
         hass.services.async_remove(DOMAIN, SERVICE_FORCE_REFRESH)
+        hass.services.async_remove(DOMAIN, SERVICE_RETRAIN_MODELS)
 
     return unload_ok
 
@@ -210,6 +220,88 @@ def _register_services(hass: HomeAssistant) -> None:
                 await coordinator.async_request_refresh()
         _LOGGER.info("Manual refresh completed")
 
+    async def handle_retrain_models(call: ServiceCall) -> None:
+        """v2.8.0 — refit all (or subset of) v26 model artifacts.
+
+        Runs the orchestrator from `retrain.py` in an executor so the
+        long-running CPU+IO work doesn't block the HA event loop.
+        Once complete, every active coordinator gets a fresh
+        V26Pipeline instance pointing at the refreshed artifacts.
+        """
+        from . import retrain as _retrain
+        from .v26_pipeline import V26Pipeline
+
+        layers = call.data.get("layers")
+        fingrid_key = call.data.get("fingrid_api_key")
+
+        _LOGGER.info("retrain_models invoked: layers=%s", layers or "all")
+
+        def _run() -> dict:
+            return _retrain.retrain_all(
+                layers=layers,
+                fingrid_api_key=fingrid_key,
+            )
+
+        try:
+            result = await hass.async_add_executor_job(_run)
+        except Exception as err:
+            _LOGGER.exception("retrain_models failed: %s", err)
+            hass.components.persistent_notification.async_create(
+                f"Model retraining failed: {err}",
+                title="Spot Price Predictor",
+                notification_id=f"{DOMAIN}_retrain_failed",
+            )
+            return
+
+        # Reload V26Pipeline on every active coordinator so the new
+        # artifacts take effect immediately (without waiting for a
+        # full HA restart).
+        data_dir = Path(__file__).parent / "data"
+        reloaded = 0
+        for entry_id, coordinator in hass.data.get(DOMAIN, {}).items():
+            if not isinstance(coordinator, SpotPriceCoordinator):
+                continue
+            try:
+                storage_dir = Path(
+                    hass.config.path(".storage", "spot_price_predictor_v26"))
+                coordinator._v26 = V26Pipeline(
+                    data_dir=data_dir, storage_dir=storage_dir)
+                await coordinator.async_request_refresh()
+                reloaded += 1
+            except Exception as e:
+                _LOGGER.warning(
+                    "Failed to reload V26Pipeline on %s: %s", entry_id, e)
+
+        # Summary notification
+        ok = result.get("ok", False)
+        layers_done = list(result.get("results", {}).keys())
+        details_lines = []
+        for layer, r in result.get("results", {}).items():
+            if r.get("error"):
+                details_lines.append(f"- **{layer}**: error — {r['error']}")
+            elif r.get("skipped"):
+                details_lines.append(
+                    f"- **{layer}**: skipped — {r.get('reason', '?')}")
+            else:
+                details_lines.append(f"- **{layer}**: refit OK")
+        msg = (
+            f"Retraining {'succeeded ✓' if ok else 'finished with issues'} "
+            f"on {len(layers_done)} layer(s).\n"
+            f"Coordinator reloads: {reloaded}\n\n"
+            + "\n".join(details_lines)
+        )
+        hass.components.persistent_notification.async_create(
+            msg, title="Spot Price Predictor — Retraining",
+            notification_id=f"{DOMAIN}_retrain_complete",
+        )
+        # Emit a HA event so automations can chain on completion
+        hass.bus.async_fire(
+            f"{DOMAIN}_models_retrained",
+            {"result": result, "reloaded_coordinators": reloaded},
+        )
+        _LOGGER.info("retrain_models complete: ok=%s, layers=%s, reloaded=%d",
+                     ok, layers_done, reloaded)
+
     hass.services.async_register(
         DOMAIN, SERVICE_UPLOAD_COEFFICIENTS, handle_upload_coefficients,
         schema=UPLOAD_SCHEMA,
@@ -222,4 +314,8 @@ def _register_services(hass: HomeAssistant) -> None:
     )
     hass.services.async_register(
         DOMAIN, SERVICE_FORCE_REFRESH, handle_force_refresh,
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_RETRAIN_MODELS, handle_retrain_models,
+        schema=RETRAIN_SCHEMA,
     )
