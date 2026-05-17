@@ -6,7 +6,7 @@
   "documentation": "https://github.com/watti-matti/HA-spot-price-predictor",
   "issue_tracker": "https://github.com/watti-matti/HA-spot-price-predictor/issues",
   "requirements": [],
-  "version": "2.5.14",
+  "version": "2.5.15",
   "iot_class": "cloud_polling",
   "integration_type": "service"
 }
