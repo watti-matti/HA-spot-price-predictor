@@ -2,7 +2,7 @@
 
 [![HACS Integration](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-2.5.2-blue.svg)](https://github.com/watti-matti/HA-spot-price-predictor/releases/tag/v2.5.2)
+[![Version](https://img.shields.io/badge/version-2.5.3-blue.svg)](https://github.com/watti-matti/HA-spot-price-predictor/releases/tag/v2.5.3)
 
 **Forecast consumer electricity costs and D(k) duration curves up to 7 days ahead** using machine learning with physics-based weather features, cross-border trade analysis, and nuclear outage awareness.
 
@@ -302,7 +302,8 @@ To adapt for another country, create a new region YAML file and retrain. The mod
 - [TEKNINEN_TOTEUTUS.md](TEKNINEN_TOTEUTUS.md) — Arkkitehtuuri, piirre-engineering, mallin kuvaus (suomeksi)
 - [docs/dk_cheap_peak_migration.md](docs/dk_cheap_peak_migration.md) — D(k) schema migration guide for downstream consumers
 - [docs/dtaci_layer.md](docs/dtaci_layer.md) — DtACI online calibration: algorithm details, state persistence, troubleshooting
-- [studies/results/V2_5_2_RELEASE_NOTES.md](studies/results/V2_5_2_RELEASE_NOTES.md) — **v2.5.2 (CURRENT)** — Peak/spike model feasibility for SE3, SE1, EE — FEASIBLE for all three (GPD POT recommended)
+- [studies/results/V2_5_3_RELEASE_NOTES.md](studies/results/V2_5_3_RELEASE_NOTES.md) — **v2.5.3 (CURRENT)** — Solar production sub-model ACCEPT (clear-sky × cloudiness; R² 0.91 vs Fingrid 248; isolated from FI fit)
+- [studies/results/V2_5_2_RELEASE_NOTES.md](studies/results/V2_5_2_RELEASE_NOTES.md) — v2.5.2 Peak/spike model feasibility for SE3, SE1, EE — FEASIBLE for all three (GPD POT recommended)
 - [studies/results/V2_5_1_RELEASE_NOTES.md](studies/results/V2_5_1_RELEASE_NOTES.md) — v2.5.1 MATLAB-style seasonal visualizations; SE1+SE3 joint hedge ACCEPT (+0.55 pp, confirms transmission-congestion hypothesis)
 - [studies/results/V2_5_0_RELEASE_NOTES.md](studies/results/V2_5_0_RELEASE_NOTES.md) — v2.5.0 Phase 3 methodology milestone; SE3 accepted, EE/FI rejected, solar deferred
 - [studies/results/V2_4_5_RELEASE_NOTES.md](studies/results/V2_4_5_RELEASE_NOTES.md) — v2.4.5 alt. solar (DEFERRED pending cloudiness)

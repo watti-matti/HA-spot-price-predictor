@@ -25,6 +25,9 @@ studies/_dtaci_*_prices_cache.json
 # Fingrid net-load study cache (large, regenerable from Fingrid API)
 studies/_fingrid_cache/
 
+# v2.5.3 solar sub-model cache (Fingrid + Open-Meteo, regenerable)
+studies/.cache/
+
 # IDE
 .vscode/
 .idea/

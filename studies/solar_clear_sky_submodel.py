@@ -440,37 +440,55 @@ def main() -> None:
     # the modulator absorbs the unit conversion via its scalar b.
     fit_results: dict[tuple[str, str], dict[str, float]] = {}
 
+    # NOTE: every modulator is now fit as a 2-parameter OLS regression with
+    # a free intercept, so the predicted production decomposes as:
+    #
+    #     prediction(t) = alpha + gain · capacity(t) · GHI_cs(t) · f(cloud(t))
+    #
+    # The intercept absorbs slow capacity-attribution drift (Fingrid 267
+    # tracks PLANNED capacity, which can run ahead of effective generating
+    # capacity during rapid build-out; see release notes 2.5.3). OLS by
+    # construction zeros the training-set bias.
     for cs_name in ("haurwitz", "ineichen"):
         baseline_train = train["capacity_mw"].values * train[f"cs_{cs_name}"].values / 1000.0
         baseline_test  = test["capacity_mw"].values  * test[f"cs_{cs_name}"].values  / 1000.0
         cloud_train = train["cloud_cover_weighted_pct"].values
         cloud_test  = test["cloud_cover_weighted_pct"].values
         y_train = train["actual_mw"].values
-        y_test  = test["actual_mw"].values
 
-        # (i) linear modulator
+        # (i) linear modulator: predict = alpha + b · baseline · (1 − a·c/100)
+        # The (a, b) are fit on the multiplicative term; the intercept alpha
+        # is added by a second OLS step on the residual mean.
         a, b = fit_linear_modulator(y_train, baseline_train, cloud_train)
-        pred_train = b * baseline_train * np.clip(1.0 - a * cloud_train / 100.0, 0.0, None)
-        pred_test  = b * baseline_test  * np.clip(1.0 - a * cloud_test  / 100.0, 0.0, None)
-        m = evaluate(y_test, pred_test)
-        m["params"] = (a, b)
-        fit_results[(cs_name, "linear")] = m
+        raw_train = b * baseline_train * np.clip(1.0 - a * cloud_train / 100.0, 0.0, None)
+        raw_test  = b * baseline_test  * np.clip(1.0 - a * cloud_test  / 100.0, 0.0, None)
+        # Now refit the (alpha, gamma) so that pred = alpha + gamma · raw.
+        X = np.column_stack([np.ones_like(raw_train), raw_train])
+        coef, *_ = np.linalg.lstsq(X, y_train, rcond=None)
+        alpha_lin, gamma_lin = float(coef[0]), float(coef[1])
+        pred_train = alpha_lin + gamma_lin * raw_train
+        pred_test  = alpha_lin + gamma_lin * raw_test
+        m = evaluate(y_train, pred_train)
+        m_test = evaluate(test["actual_mw"].values, pred_test)
+        fit_results[(cs_name, "linear")] = m_test
+        fit_results[(cs_name, "linear")]["params"] = (alpha_lin, gamma_lin, a, b)
         df.loc[train.index, f"pred_{cs_name}_linear"] = pred_train
         df.loc[test.index,  f"pred_{cs_name}_linear"] = pred_test
 
-        # (ii) Kasten-Czeplak modulator — single best scaling
+        # (ii) Kasten-Czeplak modulator: predict = alpha + gain · baseline · kc.
+        # Two-parameter OLS.
         kc_factor = cloudiness_modulator(cloud_train, form="kasten_czeplak")
         kc_factor_test = cloudiness_modulator(cloud_test, form="kasten_czeplak")
-        # Fit scalar gain so that production = gain · baseline · kc
-        denom_kc = float(np.dot(baseline_train * kc_factor,
-                                baseline_train * kc_factor))
-        numer_kc = float(np.dot(baseline_train * kc_factor, y_train))
-        gain_kc = numer_kc / denom_kc if denom_kc > 0 else 1.0
-        pred_train = gain_kc * baseline_train * kc_factor
-        pred_test  = gain_kc * baseline_test  * kc_factor_test
-        m = evaluate(y_test, pred_test)
-        m["params"] = (gain_kc,)
-        fit_results[(cs_name, "kasten_czeplak")] = m
+        kc_raw_train = baseline_train * kc_factor
+        kc_raw_test  = baseline_test  * kc_factor_test
+        X = np.column_stack([np.ones_like(kc_raw_train), kc_raw_train])
+        coef, *_ = np.linalg.lstsq(X, y_train, rcond=None)
+        alpha_kc, gain_kc = float(coef[0]), float(coef[1])
+        pred_train = alpha_kc + gain_kc * kc_raw_train
+        pred_test  = alpha_kc + gain_kc * kc_raw_test
+        m_test = evaluate(test["actual_mw"].values, pred_test)
+        m_test["params"] = (alpha_kc, gain_kc)
+        fit_results[(cs_name, "kasten_czeplak")] = m_test
         df.loc[train.index, f"pred_{cs_name}_kasten_czeplak"] = pred_train
         df.loc[test.index,  f"pred_{cs_name}_kasten_czeplak"] = pred_test
 
