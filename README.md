@@ -2,7 +2,7 @@
 
 [![HACS Integration](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-2.5.13-blue.svg)](https://github.com/watti-matti/HA-spot-price-predictor/releases/tag/v2.5.13)
+[![Version](https://img.shields.io/badge/version-2.5.14-blue.svg)](https://github.com/watti-matti/HA-spot-price-predictor/releases/tag/v2.5.14)
 
 **Forecast consumer electricity costs and D(k) duration curves up to 7 days ahead** using machine learning with physics-based weather features, cross-border trade analysis, and nuclear outage awareness.
 
@@ -302,7 +302,8 @@ To adapt for another country, create a new region YAML file and retrain. The mod
 - [TEKNINEN_TOTEUTUS.md](TEKNINEN_TOTEUTUS.md) — Arkkitehtuuri, piirre-engineering, mallin kuvaus (suomeksi)
 - [docs/dk_cheap_peak_migration.md](docs/dk_cheap_peak_migration.md) — D(k) schema migration guide for downstream consumers
 - [docs/dtaci_layer.md](docs/dtaci_layer.md) — DtACI online calibration: algorithm details, state persistence, troubleshooting
-- [studies/results/V2_5_13_RELEASE_NOTES.md](studies/results/V2_5_13_RELEASE_NOTES.md) — **v2.5.13 (CURRENT)** — Layer 4 GPD POT spike model fits FI post-AR residual (ξ=+0.48 heavy, Hill α=2.1). Normal underpredicts CVaR by 47% at α=0.001; GPD POT matches empirical training tail.
+- [studies/results/V2_5_14_COMPREHENSIVE_ANALYSIS.md](studies/results/V2_5_14_COMPREHENSIVE_ANALYSIS.md) — **v2.5.14 (CURRENT)** — Negative-price floor (softplus at −5 EUR/MWh) + comprehensive demonstration of options 2/3/4 + full CVaR accuracy analysis. Rolling-365d GPD POT cuts α=0.001 CVaR error by 85%.
+- [studies/results/V2_5_13_RELEASE_NOTES.md](studies/results/V2_5_13_RELEASE_NOTES.md) — v2.5.13 Layer 4 GPD POT spike model fits FI post-AR residual (ξ=+0.48 heavy, Hill α=2.1). Normal underpredicts CVaR by 47% at α=0.001; GPD POT matches empirical training tail.
 - [studies/results/V2_5_12_RELEASE_NOTES.md](studies/results/V2_5_12_RELEASE_NOTES.md) — v2.5.12 Sigmoid turbine power curve replaces v2.5.11 cubic. Sigmoid ties raw Y_wind on MAE, slightly better CVaR (+14.0% vs +13.5% at 24h)
 - [studies/results/V2_5_11_RELEASE_NOTES.md](studies/results/V2_5_11_RELEASE_NOTES.md) — v2.5.11 Physics-feature test: Y_wind source confirmed (Open-Meteo wind_speed_120m × 7 capacity-weighted FI sites). AR(1) φ=0.91 is NOT masking missing physics — cubic wind-power proxy worse than raw, PV temp derating negligible at FI latitudes.
 - [studies/results/V2_5_10_RELEASE_NOTES.md](studies/results/V2_5_10_RELEASE_NOTES.md) — v2.5.10 Layer 3 (AR(1) on Ridge residual) + wind test. AR φ=0.93 lifts day-ahead CVaR +6→+25%, wind cuts MAE 39→29 EUR/MWh at all horizons
