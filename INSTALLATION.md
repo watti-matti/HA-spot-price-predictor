@@ -87,19 +87,25 @@ Configure prediction data sources and the cheapest hours search window.
 
 Click **Submit** to complete the setup.
 
-## Step 7: Device Created
+## Step 7: PV System Parameters (optional)
+
+If you have rooftop solar, enter your PV system parameters here. Leave the capacity at 0 to skip and use the integration without PV awareness. With PV enabled, the forecast exposes a marginal effective price (bounded between sell and buy) and a PV-aware D(k) duration curve that reflects self-consumption savings.
+
+![PV Parameters](docs/screenshots/install-07-device-PV-parameters.png)
+
+## Step 8: Device Created
 
 The integration creates a device called **Spot Price Predictor** with all sensors. You can assign it to an area (e.g., your home).
 
 Click **Finish**.
 
-![Device Created](docs/screenshots/install-07-device-created.png)
+![Device Created](docs/screenshots/install-08-device-created.png)
 
-## Step 8: Verify Sensors
+## Step 9: Verify Sensors
 
 Go to **Settings** → **Devices & Services** → **Spot Price Predictor** → **Sensors** to verify all sensors are working.
 
-![Sensors](docs/screenshots/install-08-sensors.png)
+![Sensors](docs/screenshots/install-09-sensors.png)
 
 **Forecast sensors (always created):**
 
