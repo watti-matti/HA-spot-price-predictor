@@ -223,6 +223,116 @@ def clear_sky_series(
     return out
 
 
+def predict_solar_mw(
+    timestamps: np.ndarray,
+    cloud_cover_pct: np.ndarray,
+    artifact: dict,
+    sites: list[dict] | None = None,
+) -> np.ndarray:
+    """Inference for the v2.5.3 solar production sub-model — Fingrid-free.
+
+    Given a frozen artifact (from :func:`build_artifact`, persisted as
+    JSON), an hourly UTC timestamp array, and the matching capacity-
+    weighted Open-Meteo `cloud_cover` series, return predicted Finnish
+    solar production in MW.
+
+    Runtime characteristics:
+
+    - No Fingrid call. The training-time `capacity_MW` is baked into
+      the artifact's `K = gain · capacity_ref` scalar.
+    - No re-fitting. The artifact is a frozen object; refresh it
+      offline every few months as installed capacity drifts.
+    - Pure deterministic function of the inputs.
+
+    Args:
+        timestamps: 1-D numpy datetime64 array (UTC).
+        cloud_cover_pct: matching 1-D array of capacity-weighted
+            cloud cover (%, 0–100) from Open-Meteo.
+        artifact: dict loaded from the persisted JSON. Must contain
+            keys ``clear_sky_model``, ``modulator_form``, ``alpha``,
+            ``K``. Optional ``modulator_params`` for non-default forms.
+        sites: optional override of the weighted FI site list. If
+            ``None``, uses ``artifact["sites"]``.
+
+    Returns:
+        1-D numpy array of predicted production in MW. Values < 0
+        are clipped to 0 (capacity floor; alpha can be slightly
+        negative due to OLS, but production never is).
+    """
+    if sites is None:
+        sites = artifact["sites"]
+
+    # Capacity-weighted clear-sky GHI across the configured sites.
+    ghi = np.zeros(len(timestamps), dtype=float)
+    w_total = 0.0
+    for site in sites:
+        sw = float(site.get("solar_weight", 0.0))
+        if sw <= 0:
+            continue
+        ghi += sw * clear_sky_series(
+            timestamps,
+            lat_deg=float(site["lat"]),
+            lon_deg=float(site["lon"]),
+            model=artifact["clear_sky_model"],
+            altitude_m=float(site.get("altitude_m", 0.0)),
+        )
+        w_total += sw
+    if w_total > 0:
+        ghi /= w_total
+
+    mod = cloudiness_modulator(
+        cloud_cover_pct,
+        form=artifact["modulator_form"],
+        params=tuple(artifact.get("modulator_params") or ()) or None,
+    )
+    pred = float(artifact["alpha"]) + float(artifact["K"]) * ghi * mod
+    return np.clip(pred, 0.0, None)
+
+
+def build_artifact(
+    *,
+    clear_sky_model: str,
+    modulator_form: str,
+    alpha: float,
+    gain: float,
+    capacity_ref_mw: float,
+    sites: list[dict],
+    train_window: tuple[str, str] | None = None,
+    test_metrics: dict | None = None,
+    modulator_params: tuple[float, ...] | None = None,
+    notes: str = "",
+) -> dict:
+    """Build the frozen-artifact dict for persistence.
+
+    The runtime inference only ever sees `K = gain · capacity_ref_mw`,
+    so capacity does NOT need to be fetched at inference time. The
+    artifact records ``capacity_ref_mw`` separately for traceability —
+    if the operator wants to re-scale the model to a different capacity
+    without re-fitting they can adjust K proportionally.
+    """
+    return {
+        "version": "2.5.3",
+        "clear_sky_model": clear_sky_model,
+        "modulator_form": modulator_form,
+        "modulator_params": list(modulator_params) if modulator_params else None,
+        "alpha": float(alpha),
+        "gain": float(gain),
+        "capacity_ref_mw": float(capacity_ref_mw),
+        "K": float(gain) * float(capacity_ref_mw),
+        "sites": [
+            {"name": s.get("name"),
+             "lat": float(s["lat"]),
+             "lon": float(s["lon"]),
+             "solar_weight": float(s.get("solar_weight", 0.0)),
+             "altitude_m": float(s.get("altitude_m", 0.0))}
+            for s in sites if float(s.get("solar_weight", 0.0)) > 0
+        ],
+        "train_window": list(train_window) if train_window else None,
+        "test_metrics": test_metrics or {},
+        "notes": notes,
+    }
+
+
 def cloudiness_modulator(
     cloud_cover_pct: np.ndarray,
     form: str = "kasten_czeplak",

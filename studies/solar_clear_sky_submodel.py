@@ -532,6 +532,92 @@ def main() -> None:
     fig_path = FIGURES_DIR / "solar_submodel_validation.png"
     make_plots(df, fit_results, cs_winner, mod_winner, fig_path)
 
+    # ── Persist deployable artifact (runtime is Fingrid-free) ─────
+    # The training-time capacity_MW(t) is collapsed into a single
+    # scalar K = gain · capacity_ref. Runtime inference needs only the
+    # deterministic clear-sky formula + Open-Meteo cloud_cover (which
+    # the integration already fetches for weather features). Refit
+    # every few months as installed FI PV capacity drifts.
+    winner_params = fit_results[winner].get("params", ())
+    if mod_winner == "linear":
+        # params = (alpha, gamma, a, b); effective alpha = alpha,
+        # effective gain (per baseline = capacity*GHI/1000) = gamma * b,
+        # modulator stays linear with (a,) as the cloud-response slope.
+        alpha_fit, gamma_fit, a_fit, b_fit = winner_params
+        eff_alpha = alpha_fit
+        eff_gain  = gamma_fit * b_fit / 1000.0   # divided by 1000 → MW
+        modulator_params_to_save = (a_fit,)
+    else:
+        # kasten_czeplak: params = (alpha, gain) where the design
+        # column is capacity*GHI/1000 * kc_factor. Effective gain
+        # per (capacity*GHI*f(c)) is gain/1000.
+        alpha_fit, gain_fit = winner_params
+        eff_alpha = alpha_fit
+        eff_gain  = gain_fit / 1000.0
+        modulator_params_to_save = None
+
+    # Capacity reference: take the most recent value seen during training
+    # (the model was fit assuming production scales linearly with this).
+    capacity_ref = float(train["capacity_mw"].iloc[-1])
+
+    artifact = scs.build_artifact(
+        clear_sky_model=cs_winner,
+        modulator_form=mod_winner,
+        alpha=eff_alpha,
+        gain=eff_gain,
+        capacity_ref_mw=capacity_ref,
+        sites=locations,
+        train_window=(str(train.index[0]), str(train.index[-1])),
+        test_metrics={
+            "R2": fit_results[winner]["R2"],
+            "MAE_MW": fit_results[winner]["MAE"],
+            "MAE_daylight_MW": fit_results[winner]["MAE_daylight"],
+            "bias_MW": fit_results[winner]["bias"],
+        },
+        modulator_params=modulator_params_to_save,
+        notes=(
+            "v2.5.3 isolated solar sub-model. Runtime needs only "
+            "(timestamp, cloud_cover_%). No Fingrid call at inference; "
+            "re-train every few months as FI PV capacity drifts."
+        ),
+    )
+    artifact_path = (REPO / "custom_components" / "spot_price_predictor"
+                     / "data" / "solar_submodel_default.json")
+    artifact_path.write_text(json.dumps(artifact, indent=2), encoding="utf-8")
+    print(f"\nArtifact: {artifact_path}", flush=True)
+
+    # Frozen-capacity inference evaluation: this is the metric that
+    # actually matters for deployment, because at runtime the model
+    # cannot consult Fingrid for the current capacity. Capacity is
+    # baked into K at training-end and stays fixed until the next
+    # quarterly retrain. The test_set MAE/R² under this constraint
+    # tells us how the deployed model will perform.
+    pred_inference = scs.predict_solar_mw(
+        df.index.values,
+        df["cloud_cover_weighted_pct"].values,
+        artifact,
+    )
+    test_mask = df["split"] == "test"
+    metrics_frozen = evaluate(df.loc[test_mask, "actual_mw"].values,
+                              pred_inference[test_mask.values])
+    print(f"\nFrozen-capacity inference on test set (capacity_ref={capacity_ref:.0f} MW):",
+          flush=True)
+    print(f"  MAE={metrics_frozen['MAE']:.2f}  "
+          f"MAE_day={metrics_frozen['MAE_daylight']:.2f}  "
+          f"R²={metrics_frozen['R2']:.3f}  bias={metrics_frozen['bias']:.2f}",
+          flush=True)
+
+    # Append the frozen-capacity metrics to the artifact's test_metrics
+    # block so the deployment story is self-documenting.
+    artifact["test_metrics_frozen_capacity"] = {
+        "capacity_ref_mw": capacity_ref,
+        "MAE_MW": metrics_frozen["MAE"],
+        "MAE_daylight_MW": metrics_frozen["MAE_daylight"],
+        "R2": metrics_frozen["R2"],
+        "bias_MW": metrics_frozen["bias"],
+    }
+    artifact_path.write_text(json.dumps(artifact, indent=2), encoding="utf-8")
+
     # ── Markdown report ────────────────────────────────────────────
     md = RESULTS_DIR / "solar_clear_sky_submodel.md"
     capacity_mean = float(df["capacity_mw"].mean())

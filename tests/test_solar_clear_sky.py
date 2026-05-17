@@ -165,3 +165,104 @@ def test_modulator_clips_out_of_range_input() -> None:
     f = scs.cloudiness_modulator(np.array([-5.0, 120.0]), form="kasten_czeplak")
     assert 0.0 <= f[0] <= 1.0
     assert 0.0 <= f[1] <= 1.0
+
+
+# ── Artifact + inference helpers ────────────────────────────────────
+
+
+def _toy_artifact() -> dict:
+    return scs.build_artifact(
+        clear_sky_model="haurwitz",
+        modulator_form="kasten_czeplak",
+        alpha=10.0,
+        gain=0.001,         # MW per (W/m²) of capacity-weighted GHI
+        capacity_ref_mw=1500.0,
+        sites=[
+            {"name": "Helsinki", "lat": 60.17, "lon": 24.94,
+             "solar_weight": 0.5},
+            {"name": "Lapland",  "lat": 67.30, "lon": 23.80,
+             "solar_weight": 0.5},
+        ],
+    )
+
+
+def test_build_artifact_collapses_capacity_into_K() -> None:
+    """The runtime contract: K = gain · capacity_ref so inference does
+    not need to know the original capacity series."""
+    art = _toy_artifact()
+    assert art["K"] == pytest.approx(0.001 * 1500.0)
+    assert art["version"] == "2.5.3"
+    assert art["clear_sky_model"] == "haurwitz"
+    assert art["modulator_form"] == "kasten_czeplak"
+    assert len(art["sites"]) == 2
+
+
+def test_build_artifact_drops_zero_weight_sites() -> None:
+    art = scs.build_artifact(
+        clear_sky_model="haurwitz", modulator_form="kasten_czeplak",
+        alpha=0.0, gain=1.0, capacity_ref_mw=100.0,
+        sites=[
+            {"name": "K", "lat": 60.0, "lon": 24.0, "solar_weight": 1.0},
+            {"name": "Z", "lat": 60.0, "lon": 24.0, "solar_weight": 0.0},
+        ],
+    )
+    assert [s["name"] for s in art["sites"]] == ["K"]
+
+
+def test_predict_solar_mw_is_zero_at_night() -> None:
+    """No matter the cloud cover, predicted production at midnight is just
+    the intercept (clamped at 0)."""
+    art = _toy_artifact()
+    ts = np.array(
+        [np.datetime64("2024-12-21T00:00"),
+         np.datetime64("2024-12-21T01:00")],
+        dtype="datetime64[ns]",
+    )
+    pred = scs.predict_solar_mw(ts, cloud_cover_pct=np.array([10.0, 80.0]),
+                                artifact=art)
+    # Intercept is +10 (positive); both predictions sit at the intercept
+    # because the sun is below the horizon at both Helsinki and Lapland.
+    assert pred[0] == pytest.approx(10.0, abs=1e-6)
+    assert pred[1] == pytest.approx(10.0, abs=1e-6)
+
+
+def test_predict_solar_mw_clips_negative_intercept() -> None:
+    art = _toy_artifact()
+    art["alpha"] = -50.0   # synthetic negative intercept
+    ts = np.array([np.datetime64("2024-12-21T00:00")], dtype="datetime64[ns]")
+    pred = scs.predict_solar_mw(ts, np.array([0.0]), art)
+    assert pred[0] == 0.0   # negative production is clipped
+
+
+def test_predict_solar_mw_higher_with_clear_sky_than_full_cloud() -> None:
+    """Same daytime hour, varying cloud cover: clear weather ⇒ more
+    predicted production than overcast."""
+    art = _toy_artifact()
+    ts = np.array([np.datetime64("2024-06-21T10:00")],
+                  dtype="datetime64[ns]")
+    clear = scs.predict_solar_mw(ts, np.array([0.0]), art)[0]
+    overcast = scs.predict_solar_mw(ts, np.array([100.0]), art)[0]
+    assert clear > overcast
+
+
+def test_predict_solar_mw_uses_artifact_sites_when_sites_arg_omitted() -> None:
+    art = _toy_artifact()
+    ts = np.array([np.datetime64("2024-06-21T10:00")],
+                  dtype="datetime64[ns]")
+    cloud = np.array([20.0])
+    p_default = scs.predict_solar_mw(ts, cloud, art)
+    p_override = scs.predict_solar_mw(ts, cloud, art, sites=art["sites"])
+    assert p_default[0] == pytest.approx(p_override[0], abs=1e-9)
+
+
+def test_artifact_roundtrips_through_json() -> None:
+    """Serialising and reloading the artifact preserves inference output."""
+    import json
+    art = _toy_artifact()
+    s = json.dumps(art)
+    art2 = json.loads(s)
+    ts = np.array([np.datetime64("2024-06-21T10:00")],
+                  dtype="datetime64[ns]")
+    p1 = scs.predict_solar_mw(ts, np.array([50.0]), art)
+    p2 = scs.predict_solar_mw(ts, np.array([50.0]), art2)
+    assert p1[0] == pytest.approx(p2[0], abs=1e-9)

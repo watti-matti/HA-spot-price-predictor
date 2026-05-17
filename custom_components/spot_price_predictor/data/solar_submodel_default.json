@@ -1,0 +1,79 @@
+{
+  "version": "2.5.3",
+  "clear_sky_model": "ineichen",
+  "modulator_form": "kasten_czeplak",
+  "modulator_params": null,
+  "alpha": 3.259511875272399,
+  "gain": 0.0010698260684140419,
+  "capacity_ref_mw": 1367.2,
+  "K": 1.462666200735678,
+  "sites": [
+    {
+      "name": "Raahe coast (Kalajoki-Raahe)",
+      "lat": 64.25,
+      "lon": 24.4,
+      "solar_weight": 0.08,
+      "altitude_m": 0.0
+    },
+    {
+      "name": "Rauma / SW Satakunta",
+      "lat": 61.1,
+      "lon": 21.5,
+      "solar_weight": 0.22,
+      "altitude_m": 0.0
+    },
+    {
+      "name": "Ii-Simo, N. Ostrobothnia coast",
+      "lat": 65.3,
+      "lon": 25.4,
+      "solar_weight": 0.06,
+      "altitude_m": 0.0
+    },
+    {
+      "name": "Joroinen, Eastern Finland",
+      "lat": 62.18,
+      "lon": 27.83,
+      "solar_weight": 0.2,
+      "altitude_m": 0.0
+    },
+    {
+      "name": "Helsinki / Uusimaa",
+      "lat": 60.17,
+      "lon": 24.94,
+      "solar_weight": 0.24,
+      "altitude_m": 0.0
+    },
+    {
+      "name": "Lapua / S. Ostrobothnia",
+      "lat": 62.97,
+      "lon": 23.0,
+      "solar_weight": 0.12,
+      "altitude_m": 0.0
+    },
+    {
+      "name": "Kolari-Muonio fells, Lapland",
+      "lat": 67.3,
+      "lon": 23.8,
+      "solar_weight": 0.04,
+      "altitude_m": 0.0
+    }
+  ],
+  "train_window": [
+    "2023-01-01 00:00:00+00:00",
+    "2025-05-10 06:00:00+00:00"
+  ],
+  "test_metrics": {
+    "R2": 0.9097733014759994,
+    "MAE_MW": 44.259081859504015,
+    "MAE_daylight_MW": 80.69210560894247,
+    "bias_MW": 21.975513143505864
+  },
+  "notes": "v2.5.3 isolated solar sub-model. Runtime needs only (timestamp, cloud_cover_%). No Fingrid call at inference; re-train every few months as FI PV capacity drifts.",
+  "test_metrics_frozen_capacity": {
+    "capacity_ref_mw": 1367.2,
+    "MAE_MW": 40.04594666878345,
+    "MAE_daylight_MW": 72.70022701723987,
+    "R2": 0.9175722561888457,
+    "bias_MW": 8.805670703961553
+  }
+}

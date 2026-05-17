@@ -84,9 +84,36 @@ Per the user direction, ENTSO-E access friction motivated re-investigation of Fi
 
 No coordinator behaviour change; no sensor schema change. HACS users see version `2.5.3` but observe no runtime difference until the sub-model output is wired into the FI Ridge in v2.5.5+.
 
+## Runtime deployment story (Fingrid-free)
+
+Per the follow-up user direction 2026-05-17: *"The intended deployment of the model should not assume continuous reading of Fingrid data. Retraining may be needed after few months to adapt to increasing PV production capacity but this information does not need to be downloaded in daily basis."*
+
+The training-time capacity series `capacity_MW(t)` is **collapsed into a single scalar** `K = gain · capacity_ref_MW` at the end of training and baked into the artifact:
+
+```
+runtime_prediction(t) = alpha + K · GHI_clear_sky(t, sites) · cloudiness_modulator(cloud_cover(t))
+```
+
+So the deployed integration needs **only** the deterministic clear-sky formula (lat, lon, t — no network) and the Open-Meteo `cloud_cover` series which it already fetches as part of the existing weather call. **Zero Fingrid calls at runtime.**
+
+The artifact is persisted at `custom_components/spot_price_predictor/data/solar_submodel_default.json` and contains the frozen `(alpha, K, sites, modulator_form, modulator_params, clear_sky_model)` plus full training metadata. Refresh cadence: **every few months** (as Finnish installed PV capacity drifts) by re-running the study script; the new artifact replaces the shipped JSON via a normal commit.
+
+**Frozen-capacity test metric** (the number that actually matters for deployment, because at runtime capacity is fixed at `capacity_ref` = 1367 MW rather than time-varying):
+
+| Metric | Time-varying capacity (training fit) | **Frozen capacity (deployed)** |
+|---|---:|---:|
+| Test R² | 0.910 | **0.918** |
+| Test MAE | 44.26 MW | **40.05 MW** |
+| Test MAE-daylight | 80.69 MW | **72.70 MW** |
+| Test bias | +21.98 MW | **+8.81 MW** |
+
+The deployed model is actually **better** than the time-varying-capacity fit, because freezing capacity at training-end (1367 MW) is closer to the effective generating capacity during the test period than Fingrid 267's over-stated planned-capacity series across 2024–25.
+
+The `predict_solar_mw(timestamps, cloud_cover_pct, artifact)` helper in `solar_clear_sky.py` is the runtime inference entry point. Reloads JSON, no Fingrid call, pure numpy.
+
 ## Tests
 
-**342 / 342 passing** (326 prior + 16 new clear-sky tests).
+**349 / 349 passing** (326 prior + 23 new clear-sky tests, including 7 new tests for `build_artifact()` / `predict_solar_mw()` runtime inference).
 
 ## Reproducibility
 
