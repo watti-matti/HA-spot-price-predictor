@@ -210,10 +210,28 @@ def quantile(xs: list[float], q: float) -> float:
 # ── Main ────────────────────────────────────────────────────────────
 
 
+def _load_dotenv_local() -> None:
+    """Light .env loader. Privacy invariant: .env is gitignored — never
+    commit API keys, addresses, or accurate GPS to the repo."""
+    path = Path(__file__).resolve().parent.parent / ".env"
+    if not path.exists():
+        return
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key, val = key.strip(), val.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = val
+
+
 def main():
+    _load_dotenv_local()
     api_key = os.environ.get("FINGRID_API_KEY", "").strip()
     if not api_key:
-        print("ERROR: set FINGRID_API_KEY env var", file=sys.stderr)
+        print("ERROR: FINGRID_API_KEY not found in env or .env (gitignored)",
+              file=sys.stderr)
         sys.exit(2)
 
     # Window: focus on the FI walk-forward OOS that actually had a spike.

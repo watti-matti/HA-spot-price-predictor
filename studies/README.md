@@ -2,6 +2,25 @@
 
 This directory contains research code, calibration scripts, and validation tools that are not part of the HA integration runtime. They support model development and decision-making but are not loaded by the coordinator.
 
+## Privacy invariant (read this before adding new scripts)
+
+**Never commit the following kinds of data to this repository:**
+
+- API keys, tokens, or any other credential (Fingrid `x-api-key`, ENTSO-E security token, HA long-lived tokens, etc.)
+- Personal or address-level locations — street addresses, household coordinates beyond regional precision (~0.1°), HA installation site coordinates
+- Anything that uniquely identifies an individual user or installation
+
+**Local storage pattern**: put secrets in a `.env` file at the repo root. `.env` is in `.gitignore` and is auto-loaded by the study scripts that need it (see the `_load_dotenv()` helper in `solar_clear_sky_submodel.py` and `fingrid_netload_study.py`). Example:
+
+```
+FINGRID_API_KEY=your_free_key_here
+ENTSOE_TOKEN=your_token_here
+```
+
+Before any commit, run `git log -S "<suspect-value>"` to surface accidental inclusions. Cache directories under `studies/.cache/` and `studies/_fingrid_cache/` are also gitignored — raw API responses stay local even though they don't contain credentials.
+
+Treat any contribution that ships a `.env`, hard-codes a key in source, or includes user-specific coordinates as a security regression.
+
 ## Validation tools
 
 ### `npk_cvar_hedge.py` (NEW in v2.4.1)

@@ -387,10 +387,36 @@ def make_plots(df: pd.DataFrame, fit_results: dict[str, dict],
 # ── Main ────────────────────────────────────────────────────────────
 
 
+def _load_dotenv(path: Path) -> None:
+    """Minimal `.env` loader — no python-dotenv dependency. Only sets env
+    vars that are not already defined, so an explicit shell export wins.
+
+    Privacy invariant: `.env` is gitignored (see `.gitignore`). API keys
+    and any other personal credentials stay local. Never log the value.
+    """
+    if not path.exists():
+        return
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key = key.strip()
+        val = val.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = val
+
+
 def main() -> None:
+    _load_dotenv(REPO / ".env")
     api_key = os.environ.get("FINGRID_API_KEY", "").strip()
     if not api_key:
-        print("ERROR: set FINGRID_API_KEY in your environment to fetch data.")
+        print("ERROR: FINGRID_API_KEY not found.")
+        print("       Either export it in your shell:")
+        print("         export FINGRID_API_KEY=your_key_here   (bash/zsh)")
+        print("         $env:FINGRID_API_KEY = 'your_key_here' (PowerShell)")
+        print("       Or store it in .env at the repo root (gitignored):")
+        print("         echo 'FINGRID_API_KEY=your_key_here' >> .env")
         print("       Free instant key at https://developer-data.fingrid.fi/")
         sys.exit(2)
 
