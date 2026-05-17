@@ -1,39 +1,84 @@
-# Seasonal components — v2.5.5 vs v2.5.7 comparison
+# Seasonal components — v2.5.5 vs v2.5.8 comparison (all weather inputs)
 
-User flagged the v2.5.5 cloud P_week as noisy (2026-05-17): 
-*"if the averaging window would be longer the model should be "*
-*"smoother. This model does not have regional changes so if longer"*
-*"dataset is available I would prefer to improve the model as "*
-*"this version will modulate residual noise."*
+User observations 2026-05-17:
 
-## Cloud cover P_week — before / after
+1. *"seasonal decomposition for Cloud seems to provide quite noisy*
+   *estimate for P_week ... if the averaging window would be longer*
+   *the model should be smoother. This model does not have regional*
+   *changes so if longer dataset is available I would prefer to*
+   *improve the model as this version will modulate residual noise."*
+2. *"also other weather related seasonal estimates could benefit*
+   *from circular averaging as, unlike consumption that could*
+   *relate to holiday patterns, wind or solar is not expected to*
+   *contain this amount of seasonal noise."*
 
-![Cloud P_week comparison](figures/seasonal_compare_cloud.png)
+v2.5.7 extended the fit window for weather inputs to 8.3 y and
+smoothed cloud aggressively (7-bin). v2.5.8 extends the same
+treatment to wind / solar / temp with stronger smoothing windows
+consistent with each input's physical smoothness.
 
-- **v2.5.5** — fit on 3.3 y window (2023-01 → 2026-04), no smoothing: σ(P_week) = **15.35 %** cloudiness
-- **v2.5.7** — fit on 8.3 y window (2018-01 → 2026-04), 7-week circular smoothing: σ(P_week) = **11.01 %** cloudiness
-- **Noise reduction: 28 %**
-- Mean of `P_week` vector: before 68.67 %, after 69.73 % (small difference reflects the longer-window mean cloud cover, which absorbs more historical variability)
+## DEFAULT_SMOOTH (v2.5.8)
 
-The cloud-cover variance reduction reported in the v2.5.5 audit (19 %) was inflated by the noisy P_week — it was capturing residual noise rather than seasonal structure. The v2.5.7 fit reports 10.7 % variance reduction, which is the genuine deterministic seasonal share. The rest of what v2.5.5 attributed to P_week now correctly lives in the stochastic residual Y_cloud.
+| Input | P_week smoothing | Rationale |
+|---|---:|---|
+| `wind` | 7 weeks | Annual circulation pattern is smooth |
+| `solar` | 7 weeks | Annual day-length cycle is smooth |
+| `temp` | 9 weeks | Annual temperature cycle is the smoothest input |
+| `cloud` | 7 weeks | Unchanged from v2.5.7 (already adequate) |
+| `ghi_cs` | (none) | Deterministic clear-sky has zero noise |
 
-## Other weather inputs
+## Per-input noise-reduction summary
 
-Same long-window + smoothing applied per `DEFAULT_SMOOTH`:
+| Input | σ(P_week) v2.5.5 | σ(P_week) v2.5.8 | Noise reduction |
+|---|---:|---:|---:|
+| `cloud` | 15.348 % | 11.009 % | **+28.3 %** |
+| `wind` | 0.845 m/s | 0.633 m/s | **+25.1 %** |
+| `solar` | 83.296 W/m² | 85.006 W/m² | **-2.1 %** |
+| `temp` | 8.721 °C | 7.814 °C | **+10.4 %** |
 
-| Input | smoothing | window | v2.5.5 var_red | v2.5.7 var_red |
-|---|---|---|---:|---:|
-| wind   | 5-bin P_week | 8.3 y | 13.8 % | 10.0 % |
-| solar  | 3-bin P_week | 8.3 y | 63.7 % | 62.6 % |
-| temp   | 5-bin P_week | 8.3 y | 83.4 % | 79.8 % |
-| cloud  | 7-bin P_week | 8.3 y | 19.0 % | 10.7 % |
-| ghi_cs | 3-bin P_week | 8.3 y | 78.7 % | 78.7 % |
+## Combined comparison figure
 
-Prices kept on the recent window with no smoothing — regime changes in 2022–23 are within memory and shouldn't be smoothed away.
+![All weather inputs](figures/seasonal_compare_all.png)
+
+## Per-input panels
+
+### CLOUD
+
+![cloud P_week comparison](figures/seasonal_compare_cloud.png)
+
+### WIND
+
+![wind P_week comparison](figures/seasonal_compare_wind.png)
+
+### SOLAR
+
+![solar P_week comparison](figures/seasonal_compare_solar.png)
+
+### TEMP
+
+![temp P_week comparison](figures/seasonal_compare_temp.png)
+
+## Interpretation
+
+- The bin-to-bin oscillations in the v2.5.5 (red) curves are
+  sampling noise: a single year of bad weather in week 8 inflates
+  that bin's mean while week 9 might happen to be calmer.
+  Physically wind/solar/temp cannot differ meaningfully between
+  consecutive calendar weeks; the smoothed v2.5.8 (blue) curves
+  reflect the underlying climatology.
+- The variance reduction reported by the v2.5.4 audit was therefore
+  *partly* sampling noise being captured as seasonal signal. The
+  smoothed v2.5.8 components attribute that noise correctly to the
+  stochastic residual `Y_X`, which is what the v2.5.6 hedge-gated
+  sweep operates on.
+- Prices (FI / SE3 / SE1 / EE) are kept un-smoothed: their week-to-
+  week variation includes real signal from scheduled outages, hydro
+  releases, holiday demand, and the like. Smoothing those would
+  hide real economic structure.
 
 ## Reproducibility
 
 ```bash
 python studies/build_seasonal_components.py   # refit + ship artifact
-python studies/seasonal_components_compare.py # render comparison figure
+python studies/seasonal_components_compare.py # render comparison figures
 ```

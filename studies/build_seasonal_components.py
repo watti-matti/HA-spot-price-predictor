@@ -53,16 +53,28 @@ PRICE_WINDOW_START   = pd.Timestamp("2023-01-01", tz="UTC")
 WEATHER_WINDOW_START = pd.Timestamp("2018-01-01", tz="UTC")
 WINDOW_END = pd.Timestamp("2026-04-28", tz="UTC")
 
-# Per-input smoothing applied to P_week (and P_hour for some inputs)
-# to reduce the residual noise that the user (2026-05-17) flagged on
-# cloud cover. Weather inputs only; prices are left raw because their
-# week-to-week variation carries real signal (outages, hydro releases).
+# Per-input smoothing applied to P_week (and P_hour for some inputs).
+#
+# Per user observation 2026-05-17, weather inputs other than cloud also
+# carried more weekly noise than physically defensible — wind and solar
+# response to "week-of-year 8 vs week-of-year 9" is essentially zero
+# (no human-cycle component, no rapid climate-change signal), so the
+# week-to-week ringing in v2.5.7 was sampling noise.
+#
+# Updated v2.5.8 windows are stronger across all weather inputs:
+#   - wind: 7  → annual circulation pattern is smooth; weeks 47 vs 48
+#               can't physically differ by 0.5 m/s
+#   - solar: 7 → annual day-length cycle is smooth on Earth
+#   - temp: 9  → annual temperature cycle is the smoothest input; the
+#               Finnish climate doesn't have weekly thermal modes
+#   - cloud: 7 → unchanged from v2.5.7 (already enough)
+#   - ghi_cs: 1 → no smoothing, deterministic clear-sky has zero noise
 DEFAULT_SMOOTH = {
-    "wind":   {"P_week": 5},
-    "solar":  {"P_week": 3},   # less smoothing — physical signal is sharp
-    "ghi_cs": {"P_week": 3},
-    "temp":   {"P_week": 5},
-    "cloud":  {"P_week": 7},   # strongest smoothing — most noise per bin
+    "wind":   {"P_week": 7},
+    "solar":  {"P_week": 7},
+    "temp":   {"P_week": 9},
+    "cloud":  {"P_week": 7},
+    "ghi_cs": {},   # deterministic — no smoothing
 }
 
 # Legacy alias for any callers that still use it

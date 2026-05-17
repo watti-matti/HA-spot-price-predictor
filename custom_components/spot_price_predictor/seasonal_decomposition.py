@@ -282,7 +282,7 @@ def build_artifact(
         for k in inputs
     }
     return {
-        "version": "2.5.7",
+        "version": "2.5.8",
         "train_window": list(train_window) if train_window else None,
         "depths": depths_resolved,
         "components": dict(inputs),
