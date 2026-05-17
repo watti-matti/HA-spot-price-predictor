@@ -2,7 +2,7 @@
 
 [![HACS Integration](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-2.5.8-blue.svg)](https://github.com/watti-matti/HA-spot-price-predictor/releases/tag/v2.5.8)
+[![Version](https://img.shields.io/badge/version-2.5.9-blue.svg)](https://github.com/watti-matti/HA-spot-price-predictor/releases/tag/v2.5.9)
 
 **Forecast consumer electricity costs and D(k) duration curves up to 7 days ahead** using machine learning with physics-based weather features, cross-border trade analysis, and nuclear outage awareness.
 
@@ -302,7 +302,8 @@ To adapt for another country, create a new region YAML file and retrain. The mod
 - [TEKNINEN_TOTEUTUS.md](TEKNINEN_TOTEUTUS.md) — Arkkitehtuuri, piirre-engineering, mallin kuvaus (suomeksi)
 - [docs/dk_cheap_peak_migration.md](docs/dk_cheap_peak_migration.md) — D(k) schema migration guide for downstream consumers
 - [docs/dtaci_layer.md](docs/dtaci_layer.md) — DtACI online calibration: algorithm details, state persistence, troubleshooting
-- [studies/results/V2_5_8_RELEASE_NOTES.md](studies/results/V2_5_8_RELEASE_NOTES.md) — **v2.5.8 (CURRENT)** — Stronger smoothing extended to wind/solar/temp (wind P_week noise −25 %, cloud −28 %, temp −10 %)
+- [studies/results/V2_5_9_RELEASE_NOTES.md](studies/results/V2_5_9_RELEASE_NOTES.md) — **v2.5.9 (CURRENT)** — Input/output mapping verification + refreshed per-input figures from shipped artifact; FI prediction decomposition exposes Layer 3+4 gap (R²=0.27 alone)
+- [studies/results/V2_5_8_RELEASE_NOTES.md](studies/results/V2_5_8_RELEASE_NOTES.md) — v2.5.8 Stronger smoothing extended to wind/solar/temp (wind P_week noise −25 %, cloud −28 %, temp −10 %)
 - [studies/results/V2_5_7_RELEASE_NOTES.md](studies/results/V2_5_7_RELEASE_NOTES.md) — v2.5.7 Smoother per-week seasonal vectors: weather inputs refit on 8.3 y window with circular smoothing; cloud P_week noise −28 %
 - [studies/results/V2_5_6_RELEASE_NOTES.md](studies/results/V2_5_6_RELEASE_NOTES.md) — v2.5.6 Hedge-gated input sweep at 24/48/168 h horizons; 7-day verdict: `(Y_fi_lag168, is_workday)` → +16% CVaR reduction. Day-ahead achieves +41%.
 - [studies/results/V2_5_5_RELEASE_NOTES.md](studies/results/V2_5_5_RELEASE_NOTES.md) — v2.5.5 De-seasonalized input infrastructure: seasonal_decomposition module + builder + shipped 22 KB artifact + 14 tests
