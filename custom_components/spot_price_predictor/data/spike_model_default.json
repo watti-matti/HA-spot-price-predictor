@@ -1,0 +1,64 @@
+{
+  "version": "2.5.13",
+  "layer": "L4 GPD POT on FI post-AR residual",
+  "ridge_features": [
+    "Y_fi_lag168",
+    "is_workday",
+    "Y_sigmoid_wind_rho",
+    "Y_solar_effective",
+    "Y_temp"
+  ],
+  "ridge_coef": [
+    2.047127668413314,
+    0.06617063331453758,
+    0.21359078123618866,
+    -91.8699419623535,
+    -0.021430737755820484,
+    -2.432682773638901
+  ],
+  "ar1_phi": 0.9041506423926506,
+  "gpd_right": {
+    "n": 426,
+    "shape": 0.47767140924597956,
+    "scale": 20.61215631867715,
+    "p_exceed": 0.026760474904202525,
+    "threshold": 31.623178521080288
+  },
+  "hill_right_alpha": 2.088832905215177,
+  "hill_left_alpha": 2.088832905215177,
+  "train_window": [
+    "2023-01-08 00:00:00+00:00",
+    "2024-11-01 06:00:00+00:00"
+  ],
+  "stats": {
+    "n_train": 15919,
+    "eta_train_mean": -0.004814656223658242,
+    "eta_train_sigma": 22.759033493353233,
+    "eta_train_skew": 4.6746562175137925,
+    "eta_train_excess_kurt": 252.71091481746666
+  },
+  "cvar_backtest": [
+    {
+      "alpha": 0.05,
+      "realised": 43.56290656814945,
+      "normal": 46.950164529453865,
+      "gpd": NaN,
+      "empirical_train": 48.984304170207544
+    },
+    {
+      "alpha": 0.01,
+      "realised": 84.00341020358218,
+      "normal": 60.66251436403514,
+      "gpd": 120.67808947125536,
+      "empirical_train": 116.9706124477264
+    },
+    {
+      "alpha": 0.001,
+      "realised": 145.39935179228414,
+      "normal": 76.63653049526032,
+      "gpd": 385.5933162261704,
+      "empirical_train": 361.0705294828163
+    }
+  ],
+  "notes": "L4 GPD POT spike model on the post-AR(1) residual of the V_sigmoid_full architecture (v2.5.12). Runtime: sample post-AR shocks via GPD inverse-CDF for the right tail. Bulk uses Normal(\u03bc, \u03c3); only exceedances above threshold u draw from GPD."
+}
