@@ -204,22 +204,34 @@ def fig_accuracy(df: pd.DataFrame, out_path: Path) -> None:
     test = df[df["split"] == "test"]
     test_day = test[test["is_daylight"]]
 
-    # (a) Scatter density: predicted vs actual (test, daylight only)
+    # (a) Scatter density: predicted vs actual (test, daylight only).
+    # Use a high-contrast viridis colormap on a log scale so both sparse
+    # tail observations and the dense core are clearly visible. White
+    # background under empty cells keeps the y=x reference line readable.
     ax = axes[0, 0]
+    ax.set_facecolor("white")
     a = test_day["actual_mw"].values
     p = test_day["pred_mw"].values
-    hb = ax.hexbin(a, p, gridsize=55, mincnt=1, cmap="Blues", bins="log")
+    hb = ax.hexbin(a, p, gridsize=50, mincnt=1, cmap="viridis", bins="log",
+                   linewidths=0.0)
     lim = max(a.max(), p.max()) * 1.05
-    ax.plot([0, lim], [0, lim], "r--", lw=0.8, label="y = x (ideal)")
+    ax.plot([0, lim], [0, lim], color="red", lw=1.6, ls="--",
+            zorder=5, label="y = x (ideal)")
+    # Add ±1σ_residual reference band so the user can read accuracy by eye
+    sd = float(np.std(p - a))
+    band_x = np.array([0, lim])
+    ax.fill_between(band_x, band_x - sd, band_x + sd, color="red",
+                    alpha=0.10, zorder=4, label=f"±1σ ({sd:.0f} MW)")
     ax.set_xlim(0, lim); ax.set_ylim(0, lim)
     ax.set_xlabel("Actual production [MW]")
     ax.set_ylabel("Deployed prediction [MW]")
     r = np.corrcoef(a, p)[0, 1] ** 2
     mae = float(np.mean(np.abs(p - a)))
     ax.set_title(f"Scatter density (test, daylight) — R²={r:.3f}, MAE={mae:.0f} MW")
-    ax.legend(loc="upper left", fontsize=8)
+    ax.legend(loc="upper left", fontsize=9, framealpha=0.95)
     cb = fig.colorbar(hb, ax=ax, fraction=0.04, pad=0.02)
-    cb.set_label("log hours", fontsize=8); cb.ax.tick_params(labelsize=7)
+    cb.set_label("Hours per bin (log)", fontsize=8)
+    cb.ax.tick_params(labelsize=7)
 
     # (b) Residual histogram + KDE
     ax = axes[0, 1]
