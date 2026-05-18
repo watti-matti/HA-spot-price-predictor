@@ -1,184 +1,165 @@
 # Installation Guide / Asennusohje
 
-Step-by-step installation guide for Spot Price Predictor.
+Step-by-step setup of Spot Price Predictor in Home Assistant.
 
 ## Prerequisites
 
-- Home Assistant 2024.1.0 or newer
-- [HACS](https://hacs.xyz/) installed
-- Optional: [Nordpool integration](https://github.com/custom-components/nordpool) for actual price comparison
-- Optional: [ApexCharts Card](https://github.com/RomRider/apexcharts-card) for dashboard (install via HACS Frontend)
+- Home Assistant **2024.1.0** or newer.
+- [HACS](https://hacs.xyz/) installed.
+- Optional: a [Nordpool integration](https://github.com/custom-components/nordpool) (only needed if you want the actual-price sensors).
+- Optional: [ApexCharts Card](https://github.com/RomRider/apexcharts-card) for the bundled dashboard, installable via HACS → Frontend.
 
-## Step 1: Add Custom Repository to HACS
+## Step 1 — Add the custom repository to HACS
 
-1. Open **HACS** → **Integrations**
-2. Click the **⋮** menu (top right) → **Custom repositories**
-3. Enter repository URL: `https://github.com/watti-matti/HA-spot-price-predictor`
-4. Select type: **Integration**
-5. Click **ADD**
+1. Open **HACS → Integrations**.
+2. Click the **⋮** menu → **Custom repositories**.
+3. Enter the repository URL: `https://github.com/watti-matti/HA-spot-price-predictor`.
+4. Type: **Integration**. Click **ADD**.
 
 ![HACS Custom Repository](docs/screenshots/install-01-hacs-repo.png)
 
-## Step 2: Download the Integration
+## Step 2 — Download
 
-1. Find **Spot Price Predictor** in HACS Integrations
-2. Click **Download**
-3. The integration will be installed to `/config/custom_components/spot_price_predictor/`
-4. **Restart Home Assistant** — this is required before the integration can be configured
+1. Find **Spot Price Predictor** in HACS Integrations.
+2. Click **Download**.
+3. **Restart Home Assistant** — required before the integration can be configured.
 
 ![HACS Download](docs/screenshots/install-02-hacs-download.png)
 
-## Step 3: Add the Integration
+## Step 3 — Add the integration
 
-1. After restart, go to **Settings** → **Devices & Services**
-2. Click **+ Add Integration** (bottom right)
-3. Search for **"Spot Price Predictor"** (or type "spot p")
-4. Click to start the configuration wizard
+1. **Settings → Devices & Services → + Add Integration**.
+2. Search for **Spot Price Predictor** and click it.
 
 ![Add Integration](docs/screenshots/install-03-add-integration.png)
 
-## Step 4: Select Region
+## Step 4 — Select region
 
-Select your electricity market region. Currently supported: **Finland**.
-
-Click **Submit** to continue.
+Currently supported: **Finland**. Submit.
 
 ![Select Region](docs/screenshots/install-04-region.png)
 
-## Step 5: Configure Operator, Tariffs, and Price Sources
+## Step 5 — Operator, tariffs, and Nordpool
 
-This is the main configuration page where you set up your electricity pricing and optional data sources.
+This step configures consumer pricing and (optionally) the actual-price sensors.
 
 ![Operator Configuration](docs/screenshots/install-05-operator.png)
 
-**Operator selection:**
-- Select your network operator (**Elenia**, **Caruna Espoo**, **Caruna North**, **Helen**) — transfer rates are pre-filled
-- Select **Custom** to enter your own day/night transfer rates
+**Operator selection** (`operator`):
 
-**Price parameters (all values excl. VAT):**
-- **Energy seller's margin** — from your electricity contract (e.g., 0.00383 EUR/kWh)
-- **Day transfer rate** — applies every day 07:00-22:00
-- **Night transfer rate** — applies every day 22:00-07:00
-- **VAT multiplier** — 1.255 for Finland (25.5%)
-- **Energy tax** — 0.02325 EUR/kWh (class I, 2026)
+| ID | Day rate (07–22) | Night rate (22–07) |
+|---|:---:|:---:|
+| `elenia` | 3.61 c/kWh | 2.20 c/kWh |
+| `caruna_espoo` | 2.21 c/kWh | 2.21 c/kWh |
+| `caruna_north` | 4.07 c/kWh | 2.49 c/kWh |
+| `helen` | 3.54 c/kWh | 3.54 c/kWh |
+| `custom` | user-defined | user-defined |
 
-**Nordpool integration (optional):**
-- **Nordpool entity ID** — enter your Nordpool sensor entity (e.g., `sensor.nordpool_kwh_fi_eur_3_10_0`) to get actual price comparison sensors. Leave empty to skip.
-- **Enable PV selling** — check if you have solar panels to get a selling price sensor
-- **PV sell commission** — your electricity retailer's selling commission (e.g., 0.002 EUR/kWh = 0.2 c/kWh)
+For yleissiirto (general transfer / flat tariff), set day and night rates equal — or pick an operator that already has them equal (Caruna Espoo, Helen).
 
-Click **Submit** to continue.
+**Price parameters** (all excl. VAT):
 
-## Step 6: Optional Data Sources and Cheapest Hours
+- **`seller_margin`** — from your electricity contract (e.g. 0.00383 EUR/kWh). Default 0.0.
+- **`custom_day_rate`**, **`custom_night_rate`** — only relevant when `operator = custom`.
+- **`custom_vat`** — VAT multiplier. Default 1.255 (25.5 %).
+- **`custom_energy_tax`** — Default 0.02325 EUR/kWh (class I, 2026).
 
-Configure prediction data sources and the cheapest hours search window.
+**Nordpool (optional)**:
+
+- **`nordpool_entity`** — leave empty to skip the actual-price sensors. If you have a Nordpool integration, paste its sensor entity ID (e.g. `sensor.nordpool_kwh_fi_eur_3_10_0`).
+- **`enable_pv_selling`** — when on (and a Nordpool entity is configured), the selling-price sensor is also created.
+- **`pv_sell_commission`** — your retailer's selling commission (e.g. 0.002 EUR/kWh = 0.2 c/kWh).
+
+Submit.
+
+## Step 6 — Optional data sources
 
 ![Optional APIs](docs/screenshots/install-06-apis.png)
 
-**Data sources:**
-- **Cross-border price data** — enabled by default. Uses free Swedish (SE1/SE3) and Estonian price data to improve predictions.
-- **Fingrid API key** — optional. Register for free at [data.fingrid.fi](https://data.fingrid.fi) for nuclear production and cross-border flow data.
+- **`fingrid_api_key`** — optional. Free email registration at [data.fingrid.fi](https://data.fingrid.fi). Enables Fingrid data fetches (nuclear, consumption / wind / solar forecasts). The non-seasonal spot model does not consume these signals today, but they feed the duration model and the solar sub-model retraining.
+- **`enable_neighbor_prices`** — default on. Fetches SE1/SE3/EE day-ahead spot prices for the duration model and dashboard context.
+- **`enable_dtaci_dk`** — default off. Turns on the per-(direction, k) DtACI calibration that wraps the D(k) curves with adaptive 90 % bands. Warmup is ~5 days of reconciled daily updates.
 
-**Cheapest hours search window:**
-- **Start offset** — hours from now to begin searching (default 24 = tomorrow)
-- **Duration** — search window length in hours (default 48 = 2 days)
+Submit.
 
-**ApexCharts dashboard:** A ready-made dashboard YAML is available at the link shown in the dialog. See [Step 8](#step-8-add-dashboard-optional) below.
-
-Click **Submit** to complete the setup.
-
-## Step 7: PV System Parameters (optional)
-
-If you have rooftop solar, enter your PV system parameters here. Leave the capacity at 0 to skip and use the integration without PV awareness. With PV enabled, the forecast exposes a marginal effective price (bounded between sell and buy) and a PV-aware D(k) duration curve that reflects self-consumption savings.
+## Step 7 — PV system (optional)
 
 ![PV Parameters](docs/screenshots/install-07-device-PV-parameters.png)
 
-## Step 8: Device Created
+Leave `pv_capacity_kwp` at 0 to disable PV-aware outputs entirely (all PV-related sensor attributes are absent).
 
-The integration creates a device called **Spot Price Predictor** with all sensors. You can assign it to an area (e.g., your home).
+With PV enabled, the integration produces:
 
-Click **Finish**.
+- a marginal `effective_eur_kwh` per forecast hour, bounded analytically in `[sell, buy]`;
+- a `dk_cheap_pv_eur_kwh[24]` / `dk_peak_pv_eur_kwh[24]` pair per day on the duration sensor;
+- convenience scalars `today_cheap_pv_*h_eur_kwh` / `today_peak_pv_*h_eur_kwh`.
 
-![Device Created](docs/screenshots/install-08-device-created.png)
+| Field | Default | Notes |
+|---|---|---|
+| `pv_capacity_kwp` | 0.0 | 0 disables PV. |
+| `pv_tilt_deg` | 45 | Matches Open-Meteo's fetch tilt. |
+| `pv_azimuth_deg` | 180 | 0 = N, 90 = E, 180 = S, 270 = W. |
+| `pv_system_efficiency` | 0.85 | Lumped DC/AC + soiling + losses. |
+| `pv_external_entity` | "" | Override the internal estimate with any HA sensor whose attributes match one of: `forecast` list-of-dict (kWh), `wh_hours` dict (Wh), `watts` dict (W), or `irradiance` list (auto-detected W/kWh). |
+| `pv_export_grid_fee` | 0 EUR/kWh | Extra fee on exported energy (above seller commission). |
+| `annual_consumption_kwh` | 12 000 | Typical TOTAL annual household demand from the bill, including PV self-consumption AND optimizer-controlled loads (heat pump, EV, sauna, water heater). Drives baseload via a Finnish residential monthly seasonal profile. |
+| `consumption_entity` | "" | Optional. Any HA consumption sensor: cumulative-kWh counter, daily/monthly `utility_meter`, or instantaneous-power sensor (W/kW). Auto-detected; smoothed on a 14-day rolling window with a 5 % hysteresis dead-band so optimizer rescheduling cannot feed back into next cycle's forecast. |
 
-## Step 9: Verify Sensors
+## Step 8 — Verify
 
-Go to **Settings** → **Devices & Services** → **Spot Price Predictor** → **Sensors** to verify all sensors are working.
+The integration creates a device named **Spot Price Predictor** with sensor entities. Open **Settings → Devices & Services → Spot Price Predictor → Sensors** to verify:
+
+| Sensor | Always created |
+|---|:-:|
+| `sensor.spot_price_predictor_price_forecast` | yes |
+| `sensor.spot_price_predictor_duration_forecast` | yes |
+| `sensor.spot_price_predictor_spot_electricity_price` | only with `nordpool_entity` |
+| `sensor.spot_price_predictor_spot_electricity_selling_price` | only with `nordpool_entity` + `enable_pv_selling` |
 
 ![Sensors](docs/screenshots/install-09-sensors.png)
 
-**Forecast sensors (always created):**
+## Step 9 — Add the dashboard (optional)
 
-| Sensor | Description |
-|--------|-------------|
-| **Spot Price Forecast** | Predicted spot price (EUR/MWh) with 170h forecast |
-| **Consumer Price** | Total consumer price (EUR/kWh) including all overhead |
-| **Cheapest Hours** | Best time windows for scheduling flexible loads |
-| **Week Price Stats** | Weekly min/avg/max consumer price |
+A ready-made Lovelace dashboard is available at [`ha_dashboard.yaml`](ha_dashboard.yaml). Install [ApexCharts Card](https://github.com/RomRider/apexcharts-card) via HACS → Frontend, then add the dashboard:
 
-**Spot price sensors (when Nordpool entity is configured):**
-
-| Sensor | Description |
-|--------|-------------|
-| **Spot Electricity Price** | Actual consumer buying price from Nordpool |
-| **Spot Electricity Selling Price** | Selling price for solar PV owners |
-
-## Step 9: Add Dashboard (Optional)
-
-Install [ApexCharts Card](https://github.com/RomRider/apexcharts-card) via HACS → Frontend, then copy the dashboard YAML from the repository:
+1. Go to your HA dashboard → **Edit** → **+ Add Card** → **Manual**.
+2. Paste the YAML from `ha_dashboard.yaml`.
+3. Adjust entity IDs if your installation differs.
 
 ![Dashboard Example](docs/screenshots/example_UI.png)
 
-The dashboard YAML is available at: [docs/yaml_examples/apexcharts_dashboard.yaml](docs/yaml_examples/apexcharts_dashboard.yaml)
+The dashboard shows the 7-day consumer-price trend, today's D(k) cheap/peak curve, wind speed, and (when configured) Nordpool actual price for comparison.
 
-To add it to your dashboard:
-1. Go to your HA dashboard → **Edit** → **+ Add Card** → **Manual**
-2. Paste the YAML content
-3. Adjust entity names if your installation uses different names
+## Changing settings later
 
-The dashboard shows:
-- **Actual consumer price** from Nordpool (step-line, color-coded) — ground truth
-- **Forecast consumer price** (smooth line) — ML prediction
-- **PV selling price** (yellow line) — for solar panel owners
-- **Weekly average** reference line
-- **Wind speed forecast** on secondary axis
-
-## Changing Settings Later
-
-You can change all settings after installation. Go to **Settings** → **Devices & Services** → **Spot Price Predictor** → **Configure** to modify:
-- Operator and transfer rates
-- Seller's margin
-- Nordpool entity and PV settings
-- Fingrid API key
-- Cheapest hours search window
-
-## Troubleshooting
-
-**No sensors visible after installation:**
-- Make sure you completed the full configuration wizard (Steps 3-6)
-- Check **Settings** → **System** → **Logs** for errors containing `spot_price_predictor`
-- Try removing the integration and adding it again
-
-**Cheapest Hours shows "unavailable":**
-- The search window (start + duration) may extend beyond the forecast range (170 hours). Reduce the values.
-
-**Spot Electricity Price shows wrong values:**
-- Verify that the Nordpool entity ID is correct in the configuration
-- The sensor applies the same overhead (margin + transfer + tax + VAT) as the forecast consumer price
-
-**Forecast seems inaccurate:**
-- The bundled model was trained on recent Finnish data. For best accuracy, refit quarterly via the `spot_price_predictor.retrain_models` service — see the next section.
+**Settings → Devices & Services → Spot Price Predictor → Configure** opens the options flow. All wizard fields can be re-edited there. Changes apply on the next coordinator cycle (no restart needed).
 
 ## Retraining (optional)
 
-The integration ships with pre-trained models for Finland, so no retraining is needed for normal use. If you want to refit on more recent data — for example after a major change in wind capacity or a regime shift in spot prices — use the built-in Home Assistant service.
+The integration ships with pre-trained artifacts under `custom_components/spot_price_predictor/data/` — no retraining is required for normal use. If you want to refit against more recent data (e.g. after a regime shift, a tariff change, or when `RefitMonitor` flags coverage drift), call the service from **Developer Tools → Services**:
 
-1. Go to **Developer Tools** → **Services**.
-2. Pick **Spot Price Predictor: Retrain Models** (`spot_price_predictor.retrain_models`).
-3. Optionally set `layers` to a subset of `seasonal`, `spike`, `solar` (omit to refit all three). The `solar` layer needs a Fingrid API key, which the service reads from the `fingrid_api_key` field or the `FINGRID_API_KEY` environment variable.
-4. Call the service.
+```yaml
+service: spot_price_predictor.retrain_models
+data:
+  layers: ["seasonal", "spike", "solar"]   # omit to refit all three
+  # fingrid_api_key: "..."                  # only needed for the solar layer
+```
 
-The service rewrites the three artifacts under `custom_components/spot_price_predictor/data/` atomically and the coordinators auto-reload them — no Home Assistant restart needed. On completion it fires the `spot_price_predictor_models_retrained` event, which you can hook from an automation to send a confirmation notification.
+The service rewrites the three artifacts atomically and the coordinators auto-reload them on the next update cycle. On completion it fires the `spot_price_predictor_models_retrained` Home Assistant event so automations can react (e.g. send a notification).
+
+## Troubleshooting
+
+**No sensors visible after installation.**
+Make sure you completed the full configuration wizard (Steps 3–7). Check **Settings → System → Logs** for errors containing `spot_price_predictor`. Try removing the integration and adding it again.
+
+**`spot_electricity_price` shows wrong values.**
+Verify that the `nordpool_entity` is correct. The sensor applies the same overhead as the forecast (`spot + seller_margin + transfer + energy_tax) × VAT`).
+
+**Forecast looks inaccurate.**
+The bundled artifacts were trained on recent Finnish data. For best accuracy, refit quarterly via `spot_price_predictor.retrain_models`. If `pipeline_diagnostics.refit_recommended` becomes `true`, the calibrator has detected sustained coverage drift and is suggesting a refit.
+
+**DtACI bands are missing.**
+DtACI is opt-in (`enable_dtaci_dk`). After enabling, the calibrator needs ≈ 5 days of reconciled daily updates before the bands open up — the `dtaci_warmup_status` attribute on the duration sensor reports the current state.
 
 ---
 
