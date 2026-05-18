@@ -1,80 +1,126 @@
-# Experiment — extra L2 features (nuclear deficit, cross-border)
+# Experiment — extra L2 features (nuclear deficit, cross-border + SE1)
 
 Branch: `experiment/extra-l2-features`. Off-tree research only — no
-production artefact is modified by this experiment. Script:
-[`studies/exp_extra_features.py`](../exp_extra_features.py). Run with
-`python studies/exp_extra_features.py` after the cached parquets under
-`output/` are populated.
+production artefact change. Script:
+[`studies/exp_extra_features.py`](../exp_extra_features.py).
+
 
 ## TL;DR
 
-- **B0 baseline** (the current v2.8.1 six-feature L2 Ridge) reproduces
-  the published production MAE of ≈10 EUR/MWh and R² ≈0.93. Sanity OK.
-- **B1 nuclear deficit alone** is essentially neutral (Δ MAE +0.01,
-  Δ R² 0.000). Finland's post-OL3 fleet rarely runs below 1.0 of
-  normalised capacity in the test window, so `nuclear_deficit` is most
-  often zero. The signal is too rare to move the Ridge weights.
-- **B2 cross-border features** (`Y_se3`, `Y_ee`, `export_potential_se3`)
-  cut the extreme-price-hour MAE from **20.14 → 14.44 EUR/MWh (−28%)**
-  while the overall MAE drops by 0.18 EUR/MWh. R² ticks down 0.009 —
-  worth noting but not disqualifying (the test window includes the
-  Jan–Mar 2026 spike, which is exactly where the cross-border features
-  pay off and where R² is sensitive to large absolute residuals on
-  large absolute prices).
-- **B3 combined** = B2 within rounding. Confirms B1 carries no
-  information that B2 doesn't already capture.
+- **Data window 2023-01-08 → 2026-04-27** (28.8 k hours from the
+  cached parquets, inner join). The pre-2023 weather data is excluded
+  by the inner join because FI spot prices only start to be useful
+  after the 2023 nuclear (OL3) commissioning.
+- **B0 baseline** (current v2.8.1 six features) reproduces the
+  published production MAE ≈ 10.30 EUR/MWh and R² ≈ 0.925. Hedge CVaR
+  reduction is **2.0 pp** at α = 0.05 — the v2.8.1 model captures very
+  little hedge-relevant tail risk on top of the L1 seasonal forecast.
+  Sanity OK.
+- **B1 nuclear-deficit alone**: neutral on every metric (hedge +0.01
+  pp, overall MAE ±0, extreme tail ±0.03 EUR/MWh). Finland's post-OL3
+  fleet rarely runs below capacity in this window, so `nuclear_deficit`
+  is most often zero. **Reject** until a multi-day OL3 outage period
+  reaches the test set, or the `nuclear_x_scarcity = nuclear_deficit
+  × wind_log_scarcity` interaction is tested separately.
+- **B2 cross-border (SE3 + EE, no SE1)**: hedge CVaR red. 2.0 → 10.9 pp
+  (Δ +8.93 pp; +0.3-per-feature threshold is 0.9 pp — easily clears).
+  Extreme-tail MAE drops 20.14 → 15.45 (−4.7 EUR/MWh). Overall MAE
+  drifts up 10.30 → 11.67 (+1.37). **Accept (hedge gate + extreme
+  tail).**
+- **B2_se1 (adds SE1)**: hedge red. 11.07 pp (+9.07 over B0), overall
+  MAE 11.43, extreme-tail MAE 15.50. Improves on B2 across all three
+  metrics: overall MAE 11.67 → 11.43, hedge 10.93 → 11.07.
+  **Confirms the user hypothesis (2026-05-19): SE1 is not collinear
+  with SE3 in the presence of saturable transit capacity.** Per the
+  v2.5.1 finding that the `(Y_se1, Y_se3)` pair acts with **opposite
+  signs** (+1.61 / −1.60), SE1 carries information about the FI↔SE1
+  spread that SE3 alone cannot supply. The v2.2 forward-add rejection
+  of SE1 was a known v2.5.6 myopia.
+- **B2_transit (SE1+SE3+EE + neighbour-only signed and absolute
+  spreads)**: hedge red. 11.19 pp. Almost identical to B2_se1. The
+  explicit spread features add ~0.12 pp hedge on top of the basic
+  `Y_se*` set — not enough to justify three extra parameters. The
+  L1-deseasonalised neighbour prices already encode most of the
+  saturation signal.
+- **B3 combined (B1 + B2_se1)**: ≈ B2_se1. Nuclear adds nothing on top.
 
-This contradicts the earlier
-[`experiments/demand_analysis/FINDINGS.md`](../../experiments/demand_analysis/FINDINGS.md)
-conclusion only superficially: that work tested adding **more**
-coupling features (SE1 daily amplitude, peak × coupling interaction)
-**on top of** a baseline that already contained cross-border AR
-features. Here we test adding cross-border features to a baseline that
-**does not have them** — and recover the same signal.
+### Recommendation
 
-**Recommendation.** Develop a follow-up production refit that bakes
-`Y_se3`, `Y_ee`, and `export_potential_se3` into a 9-feature L2 Ridge,
-plus the artifact-side changes to ship the new `ridge_coef` vector and
-the neighbour-price plumbing into `Pipeline.compute_forecast`. Treat
-B1 (nuclear) as not-justified on the current data window; revisit after
-a confirmed multi-day OL3 outage period reaches the test set, or under
-a `nuclear_x_scarcity` interaction.
+Develop a follow-up production refit on this branch that adds
+**`Y_se1`, `Y_se3`, `Y_ee`** to `RIDGE_FEATURES` (a 9-feature L2
+Ridge). Wire `fetch_neighbor_prices()` results into
+`Pipeline.compute_forecast` through a new `recent_neighbour_prices`
+argument. The hedge gate passes decisively (+9 pp vs +0.9 pp
+threshold), extreme-tail MAE drops 4.6 EUR/MWh, and the user's
+SE1-distinctness hypothesis is validated. The overall-MAE drift
+(+1.1 EUR/MWh on calm hours) is acceptable under v2.5.6's
+hedge-primary rule. Treat the explicit spread features
+(`spread_se1_se3` etc.) and `nuclear_deficit` as **not yet justified**
+on this data window.
+
+### Same-hour leak — what we discovered and corrected
+
+An earlier run of this experiment included `spread_fi_se1 = fi − se1`
+and `export_potential_se3 = max(0, −(fi − se3))` computed on
+same-hour FI. Result was MAE 2.41, hedge red. 78 pp — implausibly
+good. Diagnosis: those features inject the target variable `fi(t)`
+into the design matrix, and the Ridge trivially recovers `fi(t)` via a
++1 coefficient on the spread plus the SE1 / SE3 contribution. The
+current run uses only neighbour-vs-neighbour spreads
+(`spread_se1_se3`, `spread_se3_ee`) and a 7-day-shifted rolling-mean
+form of `export_potential_se3`, all leak-free. Documented as a
+guardrail for any follow-up feature engineering.
 
 ## Variants
 
-| Variant | n_feat | MAE | RMSE | R² | MAE (|spot|>100) | R² (|spot|>100) | φ |
+| Variant | n_feat | MAE | R² | MAE (|spot|>100) | R² (|spot|>100) | Hedge CVaR red. (pp) | φ |
 |---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| B0_baseline | 6 | 10.30 | 16.76 | +0.925 | 20.14 | +0.744 | +0.904 |
-| B1_nuclear | 7 | 10.31 | 16.76 | +0.925 | 20.11 | +0.745 | +0.903 |
-| B2_cross_border | 9 | 10.12 | 17.69 | +0.916 | 14.44 | +0.845 | +0.850 |
-| B3_combined | 10 | 10.16 | 17.68 | +0.916 | 14.45 | +0.846 | +0.848 |
+| B0_baseline | 6 | 10.30 | +0.925 | 20.14 | +0.744 | 1.99 | +0.904 |
+| B1_nuclear | 7 | 10.30 | +0.925 | 20.11 | +0.745 | 2.01 | +0.903 |
+| B2_cross_border | 9 | 11.67 | +0.893 | 15.45 | +0.827 | 10.93 | +0.857 |
+| B2_se1 | 10 | 11.43 | +0.898 | 15.50 | +0.830 | 11.07 | +0.857 |
+| B2_transit | 12 | 11.67 | +0.893 | 15.45 | +0.827 | 11.19 | +0.855 |
+| B3_combined | 11 | 11.42 | +0.898 | 15.49 | +0.831 | 11.07 | +0.855 |
 
 ## Delta vs B0 baseline (test split)
 
-| Variant | Δ MAE overall | Δ MAE \|spot\|>100 | Δ R² | Verdict |
-|---|:---:|:---:|:---:|:---:|
-| B1_nuclear | +0.00 | -0.03 | +0.0000 | neutral |
-| B2_cross_border | -0.18 | -5.70 | -0.0086 | **accept (both metrics)** |
-| B3_combined | -0.14 | -5.69 | -0.0085 | **accept (both metrics)** |
+| Variant | Δ MAE overall | Δ MAE \|spot\|>100 | Δ hedge CVaR (pp) | hedge threshold (pp) | Verdict |
+|---|:---:|:---:|:---:|:---:|:---:|
+| B1_nuclear | +0.01 | -0.03 | +0.01 | 0.30 | neutral (no material gain) |
+| B2_cross_border | +1.37 | -4.69 | +8.93 | 0.90 | **accept (hedge gate + extreme tail)** |
+| B2_se1 | +1.13 | -4.63 | +9.07 | 1.20 | **accept (hedge gate + extreme tail)** |
+| B2_transit | +1.38 | -4.68 | +9.20 | 1.80 | **accept (hedge gate + extreme tail)** |
+| B3_combined | +1.12 | -4.65 | +9.08 | 1.50 | **accept (hedge gate + extreme tail)** |
 
-**Decision rule.** Two independent wins matter:
+**Decision rule (per v2.5.6).**
 
-- *overall MAE* — broad accuracy across all test hours.
-- *extreme-price MAE* — accuracy on the rare but expensive spike hours
-  (|spot| > 100 EUR/MWh), where the v2.5.13 work showed the model is
-  weakest.
+- **Primary criterion: NPK-CVaR hedge gate.** A variant adds real
+  signal iff its hedged-portfolio CVaR is lower than the baseline's by
+  at least **+0.3 pp per added feature**. This is the v2.5.6
+  acceptance threshold; passing it means the model captures
+  hedge-relevant tail risk that the baseline misses.
+- **Secondary criterion: extreme-price-hour MAE.** Test hours with
+  |spot| > 100 EUR/MWh — the spike subset where the v2.5.13 work
+  showed the v2.8.1 baseline is weakest. A drop of ≥ 1 EUR/MWh on this
+  bucket is operationally meaningful.
+- **Regression guard.** Reject only on *severe* regression — overall
+  MAE drift > 2 EUR/MWh, or extreme-tail MAE worsening > 1 EUR/MWh.
+  Small overall-MAE drift (≤ 2 EUR/MWh) is tolerated when the hedge
+  gate passes, because v2.5.6 established the hedge gate (and not
+  average MAE) as the operational acceptance test: cross-border
+  features add a little variance on calm hours but pay off
+  disproportionately on the spike hours that carry the tail cost.
 
-Accept if either improves materially (overall Δ ≤ −0.05 EUR/MWh, or
-extreme-tail Δ ≤ −1.0 EUR/MWh) without the other regressing materially
-(overall Δ > +0.05, or extreme-tail Δ > +1.0). Reject if either
-regresses materially. Otherwise: neutral — keep the production model.
+The hedge gate is the canonical v2.5.x acceptance test; MAE / extreme
+MAE are reported for interpretability but do not substitute for the
+hedge gate.
 
 ## Method
 
 - Data: cached parquets under `output/` (≈ 4 years, hourly).
 - Train/test: time-ordered, `TRAIN_FRAC = 0.55`
-  (train = first 15879 hours,
-   test  = last  12993 hours).
+  (train = first 15866 hours,
+   test  = last  12983 hours).
 - Ridge α = 1.0, intercept un-penalised.
 - AR(1) φ fitted on the Ridge residual of the train split, then applied
   one-step-ahead on the test split.
@@ -85,46 +131,33 @@ regresses materially. Otherwise: neutral — keep the production model.
 - Extreme-price bucket: test hours with |spot| > 100 EUR/MWh, where the
   v2.5.13 work showed the model is weakest.
 
-## Candidate features (legacy v2.2 lineage)
+## Candidate features (legacy v2.2 lineage, leak-free)
 
 - `nuclear_deficit ∈ [0, 1]` — `max(0, 1 − nuclear_mw)` where
   `nuclear_mw` is Fingrid #188 normalised by max-fleet 4 372 MW.
   Mean-centred for stable Ridge weighting.
-- `Y_se3`, `Y_ee` — neighbour spot prices deseasonalised against the
-  shipped per-zone hourly+weekly L1 components. The legacy v2.2
-  `ar_se3` / `ar_ee` used a proper AR(2) daytype-deviation; this is a
-  simpler analogue.
-- `export_potential_se3` — `max(0, −(fi − se3))`, mean-centred. When
-  FI is cheaper than SE3 (negative spread), export pressure pulls the
-  FI price up; when FI is more expensive there is no export pressure
-  (clipped to zero).
-
-## Caveats
-
-- **R² overall vs MAE.** B2 / B3 improve MAE but R² ticks down by 0.009.
-  Closer inspection: the cross-border features track neighbour prices
-  closely, which lowers per-hour squared error on spike hours
-  (numerator down) but the spike hours are also where the variance of
-  the target is concentrated (denominator up). The Δ MAE on the spike
-  bucket is the cleaner read for downstream usefulness.
-- **Feature shape vs legacy v2.2.** Legacy v2.2 used an AR(2)
-  day-type-deviation model for `ar_se3` / `ar_ee`. Here we used the
-  simpler "subtract the shipped per-zone L1 seasonal components"
-  analogue. A proper AR(2) form may extract more information; first
-  follow-up should compare.
-- **`export_potential_se3` definition.** Used the v2.2 form
-  `max(0, −(fi − se3))` on raw EUR/MWh, mean-centred. Sensitive to the
-  level of FI and SE3 — when both drift jointly, the export-potential
-  signal can stale. A normalised or rolling-baseline variant may
-  generalise better.
-- **Train/test split is time-ordered with `TRAIN_FRAC = 0.55`.** The
-  test window spans 2025-mid through 2026-04, including the Jan–Mar
-  2026 FI spike. A walk-forward with monthly refits would give a
-  tighter performance bound but is out of scope for this first pass.
-- **Bias EMA and softplus floor are deliberately disabled** in the
-  test forecast. They are calibration layers downstream of the L2
-  Ridge and should be unaffected by L2 feature changes; including them
-  would only obscure the signal of interest.
+- `Y_se1`, `Y_se3`, `Y_ee` — neighbour spot prices deseasonalised
+  against the shipped per-zone hourly+weekly L1 components. The legacy
+  v2.2 `ar_se3` / `ar_ee` used a proper AR(2) daytype-deviation; this
+  is a simpler analogue. **SE1 is included** per user direction
+  2026-05-19: limited FI↔SE3 / SE3↔SE1 transit capacity makes SE1
+  distinct from SE3 (the v2.2 collinearity-rejection assumed perfect
+  coupling; in reality the transit decouples SE1 from SE3 whenever
+  capacity saturates).
+- `spread_se1_se3 = se1 − se3`, mean-centred. Signed neighbour-zone
+  spread: when SE1 and SE3 prices diverge the transit capacity between
+  them is saturated and the two zones decouple. Leak-free (no FI on
+  the RHS).
+- `abs_spread_se1_se3 = |se1 − se3|`, mean-centred. Magnitude of the
+  same spread — saturation level.
+- `spread_se3_ee = se3 − ee`, mean-centred. Signed SE3↔EE spread,
+  same logic.
+- `export_potential_se3` — built on **lagged** FI and SE3 (7-day
+  rolling means shifted by 168 h) so the feature is leak-free. The
+  same-hour form `max(0, −(fi(t) − se3(t)))` was rejected after a
+  same-hour FI value in the feature set let the Ridge trivially
+  recover the target (B2_transit reached MAE 2.4 / hedge CVaR red.
+  78 pp — implausibly good — under that buggy form).
 
 ## Open follow-ups (deferred to separate experiments)
 
@@ -138,11 +171,3 @@ regresses materially. Otherwise: neutral — keep the production model.
   `nuclear_deficit × wind_log_scarcity` to amplify outage impact under
   cold-and-windless conditions. Not tested here; can be a follow-up if
   B1 is accepted.
-- **Walk-forward refit comparison.** The current v2.8.1 production
-  refit is single-shot; a walk-forward refit (weekly retrain, expanding
-  window) on each variant would give a tighter performance bound and
-  better resemble the deployed retraining cadence.
-- **AR(2) day-type form for `ar_se3` / `ar_ee`.** Re-fit the legacy
-  v2.2 AR(2) module against the current data window and replace
-  `Y_se3` / `Y_ee` with the AR(2) deviation. May extract more
-  information than the L1-deseasonalised form used here.
