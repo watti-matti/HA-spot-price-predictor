@@ -72,7 +72,7 @@ from .pv_estimate import (
     marginal_effective_eur_kwh,
     net_household_cost_eur,
 )
-from .v26_pipeline import V26Pipeline
+from .pipeline import Pipeline
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -232,21 +232,37 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
 
         # v2.6.0 — additive L1+L2+L3+L4+floor+calibrators pipeline.
         # Runs alongside the v2.2 model; its outputs land in additional
-        # keys on each forecast row and duration_forecast entry so
-        # existing dashboards keep working unchanged.
-        self._v26 = None
+        # Prediction pipeline (L1+L2+L3+L4+softplus floor+DtACI calibrators).
+        # Persistent calibrator state lives under
+        # `<config>/.storage/spot_price_predictor_pipeline/`. One-time
+        # migration: rename the legacy directory if it still exists, so
+        # users keep the accumulated bias-corrector history across the
+        # rename.
+        self._pipeline = None
         try:
             data_dir = Path(__file__).resolve().parent / "data"
             storage_dir = Path(hass.config.path(
+                ".storage", "spot_price_predictor_pipeline"))
+            legacy_dir = Path(hass.config.path(
                 ".storage", "spot_price_predictor_v26"))
-            self._v26 = V26Pipeline(data_dir=data_dir,
-                                     storage_dir=storage_dir)
-            _LOGGER.info("v26 pipeline ready (Ridge β shape %s, AR(1) φ=%.3f)",
-                          self._v26._ridge_coef.shape,
-                          self._v26._ar1_phi)
+            if legacy_dir.exists() and not storage_dir.exists():
+                try:
+                    legacy_dir.rename(storage_dir)
+                    _LOGGER.info("Migrated calibrator state %s → %s",
+                                 legacy_dir, storage_dir)
+                except OSError as e:
+                    _LOGGER.warning("Calibrator-state migration failed (%s); "
+                                    "cold-starting under %s", e, storage_dir)
+            self._pipeline = Pipeline(data_dir=data_dir,
+                                       storage_dir=storage_dir)
+            _LOGGER.info(
+                "Prediction pipeline ready (Ridge β shape %s, AR(1) φ=%.3f)",
+                self._pipeline._ridge_coef.shape,
+                self._pipeline._ar1_phi,
+            )
         except Exception as e:
-            _LOGGER.warning("v26 pipeline disabled — init failed: %s", e)
-            self._v26 = None
+            _LOGGER.warning("Prediction pipeline disabled — init failed: %s", e)
+            self._pipeline = None
 
     def _get_local_hour(self, ts_utc: datetime) -> int:
         """Get local hour for a UTC timestamp."""
@@ -1036,15 +1052,13 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
 
                 forecast.append(entry)
 
-            # ── v2.7.0 cutover ──────────────────────────────────────
-            # Replace v2.2 spot/consumer values with v26 outputs BEFORE
-            # the duration model runs, so D(k) is computed from the
-            # (much more accurate) v26 predictions.
+            # Run the prediction pipeline before the duration model so
+            # the D(k) curves see the pipeline's spot/consumer values.
             pipeline_diagnostics: dict[str, Any] = {}
             dk_by_date: dict[str, dict] = {}
-            if self._v26 is not None and forecast:
+            if self._pipeline is not None and forecast:
                 try:
-                    pipeline_diagnostics, dk_by_date = self._apply_v26_pipeline_pre_dk(
+                    pipeline_diagnostics, dk_by_date = self._apply_pipeline_pre_dk(
                         forecast)
                 except Exception as e:
                     _LOGGER.warning("Prediction pipeline overwrite failed: %s", e)
@@ -1119,9 +1133,9 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                 self._forecast_history.values(), key=lambda x: x["timestamp"]
             )
 
-            # (v26 pipeline ran earlier — before _compute_duration_forecast
-            # — so its v26-overwritten spot prices feed both the forecast
-            # rows AND the D(k) duration curves consistently.)
+            # (Pipeline ran earlier — before _compute_duration_forecast —
+            # so the same spot prices feed both the forecast rows AND the
+            # D(k) duration curves.)
 
             # Active data sources description
             sources = ["weather"]
@@ -1174,22 +1188,15 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
             _LOGGER.exception("Unexpected error during update")
             return self._return_cached_or_fail(err)
 
-    def _apply_v26_pipeline_pre_dk(
+    def _apply_pipeline_pre_dk(
         self,
         forecast: list[dict[str, Any]],
     ) -> tuple[dict[str, Any], dict[str, dict]]:
-        """v2.7.0 — v26 prediction REPLACES the v2.2 Ridge spot.
-
-        Runs the L1+L2+L3+L4+floor pipeline plus fan-chart sampling,
-        then overwrites `forecast[i]["spot_eur_mwh"]` and
-        `forecast[i]["consumer_eur_kwh"]` with the v26 values. The
-        v2.2 Ridge prediction is still computed (loaded with the
-        existing path) but its output is shadowed here. Users see
-        the better v26 prediction without any sensor renaming.
-
-        Per v2.6.1 benchmark on real FI test data:
-          v2.2: MAE 35.20  R² +0.49  hit rate 29%
-          v26:  MAE 10.00  R² +0.93  hit rate 98%
+        """Run the L1+L2+L3+L4+floor prediction pipeline plus fan-chart
+        sampling and write the result into every row of ``forecast``.
+        Both ``spot_eur_mwh`` and ``consumer_eur_kwh`` are set from the
+        pipeline output; per-row ``P5_eur_mwh`` … ``P95_eur_mwh``
+        percentiles are added alongside.
 
         Returns:
             (diagnostics_dict, dk_by_date) where dk_by_date maps ISO
@@ -1200,7 +1207,7 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
         """
         import numpy as np
 
-        if not forecast or self._v26 is None:
+        if not forecast or self._pipeline is None:
             return {}, {}
 
         # Build the input arrays the pipeline expects
@@ -1215,20 +1222,20 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
         # Y_fi_lag168 cold-start prior (rolling history not yet 7 days deep)
         lag168 = np.zeros(len(forecast), dtype=float)
 
-        out = self._v26.compute_forecast(
+        out = self._pipeline.compute_forecast(
             timestamps=timestamps,
             wind=wind, solar=solar, temp=temp,
             recent_fi_residuals={"lag168": lag168},
             enable_fan_chart=True,
         )
-        v26_mean = out["mean_eur_mwh"]
+        pipeline_mean = out["mean_eur_mwh"]
 
         # Overwrite each forecast row with the pipeline's spot, consumer,
         # and fan-chart percentiles. Group consumer prices by local date
         # so we can build the per-day D(k) arrays in one pass.
         by_date_consumer: dict[str, list[float]] = {}
         for i, f in enumerate(forecast):
-            spot = float(v26_mean[i])
+            spot = float(pipeline_mean[i])
             f["spot_eur_mwh"] = round(spot, 4)
             consumer = f.get("consumer_eur_kwh")
             try:
@@ -1245,8 +1252,8 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
             if local_date is not None and consumer is not None:
                 by_date_consumer.setdefault(local_date, []).append(float(consumer))
 
-        # Spot 24-level D(k) directly from the v26 hourly means.
-        spot_curves = self._v26.compute_duration_curves(v26_mean, timestamps)
+        # Spot 24-level D(k) directly from the pipeline's hourly means.
+        spot_curves = self._pipeline.compute_duration_curves(pipeline_mean, timestamps)
         dk_by_date: dict[str, dict[str, list[float]]] = {}
         for d in spot_curves:
             if d.get("hours_in_day") != 24:
@@ -1278,14 +1285,14 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
 
         # Persist calibrator state every cycle
         try:
-            self._v26.save_state()
+            self._pipeline.save_state()
         except Exception as e:
-            _LOGGER.debug("v26 save_state non-critical: %s", e)
+            _LOGGER.debug("pipeline save_state non-critical: %s", e)
 
         diagnostics = {
             "pipeline_bias_eur_mwh": out.get("bias_eur_mwh", 0.0),
-            "pipeline_ar1_phi": self._v26._ar1_phi,
-            "pipeline_n_features": int(self._v26._ridge_coef.size),
+            "pipeline_ar1_phi": self._pipeline._ar1_phi,
+            "pipeline_n_features": int(self._pipeline._ridge_coef.size),
             "pipeline_floor_eur_mwh": -5.0,
         }
         return diagnostics, dk_by_date
@@ -1303,7 +1310,7 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
         PV-aware D(k)). The canonical 24-level price D(k) arrays
         (`dk_cheap_eur_mwh`, `dk_peak_eur_mwh`, `dk_cheap_eur_kwh`,
         `dk_peak_eur_kwh`) are injected by the caller from
-        `_apply_v26_pipeline_pre_dk`.
+        `_apply_pipeline_pre_dk`.
         """
         if not self.model.duration_model:
             return []

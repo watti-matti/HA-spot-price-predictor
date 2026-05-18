@@ -45,13 +45,14 @@ force_refresh:
     reruns model inference. Useful for debugging or after network recovery.
 
 retrain_models:
-  name: Retrain v26 model artifacts
+  name: Retrain prediction model artifacts
   description: >
     Refit the L1 seasonal components, L2+L3+L4 spike-tail model, and
     (optionally) the solar sub-model from the latest cached data.
     Replaces the shipped JSON artifacts atomically and reloads the
-    V26Pipeline on every active coordinator without an HA restart.
-    Fires the spot_price_predictor_models_retrained event on completion.
+    prediction pipeline on every active coordinator without an HA
+    restart. Fires the spot_price_predictor_models_retrained event on
+    completion.
   fields:
     layers:
       name: Layers to retrain

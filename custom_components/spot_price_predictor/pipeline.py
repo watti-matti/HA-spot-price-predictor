@@ -1,16 +1,9 @@
-"""v2.6.0 — Production wiring of the L1+L2+L3+L4 prediction pipeline.
+"""Production wiring of the L1+L2+L3+L4 prediction pipeline.
 
-This module encapsulates the four-layer architecture plus the v2.5.14
-softplus floor and v2.5.15 hourly DtACI calibrators (bias corrector,
-fan-chart, refit monitor) into a single class that the coordinator
-calls per update cycle.
-
-Design principle: ADDITIVE integration. The existing v2.2 9-feature
-Ridge model continues to populate the established `forecast` and
-`duration_forecast` attributes unchanged. v26 outputs appear as
-additional fields on each row so existing dashboards / automations
-keep working, while consumers that want the richer signal can opt in
-by reading the new keys.
+This module encapsulates the four-layer architecture plus the softplus
+floor and the hourly DtACI calibrators (bias corrector, fan-chart,
+refit monitor) into a single class that the coordinator calls per
+update cycle.
 
 Pipeline (per hour h of the 168-hour forecast horizon):
 
@@ -27,8 +20,8 @@ Pipeline (per hour h of the 168-hour forecast horizon):
                           deseasonalized FI price residual
 
   L1+L2+L3 mean      = seasonal_fi(h) + ridge(h) + ar_corr(h)
-  + softplus floor   = floored at −5 EUR/MWh (v2.5.14)
-  + hourly bias EMA  = − bias_estimate (v2.5.15)
+  + softplus floor   = floored at −5 EUR/MWh
+  + hourly bias EMA  = − bias_estimate
   → final point forecast (the `spot_eur_mwh` value on each forecast row)
 
   L4 GPD POT fan-chart
@@ -41,7 +34,8 @@ Pipeline (per hour h of the 168-hour forecast horizon):
        cheap[i] = mean of (i+1) cheapest hours for i in 0..23
        peak [i] = mean of (i+1) priciest hours for i in 0..23
 
-Persistent state under `<config>/.storage/spot_price_predictor_v26/`:
+Persistent calibrator state lives under `<config>/.storage/`
+(see the storage directory configured by the coordinator):
   hourly_bias.json        EMA bias of L1+L2+L3+floor mean predictions
   hourly_fan_chart.json   DtACI bundle per coverage target
   refit_monitor.json      drift trigger state
@@ -64,8 +58,8 @@ from . import hourly_calibration as _hc
 
 _LOGGER = logging.getLogger(__name__)
 
-# Default Ridge feature ordering matches v2.5.13 V_sigmoid_full.
-V26_FEATURES = (
+# Canonical Ridge feature ordering for the L2 layer.
+RIDGE_FEATURES = (
     "intercept",          # constant 1
     "Y_fi_lag168",
     "is_workday",
@@ -105,7 +99,7 @@ def _solar_effective(ghi: np.ndarray, temp_c: np.ndarray,
 # ── Pipeline ───────────────────────────────────────────────────────
 
 
-class V26Pipeline:
+class Pipeline:
     """Runs the four-layer prediction + floor + calibrators on every
     coordinator update cycle.
 
@@ -114,7 +108,7 @@ class V26Pipeline:
       data/spike_model_default.json
 
     Maintains three persistent calibrator state files under
-    `<config>/.storage/spot_price_predictor_v26/`. State is loaded on
+    `<config>/.storage/spot_price_predictor_pipeline/`. State is loaded on
     construction if present, otherwise initialised cold and saved
     after the first update.
     """
@@ -129,9 +123,9 @@ class V26Pipeline:
         self._spike_artifact = self._load_json(
             self._data_dir / "spike_model_default.json")
 
-        # Ridge β vector ordering must match V26_FEATURES
+        # Ridge β vector ordering must match RIDGE_FEATURES
         self._ridge_coef = np.asarray(
-            self._spike_artifact.get("ridge_coef", [0.0] * len(V26_FEATURES)),
+            self._spike_artifact.get("ridge_coef", [0.0] * len(RIDGE_FEATURES)),
             dtype=float,
         )
         # AR(1) coefficient on the deseasonalized FI residual
@@ -171,12 +165,12 @@ class V26Pipeline:
     @staticmethod
     def _load_json(path: Path) -> dict:
         if not path.exists():
-            _LOGGER.warning("v26: artifact missing: %s", path)
+            _LOGGER.warning("pipeline:artifact missing: %s", path)
             return {}
         try:
             return json.loads(path.read_text(encoding="utf-8"))
         except Exception as e:
-            _LOGGER.warning("v26: failed to read %s: %s", path, e)
+            _LOGGER.warning("pipeline:failed to read %s: %s", path, e)
             return {}
 
     @staticmethod
@@ -186,7 +180,7 @@ class V26Pipeline:
                 d = json.loads(path.read_text(encoding="utf-8"))
                 return cls.from_dict(d)
             except Exception as e:
-                _LOGGER.warning("v26: failed to restore %s; resetting (%s)",
+                _LOGGER.warning("pipeline:failed to restore %s; resetting (%s)",
                                  path, e)
         return cls(**default_kwargs)
 
@@ -199,7 +193,7 @@ class V26Pipeline:
             (self._storage_dir / "refit_monitor.json").write_text(
                 json.dumps(self._refit.to_dict()), encoding="utf-8")
         except Exception as e:
-            _LOGGER.warning("v26: state save failed: %s", e)
+            _LOGGER.warning("pipeline:state save failed: %s", e)
 
     # ── L1 seasonal lookup ────────────────────────────────────────
 
@@ -227,7 +221,7 @@ class V26Pipeline:
                         wind: np.ndarray, solar: np.ndarray,
                         temp: np.ndarray,
                         Y_fi_lag168: np.ndarray) -> np.ndarray:
-        """Returns design matrix (n, 6) with columns matching V26_FEATURES."""
+        """Returns design matrix (n, 6) with columns matching RIDGE_FEATURES."""
         n = len(timestamps)
         is_workday = self._is_workday(timestamps).astype(float)
         # Physics-derived features

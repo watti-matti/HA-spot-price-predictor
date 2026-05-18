@@ -14,7 +14,7 @@ parquets / Sahkotin         studies/v2513_layer4_spike_model.py     ──> data
                             studies/v253_solar_submodel.py          ──> data/solar_submodel_default.json
                                                                           │
                                                                           v
-                                                        Atomic JSON writes + V26Pipeline auto-reload
+                                                        Atomic JSON writes + Pipeline auto-reload
                                                         (fires spot_price_predictor_models_retrained)
 ```
 
@@ -22,7 +22,7 @@ parquets / Sahkotin         studies/v2513_layer4_spike_model.py     ──> data
 
 ```
 Open-Meteo  ──┐
-Elpriset    ──┼──> Coordinator ──> V26 Pipeline (L1 seasonal + L2 Ridge + L3 AR(1) + L4 GPD POT)
+Elpriset    ──┼──> Coordinator ──> Pipeline (L1 seasonal + L2 Ridge + L3 AR(1) + L4 GPD POT)
 Elering     ──┤    + Data fetch    + Softplus floor + Hourly DtACI bias/fan calibrators
 Fingrid     ──┤    + Tariff        + Duration model (segment-hierarchical Ridge + PAVA)
 Sahkotin    ──┤    conversion              │
@@ -86,7 +86,7 @@ Register for free at data.fingrid.fi. Without the Fingrid key the non-seasonal p
 
 ## Feature Engineering
 
-The non-seasonal price model is deliberately compact: six Ridge features composed with an AR(1) momentum term and a heavy-tail spike layer. The complete feature ordering is defined in `custom_components/spot_price_predictor/v26_pipeline.py:68-75` (constant `V26_FEATURES`) — the documentation table below reflects that exact ordering.
+The non-seasonal price model is deliberately compact: six Ridge features composed with an AR(1) momentum term and a heavy-tail spike layer. The complete feature ordering is defined in `custom_components/spot_price_predictor/pipeline.py:68-75` (constant `RIDGE_FEATURES`) — the documentation table below reflects that exact ordering.
 
 ### L1 — Seasonal decomposition
 
@@ -94,22 +94,22 @@ The non-seasonal price model is deliberately compact: six Ridge features compose
 
 ### L2 — Non-seasonal Ridge regression
 
-Six features are stacked into the design matrix in this order (matches `V26_FEATURES`):
+Six features are stacked into the design matrix in this order (matches `RIDGE_FEATURES`):
 
 | # | Feature (code name) | Built at | Definition |
 |---|---|---|---|
-| 1 | `intercept` | `v26_pipeline.py:241` | Constant 1. Captures the deseasonalized mean. |
-| 2 | `Y_fi_lag168` | `v26_pipeline.py:242` | Deseasonalized FI residual 7 days prior — own-lag memory of the local market regime. Falls back to zero during cold-start. |
-| 3 | `is_workday` | `v26_pipeline.py:243`, computed at `:251-256` | `weekday < 5`. Captures industrial demand pattern. |
-| 4 | `Y_sigmoid_wind_rho` | `v26_pipeline.py:244`, helper `_sigmoid_turbine_rho` at `:87-93` | `σ((wind − 7.5) / 1.5) × ρ(T) / 1.225`. Sigmoid wind-power curve scaled by relative air density; physics-realistic supply driver. Locally centered before entering the Ridge. |
-| 5 | `Y_solar_effective` | `v26_pipeline.py:245`, helper `_solar_effective` at `:96-102` | `GHI × (1 − 0.004 · max(0, T_cell − 25))` with `T_cell = T + 0.03 · GHI`. Temperature-derated effective irradiance. Locally centered before the Ridge. |
-| 6 | `Y_temp` | `v26_pipeline.py:246`, deseasonalized at `:239` | Deseasonalized temperature — residual heating-load signal. |
+| 1 | `intercept` | `pipeline.py:241` | Constant 1. Captures the deseasonalized mean. |
+| 2 | `Y_fi_lag168` | `pipeline.py:242` | Deseasonalized FI residual 7 days prior — own-lag memory of the local market regime. Falls back to zero during cold-start. |
+| 3 | `is_workday` | `pipeline.py:243`, computed at `:251-256` | `weekday < 5`. Captures industrial demand pattern. |
+| 4 | `Y_sigmoid_wind_rho` | `pipeline.py:244`, helper `_sigmoid_turbine_rho` at `:87-93` | `σ((wind − 7.5) / 1.5) × ρ(T) / 1.225`. Sigmoid wind-power curve scaled by relative air density; physics-realistic supply driver. Locally centered before entering the Ridge. |
+| 5 | `Y_solar_effective` | `pipeline.py:245`, helper `_solar_effective` at `:96-102` | `GHI × (1 − 0.004 · max(0, T_cell − 25))` with `T_cell = T + 0.03 · GHI`. Temperature-derated effective irradiance. Locally centered before the Ridge. |
+| 6 | `Y_temp` | `pipeline.py:246`, deseasonalized at `:239` | Deseasonalized temperature — residual heating-load signal. |
 
-The Ridge coefficient vector lives in `data/spike_model_default.json` under `ridge_coef`; it is applied at `v26_pipeline.py:367` as `ridge = X @ self._ridge_coef`.
+The Ridge coefficient vector lives in `data/spike_model_default.json` under `ridge_coef`; it is applied at `pipeline.py:367` as `ridge = X @ self._ridge_coef`.
 
 ### L3 — AR(1) momentum
 
-At forecast horizon `h`, the AR(1) term contributes `φ^h · η(t₀−1)` where `η(t₀−1)` is the most-recent observed deseasonalized FI residual and `φ` is the AR(1) coefficient loaded from `spike_model_default.json` (typically `φ ≈ 0.904`). Implementation: `v26_pipeline.py:260-266`; the residual state is refreshed via `update_with_actuals()` at `:429-446`.
+At forecast horizon `h`, the AR(1) term contributes `φ^h · η(t₀−1)` where `η(t₀−1)` is the most-recent observed deseasonalized FI residual and `φ` is the AR(1) coefficient loaded from `spike_model_default.json` (typically `φ ≈ 0.904`). Implementation: `pipeline.py:260-266`; the residual state is refreshed via `update_with_actuals()` at `:429-446`.
 
 ### L4 — GPD POT spike model
 
@@ -121,18 +121,18 @@ A Normal-body + Generalized Pareto tail mixture is sampled 500 times around the 
 | `gpd_right.{threshold, shape, scale, p_exceed}` | Right-tail exceedance model |
 | `gpd_left.{threshold, shape, scale, p_exceed}` | Left-tail exceedance model |
 
-Sampler implementation: `_sample_fan_chart` at `v26_pipeline.py:270-320`. The fan bands surface on the `forecast` sensor as `P5_eur_mwh` … `P95_eur_mwh` per row.
+Sampler implementation: `_sample_fan_chart` at `pipeline.py:270-320`. The fan bands surface on the `forecast` sensor as `P5_eur_mwh` … `P95_eur_mwh` per row.
 
 ### Softplus floor and hourly DtACI calibrators
 
-Before the fan-chart is sampled, the L1+L2+L3 mean is floored at −5 EUR/MWh via a softplus (`price_floor.py`). An hourly DtACI bias corrector (`hourly_calibration.HourlyBiasCorrector`, half-life 14 days, 168-hour warm-up) subtracts a slowly-moving systematic-bias estimate; a parallel `HourlyFanChartCalibrator` adapts the per-hour fan widths to track the 0.5 and 0.9 marginal coverage targets. A `RefitMonitor` flags persistent drift over a 14-day window (`spot_price_predictor_v26/refit_monitor.json`).
+Before the fan-chart is sampled, the L1+L2+L3 mean is floored at −5 EUR/MWh via a softplus (`price_floor.py`). An hourly DtACI bias corrector (`hourly_calibration.HourlyBiasCorrector`, half-life 14 days, 168-hour warm-up) subtracts a slowly-moving systematic-bias estimate; a parallel `HourlyFanChartCalibrator` adapts the per-hour fan widths to track the 0.5 and 0.9 marginal coverage targets. A `RefitMonitor` flags persistent drift over a 14-day window (`spot_price_predictor_pipeline/refit_monitor.json`).
 
 ### Inputs evaluated and not currently active
 
 Earlier feasibility work explored using a nuclear-deficit signal `nuclear_deficit ∈ [0, 1]` (Fingrid dataset #188) and an SE3 cross-border transit-capacity / export-spread proxy as features. The current non-seasonal model does not consume either:
 
-- Fingrid nuclear data is still fetched (`coordinator.py:871`) and surfaces in the duration model and diagnostics, but is not in `V26_FEATURES`.
-- SE3 / SE1 / EE prices are still fetched (`coordinator.py:852`) and feed the duration model; the v26 call site (`coordinator.py:1210-1215`) passes only weather and the lag168 residual.
+- Fingrid nuclear data is still fetched (`coordinator.py:871`) and surfaces in the duration model and diagnostics, but is not in `RIDGE_FEATURES`.
+- SE3 / SE1 / EE prices are still fetched (`coordinator.py:852`) and feed the duration model; the pipeline call site (`coordinator.py:1210-1215`) passes only weather and the lag168 residual.
 
 Re-introducing either signal would require a fresh ablation against the current coefficient vector and is gated on a separate experimental branch — see "Open question — per-input accuracy contribution" below.
 
@@ -149,14 +149,14 @@ The only per-input ablation currently published in this repository is [studies/r
 The hourly point forecast is the sum of three additive contributions, softplus-floored and bias-corrected:
 
 ```
-v26_mean(h) = L1_seasonal_fi(h)
+pipeline_mean(h) = L1_seasonal_fi(h)
             + L2_ridge(h)          # six features above
             + L3_ar(h)              # φ^h · η(t₀−1)
             - hourly_bias_ema(h)    # DtACI bias corrector
             (softplus floor at −5 EUR/MWh)
 ```
 
-The full sampler then produces the fan-chart bands `P5_eur_mwh` … `P95_eur_mwh` around the point forecast (`spot_eur_mwh`). Public entry point: `V26Pipeline.compute_forecast` at `v26_pipeline.py:324`.
+The full sampler then produces the fan-chart bands `P5_eur_mwh` … `P95_eur_mwh` around the point forecast (`spot_eur_mwh`). Public entry point: `Pipeline.compute_forecast` at `pipeline.py:324`.
 
 Artifacts loaded at construction time:
 
@@ -164,7 +164,7 @@ Artifacts loaded at construction time:
 - `data/spike_model_default.json` — L2 Ridge coefficients (`ridge_coef`), L3 AR(1) (`ar1_phi`), L4 Normal-body + GPD-tail parameters (`stats`, `gpd_left`, `gpd_right`).
 - `data/solar_submodel_default.json` — clear-sky × cloudiness solar production sub-model used by the PV-aware path.
 
-Persistent calibrator state under `<config>/.storage/spot_price_predictor_v26/`:
+Persistent calibrator state under `<config>/.storage/spot_price_predictor_pipeline/`:
 
 - `hourly_bias.json` — DtACI bias corrector state.
 - `hourly_fan_chart.json` — fan-chart DtACI bundle per coverage target.
@@ -256,7 +256,7 @@ Configurable per operator in `finland.yaml`. Default: Elenia (day 3.61, night 2.
 
 #### Duration Forecast attributes — D(k) cheap/peak
 
-The `daily_forecast` attribute provides up to 7 days. Each day exposes the cheap/peak split (canonical) plus a v26-derived 24-entry array on each side that mirrors the spot-side fan-chart pipeline.
+The `daily_forecast` attribute provides up to 7 days. Each day exposes the canonical cheap/peak split as four 24-entry arrays (spot in EUR/MWh and consumer in EUR/kWh, cheap and peak).
 
 | Attribute | Shape | Unit | Description |
 |-----------|-------|------|-------------|
@@ -487,7 +487,7 @@ building stock.
 
 ### Current end-to-end performance
 
-Numbers below are from the most recent v26 benchmark on real FI data ([studies/results/V2_6_1_BENCHMARK.md](studies/results/V2_6_1_BENCHMARK.md)) — the configuration that ships today.
+Numbers below characterise the configuration that ships today on a held-out FI test window.
 
 **Hourly model (spot point forecast):**
 
@@ -540,8 +540,8 @@ HA-spot-price-predictor/
 ├── custom_components/
 │   └── spot_price_predictor/    # HA HACS integration
 │       ├── __init__.py          # Entry point + service registration (incl. retrain_models)
-│       ├── coordinator.py       # Data fetch + V26Pipeline orchestration
-│       ├── v26_pipeline.py      # L1+L2+L3+L4 pipeline + softplus floor + DtACI
+│       ├── coordinator.py       # Data fetch + Pipeline orchestration
+│       ├── pipeline.py      # L1+L2+L3+L4 pipeline + softplus floor + DtACI
 │       ├── seasonal_decomposition.py  # L1 component fitter / lookup
 │       ├── hourly_calibration.py      # DtACI bias / fan-chart / refit-monitor
 │       ├── price_floor.py             # Softplus floor

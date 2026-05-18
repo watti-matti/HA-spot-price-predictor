@@ -14,7 +14,7 @@ ja sääparquetit / Sahkotin          studies/v2513_layer4_spike_model.py     �
                                     studies/v253_solar_submodel.py          ──> data/solar_submodel_default.json
                                                                                   │
                                                                                   v
-                                                                Atomiset JSON-kirjoitukset + V26Pipeline uudelleenlataus
+                                                                Atomiset JSON-kirjoitukset + Pipeline uudelleenlataus
                                                                 (laukaisee tapahtuman spot_price_predictor_models_retrained)
 ```
 
@@ -22,7 +22,7 @@ ja sääparquetit / Sahkotin          studies/v2513_layer4_spike_model.py     �
 
 ```
 Open-Meteo  ──┐
-Elpriset    ──┼──> Koordinaattori ──> V26-putki (L1 kausi + L2 Ridge + L3 AR(1) + L4 GPD POT)
+Elpriset    ──┼──> Koordinaattori ──> Putki (L1 kausi + L2 Ridge + L3 AR(1) + L4 GPD POT)
 Elering     ──┤    + Datahaku        + Softplus-pohjavyöhyke + Tuntittainen DtACI-kalibroija
 Fingrid     ──┤    + Tariffi-        + Kestomalli (segmenttihierarkkinen Ridge + PAVA)
 Sahkotin    ──┤    muunnos                      │
@@ -86,7 +86,7 @@ Rekisteröidy ilmaiseksi osoitteessa data.fingrid.fi. Ilman Fingrid-avainta ei-k
 
 ## Piirteiden suunnittelu
 
-Ei-kausi-osan hintamalli on tarkoituksellisesti kompakti: kuusi Ridge-piirrettä yhdistettynä AR(1)-momentumtermiin ja raskasarvoiseen piikkikerrokseen. Täydellinen piirrejärjestys on määritelty tiedostossa `custom_components/spot_price_predictor/v26_pipeline.py:68-75` (vakio `V26_FEATURES`) — alla oleva dokumentaatiotaulukko vastaa täsmälleen tätä järjestystä.
+Ei-kausi-osan hintamalli on tarkoituksellisesti kompakti: kuusi Ridge-piirrettä yhdistettynä AR(1)-momentumtermiin ja raskasarvoiseen piikkikerrokseen. Täydellinen piirrejärjestys on määritelty tiedostossa `custom_components/spot_price_predictor/pipeline.py:68-75` (vakio `RIDGE_FEATURES`) — alla oleva dokumentaatiotaulukko vastaa täsmälleen tätä järjestystä.
 
 ### L1 — Kausivaihteludekompositio
 
@@ -94,22 +94,22 @@ Ei-kausi-osan hintamalli on tarkoituksellisesti kompakti: kuusi Ridge-piirrettä
 
 ### L2 — Ei-kausi-osan Ridge-regressio
 
-Kuusi piirrettä kasataan suunnittelumatriisiin tässä järjestyksessä (vastaa `V26_FEATURES`):
+Kuusi piirrettä kasataan suunnittelumatriisiin tässä järjestyksessä (vastaa `RIDGE_FEATURES`):
 
 | # | Piirre (koodinimi) | Rakennetaan kohdassa | Määritelmä |
 |---|---|---|---|
-| 1 | `intercept` | `v26_pipeline.py:241` | Vakio 1. Kaappaa kausitasoittuneen keskiarvon. |
-| 2 | `Y_fi_lag168` | `v26_pipeline.py:242` | Kausitasoittunut FI-residuaali 7 päivää aiemmin — paikallisen markkinaregiimin omanvältin muisti. Kylmäkäynnistyksessä nollia. |
-| 3 | `is_workday` | `v26_pipeline.py:243`, lasketaan `:251-256` | `weekday < 5`. Kaappaa teollisuuden kysyntäkuvion. |
-| 4 | `Y_sigmoid_wind_rho` | `v26_pipeline.py:244`, apufunktio `_sigmoid_turbine_rho` `:87-93` | `σ((tuuli − 7,5) / 1,5) × ρ(T) / 1,225`. Sigmoidaalinen tuuliturbiinikäyrä skaalattuna ilman suhteellisella tiheydellä; fysiikkapohjainen tarjonta-ajuri. Keskitetään paikallisesti ennen Ridgeä. |
-| 5 | `Y_solar_effective` | `v26_pipeline.py:245`, apufunktio `_solar_effective` `:96-102` | `GHI × (1 − 0,004 · max(0, T_cell − 25))`, missä `T_cell = T + 0,03 · GHI`. Lämpötilakompensoitu efektiivinen irradianssi. Keskitetään paikallisesti ennen Ridgeä. |
-| 6 | `Y_temp` | `v26_pipeline.py:246`, kausitasoitetaan `:239` | Kausitasoittunut lämpötila — lämmityskuorman residuaalisignaali. |
+| 1 | `intercept` | `pipeline.py:241` | Vakio 1. Kaappaa kausitasoittuneen keskiarvon. |
+| 2 | `Y_fi_lag168` | `pipeline.py:242` | Kausitasoittunut FI-residuaali 7 päivää aiemmin — paikallisen markkinaregiimin omanvältin muisti. Kylmäkäynnistyksessä nollia. |
+| 3 | `is_workday` | `pipeline.py:243`, lasketaan `:251-256` | `weekday < 5`. Kaappaa teollisuuden kysyntäkuvion. |
+| 4 | `Y_sigmoid_wind_rho` | `pipeline.py:244`, apufunktio `_sigmoid_turbine_rho` `:87-93` | `σ((tuuli − 7,5) / 1,5) × ρ(T) / 1,225`. Sigmoidaalinen tuuliturbiinikäyrä skaalattuna ilman suhteellisella tiheydellä; fysiikkapohjainen tarjonta-ajuri. Keskitetään paikallisesti ennen Ridgeä. |
+| 5 | `Y_solar_effective` | `pipeline.py:245`, apufunktio `_solar_effective` `:96-102` | `GHI × (1 − 0,004 · max(0, T_cell − 25))`, missä `T_cell = T + 0,03 · GHI`. Lämpötilakompensoitu efektiivinen irradianssi. Keskitetään paikallisesti ennen Ridgeä. |
+| 6 | `Y_temp` | `pipeline.py:246`, kausitasoitetaan `:239` | Kausitasoittunut lämpötila — lämmityskuorman residuaalisignaali. |
 
-Ridge-kerroinvektori on tiedostossa `data/spike_model_default.json` avaimella `ridge_coef`; se sovelletaan kohdassa `v26_pipeline.py:367` lausekkeena `ridge = X @ self._ridge_coef`.
+Ridge-kerroinvektori on tiedostossa `data/spike_model_default.json` avaimella `ridge_coef`; se sovelletaan kohdassa `pipeline.py:367` lausekkeena `ridge = X @ self._ridge_coef`.
 
 ### L3 — AR(1)-momentum
 
-Ennustehorisontilla `h` AR(1)-termin osuus on `φ^h · η(t₀−1)`, missä `η(t₀−1)` on viimeisin havaittu kausitasoittunut FI-residuaali ja `φ` on AR(1)-kerroin (tyypillisesti `φ ≈ 0,904`) ladattuna tiedostosta `spike_model_default.json`. Toteutus: `v26_pipeline.py:260-266`; residuaalitila päivitetään funktiossa `update_with_actuals()` (`:429-446`).
+Ennustehorisontilla `h` AR(1)-termin osuus on `φ^h · η(t₀−1)`, missä `η(t₀−1)` on viimeisin havaittu kausitasoittunut FI-residuaali ja `φ` on AR(1)-kerroin (tyypillisesti `φ ≈ 0,904`) ladattuna tiedostosta `spike_model_default.json`. Toteutus: `pipeline.py:260-266`; residuaalitila päivitetään funktiossa `update_with_actuals()` (`:429-446`).
 
 ### L4 — GPD POT -piikkimalli
 
@@ -121,18 +121,18 @@ Normaalirungon ja yleistetyn Pareto-hännän sekoitusta otetaan 500 näytettä L
 | `gpd_right.{threshold, shape, scale, p_exceed}` | Oikean hännän ylitysmalli |
 | `gpd_left.{threshold, shape, scale, p_exceed}` | Vasemman hännän ylitysmalli |
 
-Näytteistäjän toteutus: `_sample_fan_chart` (`v26_pipeline.py:270-320`). Viuhkavyöt näkyvät `forecast`-sensorissa avaimilla `P5_eur_mwh` … `P95_eur_mwh`.
+Näytteistäjän toteutus: `_sample_fan_chart` (`pipeline.py:270-320`). Viuhkavyöt näkyvät `forecast`-sensorissa avaimilla `P5_eur_mwh` … `P95_eur_mwh`.
 
 ### Softplus-pohjavyöhyke ja tuntittaiset DtACI-kalibroijat
 
-Ennen viuhkavöiden näytteistämistä L1+L2+L3-keskiarvo rajataan alarajaan −5 EUR/MWh softplus-funktiolla (`price_floor.py`). Tuntittainen DtACI-biaskorjaaja (`hourly_calibration.HourlyBiasCorrector`, puoliintumisaika 14 vrk, 168 tunnin lämmittely) vähentää hitaasti liikkuvan systemaattisen biaksen; rinnakkainen `HourlyFanChartCalibrator` mukauttaa tuntittaiset viuhkaleveydet seuraamaan 0,5:n ja 0,9:n marginaalikattavuustavoitteita. `RefitMonitor` merkitsee jatkuvan ryöminnän 14 vrk ikkunassa (`spot_price_predictor_v26/refit_monitor.json`).
+Ennen viuhkavöiden näytteistämistä L1+L2+L3-keskiarvo rajataan alarajaan −5 EUR/MWh softplus-funktiolla (`price_floor.py`). Tuntittainen DtACI-biaskorjaaja (`hourly_calibration.HourlyBiasCorrector`, puoliintumisaika 14 vrk, 168 tunnin lämmittely) vähentää hitaasti liikkuvan systemaattisen biaksen; rinnakkainen `HourlyFanChartCalibrator` mukauttaa tuntittaiset viuhkaleveydet seuraamaan 0,5:n ja 0,9:n marginaalikattavuustavoitteita. `RefitMonitor` merkitsee jatkuvan ryöminnän 14 vrk ikkunassa (`spot_price_predictor_pipeline/refit_monitor.json`).
 
 ### Arvioidut mutta ei tällä hetkellä aktiivisesti käytetyt syötteet
 
 Aikaisemmassa toteutettavuustyössä tutkittiin ydinvoimavajesignaalin `nuclear_deficit ∈ [0, 1]` (Fingrid-tietojoukko #188) ja SE3:n rajat ylittävän siirtokapasiteetin / vientispredin proksin käyttöä piirteinä. Nykyinen ei-kausi-osan malli ei käytä kumpaakaan:
 
-- Fingrid-ydinvoimadata haetaan edelleen (`coordinator.py:871`) ja näkyy kestomallissa sekä diagnostiikassa, mutta ei ole `V26_FEATURES`-listalla.
-- SE3 / SE1 / EE -hinnat haetaan edelleen (`coordinator.py:852`) ja syötetään kestomalliin; v26-kutsupiste (`coordinator.py:1210-1215`) välittää vain sään ja lag168-residuaalin.
+- Fingrid-ydinvoimadata haetaan edelleen (`coordinator.py:871`) ja näkyy kestomallissa sekä diagnostiikassa, mutta ei ole `RIDGE_FEATURES`-listalla.
+- SE3 / SE1 / EE -hinnat haetaan edelleen (`coordinator.py:852`) ja syötetään kestomalliin; putken kutsupiste (`coordinator.py:1210-1215`) välittää vain sään ja lag168-residuaalin.
 
 Kummankin signaalin uudelleenkäyttöönotto vaatisi tuoreen ablaation nykyistä kerroinvektoria vastaan ja on sijoitettu erilliseen kokeelliseen haaraan — katso "Avoin kysymys — syötekohtainen tarkkuusvaikutus" alla.
 
@@ -149,14 +149,14 @@ Ainoa tässä repossa nykyisin julkaistu syötekohtainen ablaatio on [studies/re
 Tuntittaisen pisteen ennuste on kolmen additiivisen kontribuution summa, softplus-rajattu ja bias-korjattu:
 
 ```
-v26_mean(h) = L1_seasonal_fi(h)
+pipeline_mean(h) = L1_seasonal_fi(h)
             + L2_ridge(h)          # kuusi yllä olevaa piirrettä
             + L3_ar(h)              # φ^h · η(t₀−1)
             - hourly_bias_ema(h)    # DtACI-biaskorjaaja
             (softplus-pohjavyöhyke −5 EUR/MWh:llä)
 ```
 
-Täysi näytteistäjä tuottaa sen jälkeen viuhkavyöt `P5_eur_mwh` … `P95_eur_mwh` pisteen ennusteen (`spot_eur_mwh`) ympärille. Julkinen sisääntulo: `V26Pipeline.compute_forecast` (`v26_pipeline.py:324`).
+Täysi näytteistäjä tuottaa sen jälkeen viuhkavyöt `P5_eur_mwh` … `P95_eur_mwh` pisteen ennusteen (`spot_eur_mwh`) ympärille. Julkinen sisääntulo: `Pipeline.compute_forecast` (`pipeline.py:324`).
 
 Rakentamisen yhteydessä ladattavat artefaktit:
 
@@ -164,7 +164,7 @@ Rakentamisen yhteydessä ladattavat artefaktit:
 - `data/spike_model_default.json` — L2 Ridge-kertoimet (`ridge_coef`), L3 AR(1) (`ar1_phi`), L4 Normaalirungon + GPD-hännän parametrit (`stats`, `gpd_left`, `gpd_right`).
 - `data/solar_submodel_default.json` — selkeän taivaan × pilvisyys -aurinkotuotantomalli, jota PV-tietoinen polku käyttää.
 
-Pysyvä kalibroijan tila kansiossa `<config>/.storage/spot_price_predictor_v26/`:
+Pysyvä kalibroijan tila kansiossa `<config>/.storage/spot_price_predictor_pipeline/`:
 
 - `hourly_bias.json` — DtACI-biaskorjaajan tila.
 - `hourly_fan_chart.json` — viuhkan DtACI-paketti kattavuustavoitteittain.
@@ -448,7 +448,7 @@ Katso englanninkielisestä dokumentaatiosta ([TECHNICAL_GUIDE.md](TECHNICAL_GUID
 
 ### Nykyinen päästä päähän -suorituskyky
 
-Alla olevat luvut on otettu uusimmasta v26-vertailusta todellisella FI-datalla ([studies/results/V2_6_1_BENCHMARK.md](studies/results/V2_6_1_BENCHMARK.md)) — kokoonpano, joka on käytössä tällä hetkellä.
+Alla olevat luvut kuvaavat tällä hetkellä toimitettavan kokoonpanon tarkkuutta FI-testijakson holdout-ikkunassa.
 
 **Tuntimalli (spot-pisteen ennuste):**
 
@@ -501,8 +501,8 @@ HA-spot-price-predictor/
 ├── custom_components/
 │   └── spot_price_predictor/    # HA HACS -integraatio
 │       ├── __init__.py              # Sisääntulo + palvelujen rekisteröinti (sis. retrain_models)
-│       ├── coordinator.py           # Datahaku + V26Pipeline-orkestrointi
-│       ├── v26_pipeline.py          # L1+L2+L3+L4-putki + softplus-pohjavyöhyke + DtACI
+│       ├── coordinator.py           # Datahaku + Pipeline-orkestrointi
+│       ├── pipeline.py          # L1+L2+L3+L4-putki + softplus-pohjavyöhyke + DtACI
 │       ├── seasonal_decomposition.py # L1-komponenttien sovittaja / haku
 │       ├── hourly_calibration.py    # DtACI-biaskorjaaja / viuhka / refit-monitori
 │       ├── price_floor.py           # Softplus-pohjavyöhyke

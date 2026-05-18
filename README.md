@@ -179,7 +179,7 @@ All sources are free; the Fingrid key (free email registration at [data.fingrid.
 
 ## Model Performance
 
-End-to-end accuracy on a held-out FI test window (the most recent v26 benchmark documented in [studies/results/V2_6_1_BENCHMARK.md](studies/results/V2_6_1_BENCHMARK.md)):
+End-to-end accuracy on a held-out FI test window:
 
 | Metric | Value |
 |---|:---:|
@@ -273,11 +273,10 @@ To adapt for another country, create a new region YAML file and retrain via the 
 
 - [TECHNICAL_GUIDE.md](TECHNICAL_GUIDE.md) — Architecture, feature engineering, model details (English)
 - [TEKNINEN_TOTEUTUS.md](TEKNINEN_TOTEUTUS.md) — Arkkitehtuuri, piirre-engineering, mallin kuvaus (suomeksi)
-- [docs/dk_cheap_peak_migration.md](docs/dk_cheap_peak_migration.md) — D(k) schema migration guide for downstream consumers
-- [docs/dtaci_layer.md](docs/dtaci_layer.md) — DtACI online calibration: algorithm details, state persistence, troubleshooting
-- [studies/results/V2_8_0_RELEASE_NOTES.md](studies/results/V2_8_0_RELEASE_NOTES.md) — Current release notes: consolidated `spot_price_predictor.retrain_models` service, atomic artifact writes, V26Pipeline auto-reload, `spot_price_predictor_models_retrained` event.
-- [studies/results/V2_6_1_BENCHMARK.md](studies/results/V2_6_1_BENCHMARK.md) — Head-to-head benchmark on real FI test data backing the accuracy numbers quoted above (spot MAE ≈ 10 EUR/MWh, R² ≈ 0.93, 98 % high-price hit rate, D(k) R² ≥ 0.95 at every index).
-- `studies/results/` — full archive of prior release notes and supporting analyses for readers who want the design rationale behind individual layers.
+- [docs/dk_cheap_peak_migration.md](docs/dk_cheap_peak_migration.md) — Canonical duration-sensor schema reference (24-entry cheap/peak in EUR/MWh and EUR/kWh).
+- [docs/dtaci_layer.md](docs/dtaci_layer.md) — DtACI online calibration: algorithm details, state persistence, troubleshooting.
+- [studies/results/V2_8_1_RELEASE_NOTES.md](studies/results/V2_8_1_RELEASE_NOTES.md) — Current release notes: documentation refresh, canonical sensor schema, DtACI extended to the full 24-level cheap/peak curve.
+- `studies/results/` — supporting analyses for readers who want the design rationale behind individual layers.
 
 ## License
 

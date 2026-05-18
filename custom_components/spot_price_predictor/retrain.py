@@ -1,6 +1,6 @@
-"""v2.8.0 — Consolidated model-retraining orchestrator.
+"""Consolidated model-retraining orchestrator.
 
-Single entry point that refits every artifact the v26 pipeline depends on:
+Single entry point that refits every artifact the prediction pipeline depends on:
 
   L1 seasonal      → data/seasonal_components_default.json
   L2+L3+L4 spike   → data/spike_model_default.json
@@ -16,7 +16,7 @@ Designed to be invoked from a Home Assistant service handler so the
 operator can refresh the model on demand (e.g. when the RefitMonitor
 flags drift, or quarterly as a hygiene task). Each layer's refit
 returns metadata; the orchestrator atomically writes the new artifact
-and the integration's V26Pipeline reloads on the next coordinator cycle.
+and the integration's Pipeline reloads on the next coordinator cycle.
 
 This module deliberately does NOT depend on Home Assistant — it is
 pure-python so it can be exercised standalone via
@@ -265,7 +265,7 @@ def retrain_all(
 def _main() -> int:
     import argparse
     parser = argparse.ArgumentParser(
-        description="Retrain the v26 model artifacts.")
+        description="Retrain the prediction-pipeline model artifacts.")
     parser.add_argument("--layers", nargs="+", choices=list(ALL_LAYERS),
                         default=list(ALL_LAYERS),
                         help="Subset of layers to retrain.")
