@@ -32,14 +32,14 @@ DkDtACIBundle = dk_dtaci.DkDtACIBundle
 
 
 def _synth_day(rng: random.Random, base_mean: float = 50.0):
-    """Build one day's actual (cheap[12], peak[12]) from sorted prices."""
+    """Build one day's actual (cheap[24], peak[24]) from sorted prices."""
     prices = sorted([rng.gauss(base_mean, 15) for _ in range(24)])
     cheap = []
     peak = []
     sum_lo = 0.0
     sum_hi = 0.0
     desc = list(reversed(prices))
-    for k in range(12):
+    for k in range(24):
         sum_lo += prices[k]
         sum_hi += desc[k]
         cheap.append(sum_lo / (k + 1))
@@ -50,11 +50,11 @@ def _synth_day(rng: random.Random, base_mean: float = 50.0):
 # ── Construction ──────────────────────────────────────────────────
 
 
-def test_bundle_has_24_instances():
+def test_bundle_has_48_instances():
     b = DkDtACIBundle()
-    assert len(b.instances) == 24
-    assert all(f"cheap_{k}" in b.instances for k in range(1, 13))
-    assert all(f"peak_{k}" in b.instances for k in range(1, 13))
+    assert len(b.instances) == 48
+    assert all(f"cheap_{k}" in b.instances for k in range(1, 25))
+    assert all(f"peak_{k}" in b.instances for k in range(1, 25))
 
 
 def test_bundle_each_instance_has_bias_corrector():
@@ -68,37 +68,37 @@ def test_bundle_each_instance_has_bias_corrector():
 
 def test_predict_intervals_returns_correct_shape():
     b = DkDtACIBundle()
-    cheap = [10.0 + i for i in range(12)]
-    peak = [80.0 - i for i in range(12)]
+    cheap = [10.0 + i for i in range(24)]
+    peak = [80.0 - 0.5 * i for i in range(24)]
     bands = b.predict_intervals(cheap, peak)
     assert set(bands.keys()) == {"cheap", "peak"}
     for direction in ("cheap", "peak"):
         assert set(bands[direction].keys()) == {"lower", "point", "upper"}
         for series in bands[direction].values():
-            assert len(series) == 12
+            assert len(series) == 24
 
 
 def test_cold_start_intervals_collapse_to_point():
     """Before each instance's min_warmup, intervals collapse to point."""
     b = DkDtACIBundle(min_warmup=10)
-    cheap = [10.0 + i for i in range(12)]
-    peak = [80.0 - i for i in range(12)]
+    cheap = [10.0 + i for i in range(24)]
+    peak = [80.0 - 0.5 * i for i in range(24)]
     bands = b.predict_intervals(cheap, peak)
     for direction, fc in (("cheap", cheap), ("peak", peak)):
-        for k_idx in range(12):
+        for k_idx in range(24):
             assert bands[direction]["lower"][k_idx] == fc[k_idx]
             assert bands[direction]["upper"][k_idx] == fc[k_idx]
 
 
 def test_update_rejects_wrong_lengths():
     b = DkDtACIBundle()
-    cheap_short = [10.0] * 11
-    peak = [80.0] * 12
-    with pytest.raises(ValueError, match="cheap arrays must be length 12"):
-        b.update(cheap_short, peak, [10.0] * 12, peak)
-    peak_short = [80.0] * 11
-    with pytest.raises(ValueError, match="peak arrays must be length 12"):
-        b.update([10.0] * 12, peak_short, [10.0] * 12, [80.0] * 12)
+    cheap_short = [10.0] * 23
+    peak = [80.0] * 24
+    with pytest.raises(ValueError, match="cheap arrays must be length 24"):
+        b.update(cheap_short, peak, [10.0] * 24, peak)
+    peak_short = [80.0] * 23
+    with pytest.raises(ValueError, match="peak arrays must be length 24"):
+        b.update([10.0] * 24, peak_short, [10.0] * 24, [80.0] * 24)
 
 
 def test_per_k_coverage_converges_to_target_under_iid_residuals():
@@ -110,8 +110,8 @@ def test_per_k_coverage_converges_to_target_under_iid_residuals():
     b = DkDtACIBundle(target_coverage=target, window=200, min_warmup=20)
     n = 1000
     eval_start = 200
-    covered = {(d, k): 0 for d in ("cheap", "peak") for k in range(1, 13)}
-    predicted = {(d, k): 0 for d in ("cheap", "peak") for k in range(1, 13)}
+    covered = {(d, k): 0 for d in ("cheap", "peak") for k in range(1, 25)}
+    predicted = {(d, k): 0 for d in ("cheap", "peak") for k in range(1, 25)}
     for day in range(n):
         a_cheap, a_peak = _synth_day(rng)
         # Forecast = actual + i.i.d. Gaussian noise (no bias)
@@ -120,7 +120,7 @@ def test_per_k_coverage_converges_to_target_under_iid_residuals():
         if day >= eval_start:
             bands = b.predict_intervals(f_cheap, f_peak)
             for direction, ac in (("cheap", a_cheap), ("peak", a_peak)):
-                for k in range(1, 13):
+                for k in range(1, 25):
                     low = bands[direction]["lower"][k - 1]
                     high = bands[direction]["upper"][k - 1]
                     predicted[(direction, k)] += 1
@@ -146,10 +146,10 @@ def test_diagnostics_returns_full_per_k_breakdown():
         f_peak = [a + rng.gauss(0, 3) for a in a_peak]
         b.update(f_cheap, f_peak, a_cheap, a_peak)
     diag = b.diagnostics()
-    assert diag["n_total_instances"] == 24
-    assert diag["n_warm_instances"] == 24
+    assert diag["n_total_instances"] == 48
+    assert diag["n_warm_instances"] == 48
     for direction in ("cheap", "peak"):
-        for k in range(1, 13):
+        for k in range(1, 25):
             d = diag["per_k"][direction][k]
             for key in ("coverage", "alpha_agg", "bias_ema", "dominant_gamma",
                          "weight_entropy_bits", "half_width", "n_updates",
@@ -168,8 +168,8 @@ def test_to_from_dict_round_trip_preserves_intervals():
         f_cheap = [a + rng.gauss(0, 4) for a in a_cheap]
         f_peak = [a + rng.gauss(0, 6) for a in a_peak]
         b.update(f_cheap, f_peak, a_cheap, a_peak)
-    f_test_c = [12.0 + i for i in range(12)]
-    f_test_p = [80.0 - i for i in range(12)]
+    f_test_c = [12.0 + i for i in range(24)]
+    f_test_p = [80.0 - 0.5 * i for i in range(24)]
     bands_a = b.predict_intervals(f_test_c, f_test_p)
 
     state = b.to_dict()
@@ -192,7 +192,7 @@ def test_from_dict_missing_instance_cold_starts():
     b2 = DkDtACIBundle.from_dict(state)
     assert "cheap_5" in b2.instances
     # Cold instance returns point-only bands
-    bands = b2.predict_intervals([10.0] * 12, [80.0] * 12)
+    bands = b2.predict_intervals([10.0] * 24, [80.0] * 24)
     assert bands["cheap"]["lower"][4] == bands["cheap"]["upper"][4]
 
 

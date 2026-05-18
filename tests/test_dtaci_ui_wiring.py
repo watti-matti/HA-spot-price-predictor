@@ -50,12 +50,12 @@ DkDtACIBundle = dk_dtaci.DkDtACIBundle
 
 
 def _synth_dk(rng: random.Random, base: float = 0.10):
-    """Synthetic (cheap[12], peak[12]) for one day in EUR/kWh range."""
+    """Synthetic (cheap[24], peak[24]) for one day in EUR/kWh range."""
     prices = sorted([rng.gauss(base, 0.04) for _ in range(24)])
     cheap = []; peak = []
     sum_lo = sum_hi = 0.0
     desc = list(reversed(prices))
-    for k in range(12):
+    for k in range(24):
         sum_lo += prices[k]; sum_hi += desc[k]
         cheap.append(sum_lo / (k + 1))
         peak.append(sum_hi / (k + 1))
@@ -84,9 +84,9 @@ def test_attach_dk_intervals_writes_four_fields_when_warm():
     for key in ("dk_cheap_lower_eur_kwh", "dk_cheap_upper_eur_kwh",
                  "dk_peak_lower_eur_kwh", "dk_peak_upper_eur_kwh"):
         assert key in d, f"missing band field {key}"
-        assert len(d[key]) == 12
+        assert len(d[key]) == 24
     # Lower < forecast < upper at every k
-    for k in range(12):
+    for k in range(24):
         assert d["dk_cheap_lower_eur_kwh"][k] <= f_c[k] + 1e-9
         assert d["dk_cheap_upper_eur_kwh"][k] >= f_c[k] - 1e-9
 
@@ -120,7 +120,7 @@ def test_diagnostics_shape_matches_card_consumer():
         assert key in diag, f"top-level missing {key}"
     # Per-k keys
     for direction in ("cheap", "peak"):
-        for k in range(1, 13):
+        for k in range(1, 25):
             d = diag["per_k"][direction][k]
             for key in ("coverage", "alpha_agg", "bias_ema",
                          "dominant_gamma", "weight_entropy_bits",
@@ -147,8 +147,8 @@ def test_diagnostics_serialises_to_json():
 def test_load_or_create_bundle_round_trip(tmp_path: Path):
     state_path = tmp_path / "dtaci_dk_fi.json"
     bundle = integration.load_or_create_bundle(state_path)
-    assert bundle.n_total_instances if hasattr(bundle, "n_total_instances") \
-           else len(bundle.instances) == 24
+    assert (bundle.n_total_instances if hasattr(bundle, "n_total_instances")
+            else len(bundle.instances)) == 48
     # Run a few updates, save
     rng = random.Random(2)
     for _ in range(15):
@@ -183,7 +183,7 @@ def test_atomic_write_does_not_corrupt_on_overwrite(tmp_path: Path):
 
 def test_full_year_reconciliation_warms_bundle_and_produces_bands():
     """Walk forward 365 days of synthetic forecast/actual pairs.
-    All 24 instances must warm up and produce non-trivial bands."""
+    All 48 instances must warm up and produce non-trivial bands."""
     rng = random.Random(42)
     bundle = DkDtACIBundle(min_warmup=14, bias_warmup_steps=14)
     for day in range(365):
@@ -193,10 +193,10 @@ def test_full_year_reconciliation_warms_bundle_and_produces_bands():
         bundle.update(f_c, f_p, a_c, a_p)
 
     diag = bundle.diagnostics()
-    assert diag["n_warm_instances"] == diag["n_total_instances"] == 24
+    assert diag["n_warm_instances"] == diag["n_total_instances"] == 48
     # All instances should have non-zero half-width once warm
     for direction in ("cheap", "peak"):
-        for k in range(1, 13):
+        for k in range(1, 25):
             r = diag["per_k"][direction][k]
             assert r["half_width"] > 0, (
                 f"{direction}[{k}] half_width is zero after warmup"
