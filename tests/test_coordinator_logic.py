@@ -700,19 +700,19 @@ class TestDurationForecastSensorLogic:
     """Test DurationForecastSensor state = D(4) from first day."""
 
     def test_state_is_d4(self):
-        """Sensor state reads dk_consumer_eur_kwh[3] (D(4))."""
+        """Sensor state reads dk_cheap_eur_kwh[3] (mean of the 4 cheapest hours)."""
         dk_vec = [0.05, 0.06, 0.07, 0.08, 0.09, 0.10, 0.11, 0.12,
                   0.13, 0.14, 0.15, 0.16, 0.17, 0.18, 0.19, 0.20,
                   0.21, 0.22, 0.23, 0.24, 0.25, 0.26, 0.27, 0.28]
-        dk_list = [{"dk_consumer_eur_kwh": dk_vec}]
-        # Sensor logic: dk_list[0].get("dk_consumer_eur_kwh", [])[3]
-        result = dk_list[0]["dk_consumer_eur_kwh"][3]
-        assert result == 0.08  # D(4) = index 3
+        dk_list = [{"dk_cheap_eur_kwh": dk_vec}]
+        # Sensor logic: dk_list[0].get("dk_cheap_eur_kwh", [])[3]
+        result = dk_list[0]["dk_cheap_eur_kwh"][3]
+        assert result == 0.08  # index 3 = mean of cheapest 4 hours
 
     def test_empty_forecast_returns_none(self):
         """No duration forecast → None state."""
         dk_list = []
-        result = dk_list[0]["dk_consumer_eur_kwh"][3] if dk_list else None
+        result = dk_list[0]["dk_cheap_eur_kwh"][3] if dk_list else None
         assert result is None
 
     def test_short_vector_returns_none(self):

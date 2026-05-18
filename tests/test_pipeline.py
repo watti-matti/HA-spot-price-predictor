@@ -1,4 +1,4 @@
-"""Tests for custom_components/spot_price_predictor/v26_pipeline.py."""
+"""Tests for custom_components/spot_price_predictor/pipeline.py."""
 
 from __future__ import annotations
 
@@ -45,26 +45,26 @@ _hc_mod = importlib.util.module_from_spec(_hc_spec)
 sys.modules["spot_price_predictor.hourly_calibration"] = _hc_mod
 _hc_spec.loader.exec_module(_hc_mod)
 
-# Load v26_pipeline
-_v26_spec = importlib.util.spec_from_file_location(
-    "spot_price_predictor.v26_pipeline",
-    REPO / "custom_components" / "spot_price_predictor" / "v26_pipeline.py",
+# Load pipeline
+_pipeline_spec = importlib.util.spec_from_file_location(
+    "spot_price_predictor.pipeline",
+    REPO / "custom_components" / "spot_price_predictor" / "pipeline.py",
 )
-v26 = importlib.util.module_from_spec(_v26_spec)
-sys.modules["spot_price_predictor.v26_pipeline"] = v26
-_v26_spec.loader.exec_module(v26)
+pipeline_mod = importlib.util.module_from_spec(_pipeline_spec)
+sys.modules["spot_price_predictor.pipeline"] = pipeline_mod
+_pipeline_spec.loader.exec_module(pipeline_mod)
 
 
 # ── Fixtures ───────────────────────────────────────────────────────
 
 
-def _make_pipeline(tmp_path: Path) -> v26.V26Pipeline:
-    """Construct a V26Pipeline using the SHIPPED production artifacts
-    plus a temp directory for calibrator state."""
+def _make_pipeline(tmp_path: Path) -> "pipeline_mod.Pipeline":
+    """Construct a Pipeline using the SHIPPED production artifacts plus
+    a temp directory for calibrator state."""
     data_dir = (REPO / "custom_components" / "spot_price_predictor"
                 / "data")
-    storage = tmp_path / "v26_state"
-    return v26.V26Pipeline(data_dir=data_dir, storage_dir=storage)
+    storage = tmp_path / "pipeline_state"
+    return pipeline_mod.Pipeline(data_dir=data_dir, storage_dir=storage)
 
 
 def _hourly_timestamps(n: int = 48) -> np.ndarray:
@@ -79,17 +79,17 @@ def _hourly_timestamps(n: int = 48) -> np.ndarray:
 # ── Construction ───────────────────────────────────────────────────
 
 
-def test_v26_pipeline_loads_shipped_artifacts(tmp_path: Path) -> None:
+def test_pipeline_loads_shipped_artifacts(tmp_path: Path) -> None:
     """Construction must succeed against the production artifacts and
     populate Ridge coef / AR(1) phi / L4 GPD params."""
     p = _make_pipeline(tmp_path)
-    assert p._ridge_coef.shape == (6,)              # 6 V26 features
+    assert p._ridge_coef.shape == (6,)              # 6 Ridge features
     assert -1.0 < p._ar1_phi < 1.0
     assert isinstance(p._gpd_right, dict)
     assert p._eta_sigma > 0
 
 
-def test_v26_pipeline_initialises_calibrators_cold(tmp_path: Path) -> None:
+def test_pipeline_initialises_calibrators_cold(tmp_path: Path) -> None:
     p = _make_pipeline(tmp_path)
     # No state files present → calibrators are cold
     assert not p._bias.warm
@@ -229,7 +229,7 @@ def test_update_with_actuals_returns_refit_flag(tmp_path: Path) -> None:
 # ── End-to-end smoke test ─────────────────────────────────────────
 
 
-def test_v26_pipeline_end_to_end_smoke(tmp_path: Path) -> None:
+def test_pipeline_end_to_end_smoke(tmp_path: Path) -> None:
     """Run compute_forecast → compute_duration_curves → update_with_actuals
     in the order the coordinator would, with realistic-shape inputs."""
     p = _make_pipeline(tmp_path)

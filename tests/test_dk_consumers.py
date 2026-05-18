@@ -106,106 +106,29 @@ def test_cheap_peak_sum_identity(seed: int):
                         rel_tol=1e-12, abs_tol=1e-9)
 
 
-# ─── Legacy 24-array reconstruction ──────────────────────────────────
+# ─── Sensor-state helper (state = cheap[3]) ──────────────────────────
 
 
-def _legacy_cumulative(prices24: list[float]) -> list[float]:
-    """Reference implementation of the legacy `dk_consumer_eur_kwh[24]`."""
-    s = sorted(prices24)
-    out = []
-    running = 0.0
-    for i, p in enumerate(s):
-        running += p
-        out.append(running / (i + 1))
-    return out
+def test_state_picks_cheap_4h_from_canonical_schema():
+    """`DurationForecastSensor.native_value` reads `dk_cheap_eur_kwh[3]`
+    (the mean of the four cheapest hours).
 
-
-def _synthesize_legacy_from_split(
-    cheap: list[float], peak: list[float],
-) -> list[float]:
-    """Reconstruct the legacy 24-element ascending D(k) from (cheap, peak).
-
-    This is the same formula used by
-    `multi_load_ha_integration.fetch_dk_forecast._legacy_row` when only
-    the new schema is present in the sensor attributes.
-    """
-    assert len(cheap) == 12 and len(peak) == 12
-    total_sum = 12.0 * (cheap[11] + peak[11])
-    out = list(cheap)  # k=1..12 → indices 0..11
-    for k in range(13, 25):
-        j = 24 - k  # priciest j hours, j=11..0
-        if j == 0:
-            out.append(total_sum / 24.0)
-        else:
-            out.append((total_sum - j * peak[j - 1]) / k)
-    return out
-
-
-@pytest.mark.parametrize("seed", [0, 13, 99, 271828])
-def test_split_to_legacy_24_array_round_trip_exact(seed: int):
-    """Synthesised legacy array from (cheap, peak) matches the direct
-    cumulative-ascending computation to numerical noise.
-
-    This is the contract the thermal optimizer relies on when the sensor
-    emits only the new schema and a downstream consumer still reads the
-    legacy `dk_consumer_eur_kwh[24]` attribute.
-    """
-    import random
-    rng = random.Random(seed)
-    prices = [rng.uniform(0.0, 250.0) for _ in range(24)]
-
-    cheap, peak = compute_dk_cheap_peak(prices)
-    synth = _synthesize_legacy_from_split(cheap, peak)
-    legacy = _legacy_cumulative(prices)
-
-    assert len(synth) == len(legacy) == 24
-    for s, l in zip(synth, legacy):
-        assert math.isclose(s, l, rel_tol=1e-10, abs_tol=1e-9)
-
-
-def test_synthesised_legacy_is_monotone_non_decreasing():
-    """The synthesised 24-array preserves the legacy contract that
-    cumulative-ascending D(k) is non-decreasing in k."""
-    prices = _diverse_24h()
-    cheap, peak = compute_dk_cheap_peak(prices)
-    synth = _synthesize_legacy_from_split(cheap, peak)
-    for i in range(23):
-        assert synth[i] <= synth[i + 1] + 1e-9, (
-            f"non-monotone at i={i}: {synth[i]} > {synth[i+1]}"
-        )
-
-
-# ─── Sensor-state helper (Phase A: state = cheap[3]) ─────────────────
-
-
-def test_state_picks_cheap_4h_from_new_schema():
-    """The `DurationForecastSensor.native_value` semantic: prefer
-    `dk_cheap_eur_kwh[3]` (cheapest 4h average), fall back to legacy
-    `dk_consumer_eur_kwh[3]` if absent.
-
-    This test mimics the property's logic — keeping it in pure Python
-    so we can test it without spinning up Home Assistant.
+    The sensor schema is now a single canonical 24-entry shape — no
+    legacy fallback path remains.
     """
     def native_value(first_day: dict) -> float | None:
         cheap_vec = first_day.get("dk_cheap_eur_kwh") or []
-        if len(cheap_vec) >= 4:
-            return cheap_vec[3]
-        legacy_vec = first_day.get("dk_consumer_eur_kwh") or []
-        return legacy_vec[3] if len(legacy_vec) >= 4 else None
+        return cheap_vec[3] if len(cheap_vec) >= 4 else None
 
-    # New schema only → cheap[3]
-    new_only = {"dk_cheap_eur_kwh": [0.10, 0.11, 0.12, 0.13, 0.14] + [0.20] * 7}
-    assert native_value(new_only) == 0.13
+    # 24-entry array (canonical)
+    canonical = {"dk_cheap_eur_kwh": [0.10, 0.11, 0.12, 0.13] + [0.20] * 20}
+    assert native_value(canonical) == 0.13
 
-    # Legacy only → legacy[3]
-    legacy_only = {"dk_consumer_eur_kwh": [0.05, 0.06, 0.07, 0.08] + [0.10] * 20}
-    assert native_value(legacy_only) == 0.08
+    # Short vector → None
+    short = {"dk_cheap_eur_kwh": [0.10, 0.11, 0.12]}
+    assert native_value(short) is None
 
-    # Both present → new wins
-    both = {**new_only, **legacy_only}
-    assert native_value(both) == 0.13
-
-    # Neither → None
+    # Missing attribute → None
     assert native_value({}) is None
 
 
