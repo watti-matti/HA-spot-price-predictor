@@ -15,7 +15,8 @@
 #   - sensor.spot_price_predictor_duration_forecast
 #     State: today D(4) (EUR/kWh)
 #     Attributes: daily_forecast[] (7-day × 24-level D(k) matrix:
-#                 dk_consumer_eur_kwh[24], dk_spot_eur_mwh[24] per day)
+#                 dk_cheap_eur_kwh[24] / dk_peak_eur_kwh[24] (consumer),
+#                 dk_cheap_eur_mwh[24] / dk_peak_eur_mwh[24] (spot) per day)
 #
 # Optimization (cheapest hours, load scheduling) is NOT part of this
 # integration — it belongs in a separate thermal optimization layer.
@@ -176,9 +177,9 @@ views:
             secondary: >-
               {% set dk = state_attr('sensor.spot_price_predictor_duration_forecast', 'daily_forecast') %}
               {% if dk and dk | length > 0 %}
-              D(1) {{ (dk[0].dk_consumer_eur_kwh[0] * 100) | round(1) }}
-              · D(8) {{ (dk[0].dk_consumer_eur_kwh[7] * 100) | round(1) }}
-              · D(24) {{ (dk[0].dk_consumer_eur_kwh[23] * 100) | round(1) }} c/kWh
+              D(1) {{ (dk[0].dk_cheap_eur_kwh[0] * 100) | round(1) }}
+              · D(8) {{ (dk[0].dk_cheap_eur_kwh[7] * 100) | round(1) }}
+              · D(24) {{ (dk[0].dk_cheap_eur_kwh[23] * 100) | round(1) }} c/kWh
               {% endif %}
             layout: horizontal
             tap_action:
@@ -226,7 +227,7 @@ views:
                 data_generator: |
                   const dk = entity.attributes.daily_forecast;
                   if (!dk) return [];
-                  return dk.map((d) => [new Date(d.date + 'T12:00:00').getTime(), d.dk_consumer_eur_kwh[0] * 100]);
+                  return dk.map((d) => [new Date(d.date + 'T12:00:00').getTime(), d.dk_cheap_eur_kwh[0] * 100]);
               - entity: sensor.spot_price_predictor_duration_forecast
                 name: "D(4)"
                 yaxis_id: dk
@@ -237,7 +238,7 @@ views:
                 data_generator: |
                   const dk = entity.attributes.daily_forecast;
                   if (!dk) return [];
-                  return dk.map((d) => [new Date(d.date + 'T12:00:00').getTime(), d.dk_consumer_eur_kwh[3] * 100]);
+                  return dk.map((d) => [new Date(d.date + 'T12:00:00').getTime(), d.dk_cheap_eur_kwh[3] * 100]);
               - entity: sensor.spot_price_predictor_duration_forecast
                 name: "D(8)"
                 yaxis_id: dk
@@ -248,7 +249,7 @@ views:
                 data_generator: |
                   const dk = entity.attributes.daily_forecast;
                   if (!dk) return [];
-                  return dk.map((d) => [new Date(d.date + 'T12:00:00').getTime(), d.dk_consumer_eur_kwh[7] * 100]);
+                  return dk.map((d) => [new Date(d.date + 'T12:00:00').getTime(), d.dk_cheap_eur_kwh[7] * 100]);
               - entity: sensor.spot_price_predictor_duration_forecast
                 name: "D(24)"
                 yaxis_id: dk
@@ -259,7 +260,7 @@ views:
                 data_generator: |
                   const dk = entity.attributes.daily_forecast;
                   if (!dk) return [];
-                  return dk.map((d) => [new Date(d.date + 'T12:00:00').getTime(), d.dk_consumer_eur_kwh[23] * 100]);
+                  return dk.map((d) => [new Date(d.date + 'T12:00:00').getTime(), d.dk_cheap_eur_kwh[23] * 100]);
 
           # ── Week price range ──
           - type: custom:mushroom-template-card

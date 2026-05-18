@@ -36,7 +36,7 @@ automation:
       - platform: template
         value_template: >
           {{ state_attr('sensor.spot_price_predictor_duration_forecast',
-             'v26_diagnostics').get('refit_recommended', false) }}
+             'pipeline_diagnostics').get('refit_recommended', false) }}
     action:
       - service: spot_price_predictor.retrain_models
         data:

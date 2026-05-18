@@ -79,7 +79,7 @@ def _device_info(entry: ConfigEntry) -> dict[str, Any]:
         "name": "Spot Price Predictor",
         "manufacturer": "watti-matti",
         "model": "Spot Price Predictor",
-        "sw_version": "2.2.0",
+        "sw_version": "2.8.0",
     }
 
 
@@ -196,24 +196,18 @@ class DurationForecastSensor(CoordinatorEntity, SensorEntity):
     Attributes:
       daily_forecast: 7-day array, each entry:
         {date, weekday, source,
-         dk_cheap_eur_kwh[12], dk_peak_eur_kwh[12],
-         dk_cheap_spot_eur_mwh[12], dk_peak_spot_eur_mwh[12],
-         dk_consumer_eur_kwh[24], dk_spot_eur_mwh[24]}
+         dk_cheap_eur_mwh[24], dk_peak_eur_mwh[24],
+         dk_cheap_eur_kwh[24], dk_peak_eur_kwh[24]}
 
-        Phase A schema (use these for new consumers):
-          dk_cheap_eur_kwh[k-1] = mean consumer price (EUR/kWh) of the
-                                  CHEAPEST k hours, k=1..12, monotone
-                                  non-decreasing.
-          dk_peak_eur_kwh[k-1]  = mean consumer price (EUR/kWh) of the
-                                  PRICIEST k hours, k=1..12, monotone
-                                  non-increasing.
-          dk_cheap_spot_eur_mwh / dk_peak_spot_eur_mwh: same for spot prices.
-
-        Legacy schema (deprecated, kept for one transition release; will
-        be removed in a future version):
-          dk_consumer_eur_kwh[24] / dk_spot_eur_mwh[24] — single cumulative
-          D(k) sorted ascending. Indices k=13..24 are not decision-relevant
-          for scheduling; use the cheap/peak split above instead.
+        dk_cheap_eur_mwh[i] = mean spot price (EUR/MWh) of the (i+1)
+                              CHEAPEST hours of the day, i=0..23
+                              (monotone non-decreasing).
+        dk_peak_eur_mwh[i]  = mean spot price (EUR/MWh) of the (i+1)
+                              PRICIEST hours of the day, i=0..23
+                              (monotone non-increasing).
+        dk_cheap_eur_kwh / dk_peak_eur_kwh: same shape, in consumer
+                              price (EUR/kWh) with per-hour tariff
+                              conversion applied.
 
       forecast_days: number of forecast days
     """
@@ -233,24 +227,14 @@ class DurationForecastSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self) -> float | None:
-        """State = first forecast day's cheapest-4h average (EUR/kWh).
-
-        Prefers the new `dk_cheap_eur_kwh[3]` attribute; falls back to
-        the legacy `dk_consumer_eur_kwh[3]` if the coordinator has not
-        yet been updated with the new schema.
-        """
+        """State = first forecast day's cheapest-4h average (EUR/kWh)."""
         if not self.coordinator.data:
             return None
         dk_list = self.coordinator.data.get("duration_forecast", [])
         if not dk_list:
             return None
-        first = dk_list[0]
-        cheap_vec = first.get("dk_cheap_eur_kwh") or []
-        if len(cheap_vec) >= 4:
-            return cheap_vec[3]
-        # Fallback to legacy 24-array
-        legacy_vec = first.get("dk_consumer_eur_kwh") or []
-        return legacy_vec[3] if len(legacy_vec) >= 4 else None
+        cheap_vec = dk_list[0].get("dk_cheap_eur_kwh") or []
+        return cheap_vec[3] if len(cheap_vec) >= 4 else None
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -280,9 +264,9 @@ class DurationForecastSensor(CoordinatorEntity, SensorEntity):
             attrs["today_peak_8h_eur_kwh"] = peak_vec[7]
             attrs["today_peak_12h_eur_kwh"] = peak_vec[11]
 
-        # PV-aware D(k) scalars (only when PV is configured). The 12-element
-        # vectors `dk_cheap_pv_eur_kwh` / `dk_peak_pv_eur_kwh` already live
-        # inside each `daily_forecast[i]` dict from the coordinator.
+        # PV-aware D(k) scalars (only when PV is configured). The
+        # 24-element vectors `dk_cheap_pv_eur_kwh` / `dk_peak_pv_eur_kwh`
+        # live inside each `daily_forecast[i]` dict from the coordinator.
         cheap_pv_vec = first.get("dk_cheap_pv_eur_kwh") or []
         peak_pv_vec = first.get("dk_peak_pv_eur_kwh") or []
         if len(cheap_pv_vec) >= 12:
@@ -309,10 +293,10 @@ class DurationForecastSensor(CoordinatorEntity, SensorEntity):
         cheap_hi = first.get("dk_cheap_upper_eur_kwh") or []
         peak_lo = first.get("dk_peak_lower_eur_kwh") or []
         peak_hi = first.get("dk_peak_upper_eur_kwh") or []
-        if len(cheap_lo) == 12 and len(cheap_hi) == 12:
+        if len(cheap_lo) >= 4 and len(cheap_hi) >= 4:
             attrs["today_cheap_4h_lower_eur_kwh"] = cheap_lo[3]
             attrs["today_cheap_4h_upper_eur_kwh"] = cheap_hi[3]
-        if len(peak_lo) == 12 and len(peak_hi) == 12:
+        if len(peak_lo) >= 1 and len(peak_hi) >= 1:
             attrs["today_peak_1h_lower_eur_kwh"] = peak_lo[0]
             attrs["today_peak_1h_upper_eur_kwh"] = peak_hi[0]
 

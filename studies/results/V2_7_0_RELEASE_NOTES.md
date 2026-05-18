@@ -1,4 +1,10 @@
-# v2.7.0 — Cutover: v26 L1+L2+L3+L4+floor REPLACES v2.2 9-feature Ridge
+# v2.7.0 — Cutover: L1+L2+L3+L4+floor pipeline replaces the earlier Ridge
+
+> ⚠️ **Historical release note — field naming superseded.** The
+> `v26_*`-prefixed attributes mentioned below were renamed in a later
+> cleanup and the 12-level dual D(k) schema was unified into a single
+> 24-level cheap/peak schema. The current schema is documented in
+> [docs/dk_cheap_peak_migration.md](../../docs/dk_cheap_peak_migration.md).
 
 ## TL;DR
 

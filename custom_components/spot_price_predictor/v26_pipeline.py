@@ -29,7 +29,7 @@ Pipeline (per hour h of the 168-hour forecast horizon):
   L1+L2+L3 mean      = seasonal_fi(h) + ridge(h) + ar_corr(h)
   + softplus floor   = floored at −5 EUR/MWh (v2.5.14)
   + hourly bias EMA  = − bias_estimate (v2.5.15)
-  → final point forecast (`v26_mean_eur_mwh`)
+  → final point forecast (the `spot_eur_mwh` value on each forecast row)
 
   L4 GPD POT fan-chart
        sample 500 paths from Normal-body + GPD-tail mixture

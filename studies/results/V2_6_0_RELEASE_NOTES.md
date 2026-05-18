@@ -1,5 +1,16 @@
 # v2.6.0 — Production coordinator wiring of the L1+L2+L3+L4+floor pipeline
 
+> ⚠️ **Historical release note — field naming superseded.** The
+> `v26_*` attribute names and the parallel `dk_*_v26_*` keys described
+> below were dropped once the pipeline became the primary path. The
+> current sensor schema (`P5_eur_mwh` … `P95_eur_mwh` on forecast rows,
+> `dk_cheap_eur_mwh[24]` / `dk_peak_eur_mwh[24]` /
+> `dk_cheap_eur_kwh[24]` / `dk_peak_eur_kwh[24]` per duration-forecast
+> day) is documented in
+> [docs/dk_cheap_peak_migration.md](../../docs/dk_cheap_peak_migration.md).
+> The narrative below is preserved for context only — do not copy the
+> YAML examples verbatim.
+
 ## TL;DR
 
 **HA users on v2.6.0 see new sensor attributes** alongside everything they already have. No breaking changes; no dashboard migration required.

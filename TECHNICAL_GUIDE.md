@@ -1,36 +1,38 @@
-# Documentation: HA-spot-price-predictor (v2.4.0)
+# Documentation: HA-spot-price-predictor (v2.8.0)
 
-Consumer electricity price and D(k) = CVaR duration cost forecasting for Home Assistant. Produces 170-hour consumer price forecasts (EUR/kWh) and 7-day D(k) cheap/peak duration curves for cost-optimal load scheduling, using log-linear Ridge regression with physics-based features and multi-source data integration. Optionally augments every forecast hour with a PV-aware marginal effective price `m_h` and parallel PV-aware D(k) curves when the user configures household solar.
+Consumer electricity price and D(k) = CVaR duration cost forecasting for Home Assistant. Produces 170-hour consumer price forecasts (EUR/kWh) and 7-day D(k) cheap/peak duration curves for cost-optimal load scheduling, using a four-layer pipeline — L1 seasonal decomposition, L2 physics-feature Ridge, L3 AR(1) momentum, L4 GPD POT spike model — together with a softplus negative-price floor and an hourly DtACI calibrator. Optionally augments every forecast hour with a PV-aware marginal effective price `m_h` and parallel PV-aware D(k) curves when the user configures household solar.
 
 ## Architecture
 
-The system has two phases: **training** (Python, run periodically on PC) and **inference** (Home Assistant custom integration, always-on). v2.3 adds an optional **post-prediction PV transform** that does not require retraining.
+The system has two phases: **inference** (Home Assistant custom integration, always-on) and **retraining** (refits the bundled artifacts on demand via a Home Assistant service). Both phases share the same code paths under `custom_components/spot_price_predictor/`.
 
-### Training Pipeline (unchanged from v2.2)
+### Retraining flow (Home Assistant service `spot_price_predictor.retrain_models`)
 
 ```
-Sahkotin API  ──┐
-Open-Meteo API ─┼──> Feature Engineering ──> Log-linear Ridge ──> model_coefs.json
-Elpriset API ───┤    (9 sign-validated        + Power stretch      (hourly + duration
-Elering API ────┤     features after v2.2     + Duration model)     model coefficients)
-Fingrid API ────┘ pruning, optional)
+Cached price + weather   ──> studies/build_seasonal_components.py  ──> data/seasonal_components_default.json
+parquets / Sahkotin         studies/v2513_layer4_spike_model.py     ──> data/spike_model_default.json
+                            studies/v253_solar_submodel.py          ──> data/solar_submodel_default.json
+                                                                          │
+                                                                          v
+                                                        Atomic JSON writes + V26Pipeline auto-reload
+                                                        (fires spot_price_predictor_models_retrained)
 ```
 
 ### Home Assistant Deployment
 
 ```
 Open-Meteo  ──┐
-Elpriset    ──┼──> Feature Builder ──> Hourly Model  ──> Spot/Consumer Forecast (170h)
-Elering     ──┤    (pure Python)       + Duration Model   + D(k) cheap/peak (7d)
-Fingrid     ──┘                        (pure Python)      │
-Nord Pool UMM ─────────────────────────┘                  │
-                                                          │
-                                                          v
-                              (v2.3) PV-aware Transform ──┴─> + effective_eur_kwh per hour
-                              [optional]                       + dk_cheap_pv / dk_peak_pv (7d)
-                              ↑
-                              └── Open-Meteo irradiance (internal)
-                                  OR pv_external_entity (Forecast.Solar / EMHASS / template)
+Elpriset    ──┼──> Coordinator ──> V26 Pipeline (L1 seasonal + L2 Ridge + L3 AR(1) + L4 GPD POT)
+Elering     ──┤    + Data fetch    + Softplus floor + Hourly DtACI bias/fan calibrators
+Fingrid     ──┤    + Tariff        + Duration model (segment-hierarchical Ridge + PAVA)
+Sahkotin    ──┤    conversion              │
+Nord Pool UMM ┘                            v
+                                  Spot/Consumer Forecast (170h, with P5/P25/P50/P75/P95 fan)
+                                  + D(k) cheap/peak (7 days)
+                                  + (optional) PV-aware effective price and PV-aware D(k)
+                                  ↑
+                                  └── Open-Meteo irradiance (internal)
+                                      OR pv_external_entity (Forecast.Solar / EMHASS / template)
 ```
 
 ### Dashboards
@@ -58,112 +60,133 @@ All data sources are configured in `config/regions/finland.yaml`.
 
 ### Cross-border price sources (free, no authentication)
 
-| Source | Zones fetched | Used in v2.2 model? |
-|--------|---------------|---------------------|
-| [Elpriset](https://www.elprisetjustnu.se/api/v1/prices) | SE3 | Yes — `ar_se3` + `export_potential_se3` |
-| [Elpriset](https://www.elprisetjustnu.se/api/v1/prices) | SE1 | Fetched for spread/historical context only; `ar_se1` was pruned in v2.2 (collinear with `ar_se3`, since the FI↔SE transmission corridor terminates in SE3) |
-| [Elering API](https://dashboard.elering.ee/api/nps/price) | EE | Yes — `ar_ee` |
+| Source | Zones fetched | Consumed by the current non-seasonal model? |
+|--------|---------------|---------------------------------------------|
+| [Elpriset](https://www.elprisetjustnu.se/api/v1/prices) | SE3 | No — used by the duration model and dashboards |
+| [Elpriset](https://www.elprisetjustnu.se/api/v1/prices) | SE1 | No — auxiliary spread / historical context |
+| [Elering API](https://dashboard.elering.ee/api/nps/price) | EE | No — used by the duration model and dashboards |
 
-Used to fit AR(2) models on cross-border price deviations from hourly daytype profiles. Analysis confirmed strong autocorrelation (lag-1 weekly r = 0.54–0.73, sign persistence 100%).
+Cross-border prices remain part of the data layer for the duration model and historical-context attributes but are not features of the non-seasonal price model.
 
 ### Optional grid data (free API key)
 
 | Source | Purpose |
 |--------|---------|
-| [Fingrid Open Data](https://data.fingrid.fi) | Nuclear production (#188) for the `nuclear_x_scarcity` interaction feature |
+| [Fingrid Open Data](https://data.fingrid.fi) | Nuclear production (#188), consumption / wind / solar forecasts (#165 / #246 / #247) — used by the duration model and auxiliary streams |
 
-Register for free at data.fingrid.fi. Without the Fingrid key, training uses only weather + cross-border data and the resulting model omits the `nuclear_x_scarcity` feature (8 of the bundled 9). Inference can still load the bundled v2.2 9-feature model — `nuclear_x_scarcity` contributes 0 when no nuclear data is fed in.
+Register for free at data.fingrid.fi. Without the Fingrid key the non-seasonal price model is unaffected; the duration model falls back to its weather-only feature subset.
 
 ### Nuclear outage schedule (free, no key)
 
 | Source | Purpose |
 |--------|---------|
-| [Nord Pool UMM](https://ummapi.nordpoolgroup.com/messages) | Planned nuclear outages for forward-looking capacity prediction |
+| [Nord Pool UMM](https://ummapi.nordpoolgroup.com/messages) | Planned nuclear outages — auxiliary forward-looking stream; not consumed by the non-seasonal price model |
 
 ---
 
 ## Feature Engineering
 
-The training pipeline can compute up to 17 sign-validated candidate features, but a v2.2 leave-one-out redundancy sweep showed that **only 9 of them carry independent signal** — the other 8 were either collinear with retained features or contributed nothing measurable to walk-forward MAE. The bundled v2.2 model (also shipped unchanged in v2.3) uses exactly these 9 features. All tunable parameters live in `config/regions/finland.yaml` under the `features` section.
+The non-seasonal price model is deliberately compact: six Ridge features composed with an AR(1) momentum term and a heavy-tail spike layer. The complete feature ordering is defined in `custom_components/spot_price_predictor/v26_pipeline.py:68-75` (constant `V26_FEATURES`) — the documentation table below reflects that exact ordering.
 
-### The bundled 9 features
+### L1 — Seasonal decomposition
 
-| # | Feature | Category | Source | Sign | Role |
-|---|---------|----------|--------|:---:|------|
-| 1 | `wind_speed_weighted` | Supply | Open-Meteo (7 capacity-weighted FI sites) | − | Dominant price driver — more wind, lower spot |
-| 2 | `month_cos` | Seasonality | Calendar | cyclic | Annual heating-load seasonality (winter peak) |
-| 3 | `is_holiday` | Calendar | Holiday calculator / HA Workday | − | Public holidays → lower industrial demand |
-| 4 | `hdd_sq` | Thermal demand | Open-Meteo temperature | + | `max(0, 17°C − T)²` — nonlinear cold amplification |
-| 5 | `wind_log_scarcity` | Wind nonlinear | Open-Meteo | + | `log1p(max(0, 8 − wind))` — sharp price jump when wind drops below 8 m/s |
-| 6 | `ar_se3` | Cross-border | elprisetjustnu.se SE3 | + | AR(2) deviation from SE3 hourly daytype profile, normalized ÷100 — captures FI↔SE3 transmission coupling |
-| 7 | `ar_ee` | Cross-border | Elering EE | + | AR(2) deviation from EE hourly daytype profile, normalized ÷100 — captures FI↔EE coupling |
-| 8 | `export_potential_se3` | Cross-border | SE3 spread | − | `max(0, −spread_7d_fi_se3)` — when FI is cheaper than SE3, FI→SE3 export pulls FI price up |
-| 9 | `nuclear_x_scarcity` | Nuclear | Fingrid #188 + Nord Pool UMM | + | `nuclear_deficit × wind_log_scarcity` — outage amplifies weather scarcity |
+`custom_components/spot_price_predictor/seasonal_decomposition.py` implements an additive Moazeni–Powell decomposition: each input series is split into hourly, daily, and weekly components, fitted on the training history and shipped in `data/seasonal_components_default.json`. At inference time the pipeline subtracts the matching components to produce deseasonalized residuals (`Y_*`). FI price uses the full hour+day+week depth; temperature uses hour+week; wind / solar are not deseasonalized by L1 (they are locally centered before the Ridge step instead).
 
-The AR(2) cross-border models decompose neighbour prices into a deterministic daily profile (workday vs weekend, 24 hours each) plus a stochastic AR(2) deviation. The AR deviation is damped (max root < 0.95) so multi-step forecasts converge to the daily profile within ~24 hours, ensuring stability over the full 170-hour horizon.
+### L2 — Non-seasonal Ridge regression
 
-`nuclear_x_scarcity` requires a free Fingrid API key for live nuclear production data; planned outage schedules come from the [Nord Pool UMM platform](https://umm.nordpoolgroup.com/) (public API, no key). Without the Fingrid key, training omits this one feature (model has 8 features) and inference can still load the bundled 9-feature model — the feature simply contributes 0 when no nuclear data is fed in.
+Six features are stacked into the design matrix in this order (matches `V26_FEATURES`):
 
-### Features pruned in v2.2 (and why)
+| # | Feature (code name) | Built at | Definition |
+|---|---|---|---|
+| 1 | `intercept` | `v26_pipeline.py:241` | Constant 1. Captures the deseasonalized mean. |
+| 2 | `Y_fi_lag168` | `v26_pipeline.py:242` | Deseasonalized FI residual 7 days prior — own-lag memory of the local market regime. Falls back to zero during cold-start. |
+| 3 | `is_workday` | `v26_pipeline.py:243`, computed at `:251-256` | `weekday < 5`. Captures industrial demand pattern. |
+| 4 | `Y_sigmoid_wind_rho` | `v26_pipeline.py:244`, helper `_sigmoid_turbine_rho` at `:87-93` | `σ((wind − 7.5) / 1.5) × ρ(T) / 1.225`. Sigmoid wind-power curve scaled by relative air density; physics-realistic supply driver. Locally centered before entering the Ridge. |
+| 5 | `Y_solar_effective` | `v26_pipeline.py:245`, helper `_solar_effective` at `:96-102` | `GHI × (1 − 0.004 · max(0, T_cell − 25))` with `T_cell = T + 0.03 · GHI`. Temperature-derated effective irradiance. Locally centered before the Ridge. |
+| 6 | `Y_temp` | `v26_pipeline.py:246`, deseasonalized at `:239` | Deseasonalized temperature — residual heating-load signal. |
 
-The leave-one-out sweep removed 8 candidates from the v2.0/v2.1 17-feature set:
+The Ridge coefficient vector lives in `data/spike_model_default.json` under `ridge_coef`; it is applied at `v26_pipeline.py:367` as `ridge = X @ self._ridge_coef`.
 
-| Pruned feature | Reason |
+### L3 — AR(1) momentum
+
+At forecast horizon `h`, the AR(1) term contributes `φ^h · η(t₀−1)` where `η(t₀−1)` is the most-recent observed deseasonalized FI residual and `φ` is the AR(1) coefficient loaded from `spike_model_default.json` (typically `φ ≈ 0.904`). Implementation: `v26_pipeline.py:260-266`; the residual state is refreshed via `update_with_actuals()` at `:429-446`.
+
+### L4 — GPD POT spike model
+
+A Normal-body + Generalized Pareto tail mixture is sampled 500 times around the L1+L2+L3 point forecast to produce the P5 / P25 / P50 / P75 / P95 fan bands. Parameters live in `spike_model_default.json`:
+
+| Parameter | Role |
 |---|---|
-| `solar_irradiance_weighted` | Finland's solar share too small to move spot prices; coefficient was indistinguishable from zero. |
-| `hour_sin`, `hour_cos` | Hour-of-day pattern is fully captured by the AR(2) daytype profiles in `ar_se3` / `ar_ee`. |
-| `month_sin` | Month-of-year captured well enough by `month_cos` alone (heating peak ↔ cosine extremum). |
-| `wind_calm_x_peak_am`, `wind_calm_x_peak_pm` | Collinear with `wind_log_scarcity`; their incremental MAE benefit was negative under the sweep. |
-| `ar_se1` | Strongly collinear with `ar_se3`. The Fenno-Skan / FennoSkan-2 cables connect FI to SE3, not SE1, so SE3 dominates the transmission signal. SE1 is still fetched for spread context but no longer enters the model. |
-| `nuclear_deficit` | Standalone nuclear deficit added little once `nuclear_x_scarcity` (the interaction term) was retained. Including both caused multicollinearity. |
+| `stats.eta_train_mean`, `stats.eta_train_sigma` | Normal-body mean and scale for the residual `η` |
+| `gpd_right.{threshold, shape, scale, p_exceed}` | Right-tail exceedance model |
+| `gpd_left.{threshold, shape, scale, p_exceed}` | Left-tail exceedance model |
 
-Effect of pruning (training test split, 4-year history): MAE 23.94 → 20.07 EUR/MWh (−16%); R² 0.515 → 0.719 (+40%). Walk-forward MAE on a 180-day holdout is 20.99 EUR/MWh, well below the AR(2)-only neighbour-price floor of 37.82.
+Sampler implementation: `_sample_fan_chart` at `v26_pipeline.py:270-320`. The fan bands surface on the `forecast` sensor as `P5_eur_mwh` … `P95_eur_mwh` per row.
 
-### Bundled vs retraining: feature count cheat sheet
+### Softplus floor and hourly DtACI calibrators
 
-The bundled `model_coefs_default.json` is fixed at the 9-feature v2.2 model regardless of which APIs the runtime can reach. If you retrain locally (`python -m src.train_model …`), the produced model uses the largest subset of the 9 that your data sources support:
+Before the fan-chart is sampled, the L1+L2+L3 mean is floored at −5 EUR/MWh via a softplus (`price_floor.py`). An hourly DtACI bias corrector (`hourly_calibration.HourlyBiasCorrector`, half-life 14 days, 168-hour warm-up) subtracts a slowly-moving systematic-bias estimate; a parallel `HourlyFanChartCalibrator` adapts the per-hour fan widths to track the 0.5 and 0.9 marginal coverage targets. A `RefitMonitor` flags persistent drift over a 14-day window (`spot_price_predictor_v26/refit_monitor.json`).
 
-| Available data | Trained features | Notes |
-|---|:---:|---|
-| Open-Meteo only | 5 | Drops `ar_se3`, `ar_ee`, `export_potential_se3`, `nuclear_x_scarcity` |
-| + elprisetjustnu.se (SE3) + Elering (EE) | 8 | Drops `nuclear_x_scarcity` |
-| + Fingrid (free key) | **9** | Full bundled-model feature set |
+### Inputs evaluated and not currently active
+
+Earlier feasibility work explored using a nuclear-deficit signal `nuclear_deficit ∈ [0, 1]` (Fingrid dataset #188) and an SE3 cross-border transit-capacity / export-spread proxy as features. The current non-seasonal model does not consume either:
+
+- Fingrid nuclear data is still fetched (`coordinator.py:871`) and surfaces in the duration model and diagnostics, but is not in `V26_FEATURES`.
+- SE3 / SE1 / EE prices are still fetched (`coordinator.py:852`) and feed the duration model; the v26 call site (`coordinator.py:1210-1215`) passes only weather and the lag168 residual.
+
+Re-introducing either signal would require a fresh ablation against the current coefficient vector and is gated on a separate experimental branch — see "Open question — per-input accuracy contribution" below.
+
+### Open question — per-input accuracy contribution
+
+The only per-input ablation currently published in this repository is [studies/results/v2511_physics_features.md](studies/results/v2511_physics_features.md), which evaluated the sigmoid-wind / solar / raw-wind variants against a base configuration. It is useful as background reading for the physics-feature design but does not pin down the marginal contribution of each L2 feature in the shipping coefficient set. A leave-one-out study over the current `ridge_coef` vector is the prerequisite for any change to the input list.
 
 ---
 
 ## Model Architecture
 
-### Hourly model: Log-linear Ridge regression
+### Hourly model: Four-layer pipeline
 
-**Prediction formula:** `price = scale × max(0, exp(Σ coef_i × feat_i + intercept) − log_offset) ^ power`
+The hourly point forecast is the sum of three additive contributions, softplus-floored and bias-corrected:
 
-The log transform naturally handles the nonlinear price-scarcity relationship: nearly linear at low prices, exponential amplification at high prices.
+```
+v26_mean(h) = L1_seasonal_fi(h)
+            + L2_ridge(h)          # six features above
+            + L3_ar(h)              # φ^h · η(t₀−1)
+            - hourly_bias_ema(h)    # DtACI bias corrector
+            (softplus floor at −5 EUR/MWh)
+```
 
-- Ridge regression on `log(price + log_offset)` target (v2.2 retuned `log_offset` from 55 → 100 to better fit the 2025–2026 price regime)
-- **9 sign-validated features** in the v2.2 bundled model (16 candidate features pruned by leave-one-out redundancy sweep)
-- Power stretch (`scale`, `exponent`) fitted via Nelder-Mead on the test set
-- Time-decay weighting: half-life 120 days (configurable per region)
-- Ridge α = 50, augmented matrix (no penalty on intercept)
+The full sampler then produces the fan-chart bands `P5_eur_mwh` … `P95_eur_mwh` around the point forecast (`spot_eur_mwh`). Public entry point: `V26Pipeline.compute_forecast` at `v26_pipeline.py:324`.
 
-**Training:** 4+ years of historical data, 85/15 time-ordered split, batched normal-equation solve (512 rows). v2.3 ships the same coefficient file as v2.2 — PV-aware outputs are computed by the coordinator, not the trained model.
+Artifacts loaded at construction time:
+
+- `data/seasonal_components_default.json` — L1 components for FI price and weather inputs.
+- `data/spike_model_default.json` — L2 Ridge coefficients (`ridge_coef`), L3 AR(1) (`ar1_phi`), L4 Normal-body + GPD-tail parameters (`stats`, `gpd_left`, `gpd_right`).
+- `data/solar_submodel_default.json` — clear-sky × cloudiness solar production sub-model used by the PV-aware path.
+
+Persistent calibrator state under `<config>/.storage/spot_price_predictor_v26/`:
+
+- `hourly_bias.json` — DtACI bias corrector state.
+- `hourly_fan_chart.json` — fan-chart DtACI bundle per coverage target.
+- `refit_monitor.json` — drift-trigger state for the refit monitor.
 
 ### Duration model: Segment-hierarchical Ridge + PAVA (cheap/peak split)
 
 Predicts two complementary duration curves per day:
 
-- **`dk_cheap[k-1]`** = mean spot price of the **cheapest k hours**, k=1..12 (monotone non-decreasing). CVaR at α=k/24 in the lower tail. Best achievable cost for a deferrable load that can choose its k cheapest slots.
-- **`dk_peak[k-1]`** = mean spot price of the **priciest k hours**, k=1..12 (monotone non-increasing). CVaR at α=k/24 in the upper tail. Worst-case cost if the load is forced into peak hours (storage-depletion / risk-aware planning).
+- **`dk_cheap_eur_mwh[i]`** = mean spot price of the **(i+1) cheapest hours**, i = 0..23 (monotone non-decreasing). CVaR at α=(i+1)/24 in the lower tail. Best achievable cost for a deferrable load that can choose its k cheapest slots.
+- **`dk_peak_eur_mwh[i]`** = mean spot price of the **(i+1) priciest hours**, i = 0..23 (monotone non-increasing). CVaR at α=(i+1)/24 in the upper tail. Worst-case cost if the load is forced into peak hours (storage-depletion / risk-aware planning).
 
-The legacy 24-element cumulative D(k) — useful for k=1..12, indistinguishable from random for k=13..24 — is exactly recoverable from cheap+peak via the sum identity `cheap[11] + peak[11] = 2 × daily_avg` (`src/dk_utils.py` round-trip is exact to numerical noise; tested in `tests/test_dk_consumers.py`).
+The full-day mean is recovered at i = 23: `dk_cheap_eur_mwh[23] == dk_peak_eur_mwh[23] == daily_average_spot`. The consumer-side `dk_cheap_eur_kwh` / `dk_peak_eur_kwh` arrays have the same shape; each hour's spot is converted to consumer EUR/kWh with the corresponding day/night tariff before sorting.
 
 **PAVA** (Pool Adjacent Violators Algorithm) is an isotonic regression method that enforces monotonicity. The cheap end requires non-decreasing PAVA; the peak end requires non-increasing PAVA (mirrored). Both are applied independently per direction after the per-segment Ridge predictions.
 
-**Architecture (Phase A dual cheap/peak training):**
+**Architecture (dual cheap/peak training):**
 - 4 day segments aligned with day/night tariff boundaries: night (22-07, 9 levels), morning (07-12, 5 levels), midday (12-18, 6 levels), evening (18-22, 4 levels). Total = 24 hourly slots.
 - Per `(segment, direction, k)`: independent Ridge model. Each segment carries `cheap_models` (k = 1..n_levels) and `peak_models` (k = 1..n_levels). Total bundled Ridge fits = 2 × (9 + 5 + 6 + 4) = **48 small models**.
 - Per-segment **12 features** (segment-level aggregates over the segment's hours):
   `wind_mean`, `solar_mean`, `hdd_mean`, `se3_mean`, `se1_mean`, `nuclear_deficit`, `is_workday`, `month_sin`, `month_cos`, `wind_log_scarcity`, `net_load_mean`, `net_load_squared_mean`. The last two are zero-padded when Fingrid net-load forecasts are unavailable, matching the training-side fallback.
-- Log-linear target with v2.2-retuned offset: `log(D(k) + 100)`
+- Log-linear target: `log(D(k) + 100)`
 - Forgetting factor λ = 0.960 (half-life 17 days, optimized via sweep)
 - PAVA isotonic post-processing per direction:
   - Cheap end: enforces `dk_cheap[0] ≤ dk_cheap[1] ≤ … ≤ dk_cheap[11]`
@@ -179,7 +202,7 @@ The legacy 24-element cumulative D(k) — useful for k=1..12, indistinguishable 
 | D(8) | Cheapest 8h | 0.937 |
 | D(24) | Daily average | 0.940 |
 
-**Output:** `model_coefs.json` containing hourly Ridge coefficients (9-feature v2.2 bundled), AR(2) parameters for `ar_se3` and `ar_ee`, and the dual cheap/peak duration-model coefficients (48 segment-direction-k Ridge fits).
+**Output artifacts:** the four-layer hourly model parameters live in `data/spike_model_default.json` and `data/seasonal_components_default.json`; the duration model carries the AR(2) parameters for `ar_se3` and `ar_ee` and the dual cheap/peak coefficients (48 segment-direction-k Ridge fits).
 
 ---
 
@@ -214,13 +237,13 @@ Configurable per operator in `finland.yaml`. Default: Elenia (day 3.61, night 2.
 | Sensor | State | Unit | Description |
 |--------|-------|------|-------------|
 | Price Forecast | Current consumer price | EUR/kWh | 170h hourly forecast with spot, consumer, weather per hour |
-| Duration Forecast | Today's `dk_cheap[3]` (cheapest 4h) | EUR/kWh | 7-day × (12 cheap + 12 peak) duration curves; legacy `dk_consumer_eur_kwh[24]` retained for one transition release |
+| Duration Forecast | Today's `dk_cheap_eur_kwh[3]` (cheapest 4h) | EUR/kWh | 7-day × 24-level cheap/peak duration curves in both EUR/MWh (spot) and EUR/kWh (consumer) |
 
 #### Price Forecast attributes
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
-| `forecast` | array[170] | `{timestamp, spot_eur_mwh, consumer_eur_kwh, wind, solar, temp}` per hour |
+| `forecast` | array[170] | Per-hour record: `{timestamp, spot_eur_mwh, consumer_eur_kwh, wind, solar, temp, P5_eur_mwh, P25_eur_mwh, P50_eur_mwh, P75_eur_mwh, P95_eur_mwh}`. `spot_eur_mwh` is the pipeline point forecast (EUR/MWh) and the `P*_eur_mwh` keys are the fan-chart percentiles from the L4 GPD POT layer. |
 | `current_spot_eur_mwh` | float | Current hour spot price (EUR/MWh) |
 | `week_min_eur_kwh` | float | Minimum consumer price in forecast window |
 | `week_avg_eur_kwh` | float | Average consumer price in forecast window |
@@ -233,7 +256,7 @@ Configurable per operator in `finland.yaml`. Default: Elenia (day 3.61, night 2.
 
 #### Duration Forecast attributes — D(k) cheap/peak
 
-The `daily_forecast` attribute provides up to 7 days, each with both the new Phase A schema (preferred) and the legacy 24-array (deprecated, retained for one transition release).
+The `daily_forecast` attribute provides up to 7 days. Each day exposes the cheap/peak split (canonical) plus a v26-derived 24-entry array on each side that mirrors the spot-side fan-chart pipeline.
 
 | Attribute | Shape | Unit | Description |
 |-----------|-------|------|-------------|
@@ -241,24 +264,19 @@ The `daily_forecast` attribute provides up to 7 days, each with both the new Pha
 | `daily_forecast[i].date` | string | — | ISO date (YYYY-MM-DD) |
 | `daily_forecast[i].weekday` | string | — | Mon–Sun |
 | `daily_forecast[i].source` | string | — | `forecast` for future days, `actual` for past days reconciled from Sahkotin |
-| **Phase A (preferred):** | | | |
-| `daily_forecast[i].dk_cheap_eur_kwh` | float[12] | EUR/kWh | Mean of cheapest k hours, k=1..12 |
-| `daily_forecast[i].dk_peak_eur_kwh`  | float[12] | EUR/kWh | Mean of priciest k hours, k=1..12 |
-| `daily_forecast[i].dk_cheap_spot_eur_mwh` | float[12] | EUR/MWh | Same in spot price |
-| `daily_forecast[i].dk_peak_spot_eur_mwh`  | float[12] | EUR/MWh | Same in spot price |
+| `daily_forecast[i].dk_cheap_eur_mwh` | float[24] | EUR/MWh | Mean spot price of the (i+1) cheapest hours of the day, i = 0..23 (monotone non-decreasing) |
+| `daily_forecast[i].dk_peak_eur_mwh`  | float[24] | EUR/MWh | Mean spot price of the (i+1) priciest hours of the day, i = 0..23 (monotone non-increasing) |
+| `daily_forecast[i].dk_cheap_eur_kwh` | float[24] | EUR/kWh | Same cheapest-end curve in consumer price (per-hour tariff applied) |
+| `daily_forecast[i].dk_peak_eur_kwh`  | float[24] | EUR/kWh | Same priciest-end curve in consumer price |
 | **Convenience scalars (today only):** | | | |
 | `today_cheap_4h_eur_kwh`, `today_cheap_8h_eur_kwh` | float | EUR/kWh | Today's cheapest 4h/8h indicators |
 | `today_peak_4h_eur_kwh`,  `today_peak_1h_eur_kwh` | float | EUR/kWh | Today's worst-case 4h/1h indicators |
-| **Legacy (deprecated):** | | | |
-| `daily_forecast[i].dk_consumer_eur_kwh` | float[24] | EUR/kWh | Legacy cumulative ascending D(k); `dk_consumer_eur_kwh[k-1] == dk_cheap_eur_kwh[k-1]` for k=1..12 |
-| `daily_forecast[i].dk_spot_eur_mwh`     | float[24] | EUR/MWh | Same in spot price |
 | `forecast_days` | int | — | Number of days emitted (up to 7) |
 
 **Access patterns:**
-- Cheapest k hours of day d: `daily_forecast[d].dk_cheap_eur_kwh[k-1]` for k in 1..12 (use this for deferrable-load scheduling)
-- Priciest k hours of day d: `daily_forecast[d].dk_peak_eur_kwh[k-1]` for k in 1..12 (use this for worst-case / storage planning)
-- Cross-check identity: `cheap[11] + peak[11] = 2 × daily_avg` (always holds to numerical noise; foundation of the migration)
-- Legacy reconstruction: any consumer still reading `dk_consumer_eur_kwh[k-1]` for k=13..24 can be served exactly from cheap+peak via `(12*(cheap[11]+peak[11]) - (24-k)*peak[24-k-1]) / k`. Implementation in `multi_load_ha_integration.py:fetch_dk_forecast` (thermal-energy-optimization repo).
+- Cheapest k hours of day d: `daily_forecast[d].dk_cheap_eur_kwh[k-1]` for k in 1..24 (use this for deferrable-load scheduling)
+- Priciest k hours of day d: `daily_forecast[d].dk_peak_eur_kwh[k-1]` for k in 1..24 (use this for worst-case / storage planning)
+- Cross-check identity: `cheap[11] + peak[11] = 2 × daily_avg` (always holds to numerical noise)
 - Consumer prices include per-segment tariff conversion: night hours use night transfer rate, day hours use day rate, then merged and re-sorted
 
 ### Actual price sensors (optional, Nordpool)
@@ -294,7 +312,7 @@ For each hour `h`:
 |--------|---------|
 | `b_h` | Consumer buy price (EUR/kWh) = `(spot/1000 + margin + transfer + tax) × VAT`. Always > 0 in practice. |
 | `s_h` | Sell price (EUR/kWh) = `spot/1000 − pv_sell_commission − pv_export_grid_fee`. NOT clipped at zero — can be negative during deep oversupply. |
-| `c_h` | Configured baseload (kWh) = `baseload_kwh_per_hour × {day_factor or night_factor}`. Constant in time per hour-of-day. |
+| `c_h` | Configured baseload (kWh) = `annual_consumption_kwh / 8760 × monthly_factor[month_of_h]`. Resolved deterministically from configuration. |
 | `p_h` | Hourly PV production (kWh), from internal estimator or external entity. Bounded in `[0, capacity_kwp · efficiency]`. |
 
 ### Marginal effective price (the metric that feeds D(k))
@@ -325,7 +343,7 @@ Computed directly from the 24 hourly `effective_eur_kwh` values per local day, u
 The forecast must remain a deterministic function of `(spot, weather, PV config, baseload config)` so the downstream optimizer's flexible-load decisions cannot feed back into next cycle's price forecast. Concretely:
 
 - **`_resolve_baseload(ts)` MUST NOT call `hass.states.get` or any HA entity-read API.** Enforced by a grep test in `tests/test_coordinator_pv.py`.
-- **The configured `baseload_kwh_per_hour` should represent the user's typical TOTAL hourly consumption** — bill-derived total demand including all loads (heat pump, EV, sauna, water heater, etc.). Static configuration cannot create optimizer feedback because it doesn't depend on observed consumption; the actual stability requirement is only about what the predictor reads from HA.
+- **The configured `annual_consumption_kwh` should represent the user's typical TOTAL annual consumption** — bill-derived total demand including all loads (heat pump, EV, sauna, water heater, etc.). Static configuration cannot create optimizer feedback because it doesn't depend on observed consumption; the actual stability requirement is only about what the predictor reads from HA.
 - **`_read_external_pv_forecast()` MAY read an HA entity** because the PV forecast is weather-driven and independent of optimizer decisions — no feedback loop is created.
 
 #### Why "typical total" not "non-flexible only" — worked example
@@ -339,13 +357,9 @@ Sunny noon, 4 kWh PV, heat-pump household with 16 000 kWh/yr typical demand:
 
 With PV at only 2 kWh, Case B correctly returns m_h ≈ 14 c/kWh (PV mostly absorbed by typical demand, only 0.17 kWh headroom). Case A would have returned ~10 c/kWh — still optimistic. Both cases satisfy the stability invariant because both are static config; Case B is **more accurate** because the PV/grid ratio that drives the marginal cost is genuinely a function of total demand, not non-flex demand.
 
-#### v2.3 → v2.3.1 doc-fix note
+#### Baseload schema
 
-The v2.3.0 release shipped with help text saying baseload should be "non-flexible only" and an emphatic warning to exclude heat pump, EV, etc. **That guidance was incorrect** — it conflated two separate stability concerns. The actual stability requirement is only about what the predictor READS (no optimizer-influenced HA entities), not what the static configured value REPRESENTS. Users following the old guidance get the Case-A optimism bias on heat-pump days. Please raise your `baseload_kwh_per_hour` to typical TOTAL hourly consumption (≈ annual_bill_kWh / 8760).
-
-#### v2.4.0 baseload schema overhaul
-
-v2.4.0 replaces the three v2.3 fields (`baseload_kwh_per_hour`, `baseload_day_factor`, `baseload_night_factor`) with two friendlier ones:
+The PV-aware path uses two configuration fields to derive per-hour baseload:
 
 - **`annual_consumption_kwh`** (default 12 000) — the user's typical TOTAL annual household demand from the electricity bill. Single user-friendly number. Internally:
 
@@ -354,7 +368,7 @@ v2.4.0 replaces the three v2.3 fields (`baseload_kwh_per_hour`, `baseload_day_fa
               ≡ annual_consumption_kwh / 365 / 24 × monthly_factor[month_of_h]
   ```
 
-  where `monthly_factor` is the 12-element Finnish residential non-electric-heating seasonal profile defined in `const.py` (`FINLAND_RESIDENTIAL_MONTHLY_FACTORS`). Sum of factors = 12.00 exactly (normalization invariant); range ≈ ±19 % around the mean (Finnish 60°N latitude pattern: lighting-driven winter peak Dec/Jan, vacation/long-day trough Jul). Source: literature-derived from VTT Publications 289, Adato Energia DSO standard load profiles ("tyyppikäyrät"), Statistics Finland "Energy consumption in households" survey 2024. **TODO**: replace with verbatim values from Fingrid Open Data dataset #360 (BE03 typing curve) in a v2.4.x patch.
+  where `monthly_factor` is the 12-element Finnish residential non-electric-heating seasonal profile defined in `const.py` (`FINLAND_RESIDENTIAL_MONTHLY_FACTORS`). Sum of factors = 12.00 exactly (normalization invariant); range ≈ ±19 % around the mean (Finnish 60°N latitude pattern: lighting-driven winter peak Dec/Jan, vacation/long-day trough Jul). Source: literature-derived from VTT Publications 289, Adato Energia DSO standard load profiles ("tyyppikäyrät"), Statistics Finland "Energy consumption in households" survey 2024. **TODO**: replace with verbatim values from Fingrid Open Data dataset #360 (BE03 typing curve).
 
 - **`consumption_entity`** (optional) — any HA consumption sensor; the integration auto-detects type and smooths internally:
 
@@ -367,20 +381,10 @@ v2.4.0 replaces the three v2.3 fields (`baseload_kwh_per_hour`, `baseload_day_fa
 
   Smoothed value cached in `.storage/spot_price_predictor_consumption_cache.json`, recomputed at most once per day (not every coordinator cycle). 5 % hysteresis dead-band on the cached value prevents minor sensor noise from re-triggering coordinator updates.
 
-**Stability re-check under the v2.4 schema**:
+**Stability re-check**:
 
-- **Default mode** (`consumption_entity = ""`): `baseload(h)` is a deterministic function of `(annual_consumption_kwh, h)` only — no HA entity reads, fully open-loop. Identical safety property to Phase 1.
+- **Default mode** (`consumption_entity = ""`): `baseload(h)` is a deterministic function of `(annual_consumption_kwh, h)` only — no HA entity reads, fully open-loop.
 - **HA-sensor mode**: 14-day rolling average dampens a single-day perturbation to `1/14 ≈ 7 %`. Combined with the 5 % hysteresis dead-band, EMHASS rescheduling a 5 kWh load between days produces `5/14 ≈ 0.36 kWh` rolling change, only ~3 % of a 12 kWh/day baseline — within the dead-band, so the cached baseload value doesn't move and EMHASS sees a stable forecast.
-
-**Migration from v2.3.x**: when a config entry only carries the legacy `baseload_kwh_per_hour` field, the coordinator's `__init__` infers the equivalent annual value:
-
-```
-inferred_annual_kwh = baseload_kwh_per_hour
-                    × ((day_factor × 15 + night_factor × 9) / 24)
-                    × 8760
-```
-
-and logs an INFO line. The legacy fields stay in `entry.data` untouched until the user opens the Options dialog and re-saves, at which point they are dropped cleanly. A user who configured the v2.3.0 default (`baseload_kwh_per_hour = 0.8`, day_factor = 1.2, night_factor = 0.7) gets `inferred_annual_kwh ≈ 7660 kWh/yr` — clearly low for a typical Finnish heat-pump house, prompting them to re-tune to their actual bill.
 
 ### External PV forecast — supported attribute conventions
 
@@ -407,21 +411,17 @@ PV system parameters live in `consumer_pricing` adjacent fields and the optional
 | `pv_system_efficiency` | 0.85 | Lumped DC/AC + soiling + losses |
 | `pv_external_entity` | "" | Optional HA sensor that overrides internal estimator |
 | `pv_export_grid_fee` | 0 | Extra EUR/kWh fee on exported energy (above seller commission) |
-| `annual_consumption_kwh` (v2.4) | 12 000 | Typical TOTAL annual household demand from the bill, including PV self-consumption AND optimizer-controlled loads. Multiplied by the built-in Finnish residential monthly seasonal profile to get per-hour baseload. |
-| `consumption_entity` (v2.4, optional) | "" | Any HA consumption sensor (cumulative-kWh counter, daily/monthly utility_meter, instantaneous power). The integration auto-detects type and smooths internally over 14 days with 5 % hysteresis. Recommended placeholder: `sensor.energy_yesterday`. |
-| `baseload_kwh_per_hour` (v2.3, legacy) | 0.8 | Auto-migrated to `annual_consumption_kwh` on load. Kept for backwards compatibility; existing v2.3.x deployments continue to work unchanged until the user re-saves Options. |
-| `baseload_day_factor` (v2.3, legacy) | 1.2 | Auto-migrated; ignored in v2.4. |
-| `baseload_night_factor` (v2.3, legacy) | 0.7 | Auto-migrated; ignored in v2.4. |
+| `annual_consumption_kwh` | 12 000 | Typical TOTAL annual household demand from the bill, including PV self-consumption AND optimizer-controlled loads. Multiplied by the built-in Finnish residential monthly seasonal profile to get per-hour baseload. |
+| `consumption_entity` (optional) | "" | Any HA consumption sensor (cumulative-kWh counter, daily/monthly utility_meter, instantaneous power). The integration auto-detects type and smooths internally over 14 days with 5 % hysteresis. Recommended placeholder: `sensor.energy_yesterday`. |
 
-Setting `pv_capacity_kwp = 0` (the default) and leaving `pv_external_entity` empty disables all PV-aware outputs cleanly — the integration produces byte-identical no-PV outputs, equivalent to v2.2 behaviour.
+Setting `pv_capacity_kwp = 0` (the default) and leaving `pv_external_entity` empty disables all PV-aware outputs cleanly — the integration produces byte-identical no-PV outputs.
 
-### Out of scope (Phase 1)
+### Out of scope
 
-- **Battery storage** — adds a temporal state variable; defer to Phase 2.
+- **Battery storage** — adds a temporal state variable; deferred.
 - **Capacitated water-filling D(k)** — for very large flexible loads relative to PV capacity, the marginal-1-kWh model under-counts by ~`(load − pv_avail) × s_h` per hour. Acceptable for typical residential loads (heat pump, EV).
-- **Battery storage** — adds a temporal state variable; defer to a future release.
-- **Per-tilt second Open-Meteo fetch** — current implementation reuses the integration's existing 45°-S irradiance fetch with scalar correction. Phase 2 may add a per-system fetch for sharper accuracy.
-- **Spot-model retraining with PV** — model unchanged; PV is a post-prediction transform.
+- **Per-tilt second Open-Meteo fetch** — current implementation reuses the integration's existing 45°-S irradiance fetch with scalar correction.
+- **Spot-model retraining with PV** — the non-seasonal price model is PV-agnostic; PV is a post-prediction transform.
 
 ---
 
@@ -454,9 +454,9 @@ The system is driven by a single region config file (`config/regions/finland.yam
 2. **Create a new YAML file** (e.g., `sweden.yaml`)
 3. **Define local price API** — free API providing day-ahead spot prices
 4. **Configure holidays** — fixed dates, Easter-relative dates, and special rules
-5. **Add neighboring price sources** for cross-border features
+5. **Add neighboring price sources** for the duration model
 6. **Set consumer pricing** — VAT rate, energy tax, and distribution operator tariffs
-7. **Run training** with `--region sweden`
+7. **Refit** via the `spot_price_predictor.retrain_models` service with regional data cached locally
 
 See the AI prompt template in the expanded section below for identifying weather locations.
 
@@ -485,55 +485,45 @@ building stock.
 
 ## Accuracy and Retraining
 
-### Current performance (v2.3.0 — bundled v2.2 9-feature pruned model, 4-year training)
+### Current end-to-end performance
 
-**Hourly model:**
+Numbers below are from the most recent v26 benchmark on real FI data ([studies/results/V2_6_1_BENCHMARK.md](studies/results/V2_6_1_BENCHMARK.md)) — the configuration that ships today.
 
-| Metric | v2.1 (17 features) | v2.2 / v2.3 (9 features) | Change |
-|---|:---:|:---:|:---:|
-| MAE (training test split) | 23.94 EUR/MWh | **20.07 EUR/MWh** | −16% |
-| R² | 0.515 | **0.719** | +40% |
-| Walk-forward MAE (180-day holdout) | — | **20.99 EUR/MWh** | vs. AR(2) floor 37.82 |
+**Hourly model (spot point forecast):**
 
-**Duration model (Spearman ρ, last 365 days):**
+| Metric | Value |
+|---|:---:|
+| MAE (h = 24 … 168) | ≈ 10 EUR/MWh |
+| R² | ≈ 0.93 |
+| Threshold hit rate (high-price hours) | 98 % |
 
-| D(k) | Use case | ρ |
-|:---:|:-:|:---:|
-| D(4) | Cheapest 4h | 0.930 |
-| D(8) | Cheapest 8h | 0.937 |
-| D(24) | Daily avg | 0.940 |
+**Duration model (R², per D(k) index):**
 
-**v2.3 PV-aware D(k) validation** (post-prediction transform, no retraining; 5 kWp / 1 kWh-h baseload reference, 4-year backtest on 1,460 complete days): zero PAVA-monotonicity violations, PV-aware D(1) mean 6.90 c/kWh (std 6.0), bounded analytically in `[s_h, b_h]` per hour. Estimated annual savings vs grid-only D(4) ≈ 600 EUR/yr.
+- `dk_cheap[i]` and `dk_peak[i]` both achieve R² ≥ 0.95 at every i = 0 … 23 ([studies/results/V2_5_17_DK_FULL_RANGE.md](studies/results/V2_5_17_DK_FULL_RANGE.md)).
+- cheap_4 MAE 4.4 EUR/MWh, peak_4 MAE 6.9 EUR/MWh on the held-out window.
+
+**PV-aware D(k) validation** (5 kWp reference, 4-year backtest on 1,460 complete days): zero PAVA-monotonicity violations, PV-aware D(1) mean 6.90 c/kWh (std 6.0), bounded analytically in `[s_h, b_h]` per hour. Estimated annual savings vs grid-only D(4) ≈ 600 EUR/yr.
 
 ### Recommended retraining frequency
 
-**Retrain every 3-4 months (quarterly).**
+Quarterly is a reasonable default; the `RefitMonitor` calibrator also flags persistent drift over a 14-day window so users can refit on demand when the production environment changes (new wind capacity, regime shift, tariff change).
 
 ### How to retrain
 
-```bash
-cd HA-spot-price-predictor
-pip install -r requirements.txt
+The `spot_price_predictor.retrain_models` Home Assistant service refits the bundled artifacts in place. From Developer Tools → Services or an automation:
 
-# Retrain with latest data
-export FINGRID_API_KEY=your_key_here  # optional
-python -m src.train_model --region finland --fingrid-key YOUR_KEY
-
-# Generate monitoring dashboard
-python model_dashboard.py
-
-# Generate 7-day forecast preview
-python forecast_dashboard.py
-
-# Copy coefficients to HA integration
-cp output/model_coefs.json custom_components/spot_price_predictor/data/model_coefs_default.json
+```yaml
+service: spot_price_predictor.retrain_models
+data:
+  layers: ["seasonal", "spike", "solar"]   # omit to refit all three
+  # fingrid_api_key: "..."                  # only needed for the solar layer
 ```
 
-### Half-life parameter
+The service atomically rewrites the three JSON artifacts under `custom_components/spot_price_predictor/data/` and the coordinators auto-reload them on the next update cycle. On completion it fires the `spot_price_predictor_models_retrained` event so automations can react.
 
-The `half_life_days` setting (default: 120) controls how the model weights historical data during training. Data from 120 days ago has 50% weight. Optimized for Finland's rapidly changing wind capacity.
+### Open question — per-input accuracy contribution
 
-The duration model uses a separate forgetting factor λ = 0.960 (half-life 17 days), optimized for tracking weather-regime changes.
+A leave-one-out / SHAP-style ablation over the current Ridge coefficient set would let us pin down the marginal contribution of each L2 feature and re-evaluate inputs that were validated in earlier feasibility work (nuclear deficit, SE3 transit-capacity proxy). That study is not in scope of this documentation pass — it belongs on a separate experimental branch and would only be merged based on evidence against `main`.
 
 ---
 
@@ -544,31 +534,28 @@ HA-spot-price-predictor/
 ├── README.md
 ├── TECHNICAL_GUIDE.md           # This document
 ├── TEKNINEN_TOTEUTUS.md         # Finnish translation
+├── INSTALLATION.md              # Step-by-step setup guide
 ├── config/regions/
 │   └── finland.yaml             # Central configuration (all parameters)
-├── src/
-│   ├── train_model.py           # Training pipeline
-│   ├── features.py              # Feature engineering (training)
-│   ├── data_sources.py          # API clients (training)
-│   └── holidays.py              # Holiday calculator
 ├── custom_components/
 │   └── spot_price_predictor/    # HA HACS integration
-│       ├── model.py             # Pure Python inference (hourly + duration)
-│       ├── features.py          # Pure Python feature builder
-│       ├── coordinator.py       # HA data coordinator
-│       ├── sensor.py            # HA sensor entities
-│       ├── api_client.py        # Async API clients
-│       ├── const.py             # Constants and defaults
+│       ├── __init__.py          # Entry point + service registration (incl. retrain_models)
+│       ├── coordinator.py       # Data fetch + V26Pipeline orchestration
+│       ├── v26_pipeline.py      # L1+L2+L3+L4 pipeline + softplus floor + DtACI
+│       ├── seasonal_decomposition.py  # L1 component fitter / lookup
+│       ├── hourly_calibration.py      # DtACI bias / fan-chart / refit-monitor
+│       ├── price_floor.py             # Softplus floor
+│       ├── solar_clear_sky.py         # Clear-sky × cloudiness solar sub-model
+│       ├── retrain.py                 # Retraining orchestrator (HA service backend)
+│       ├── sensor.py                  # HA sensor entities
+│       ├── api_client.py              # Async API clients
+│       ├── const.py                   # Constants and defaults
 │       └── data/
-│           ├── model_coefs_default.json  # Bundled model
-│           └── finland.yaml              # Bundled config
+│           ├── seasonal_components_default.json
+│           ├── spike_model_default.json
+│           ├── solar_submodel_default.json
+│           └── finland.yaml
 ├── ha_dashboard.yaml            # Home Assistant Lovelace dashboard (ApexCharts + Mushroom)
-├── model_dashboard.py           # Model monitoring dashboard generator
-├── forecast_dashboard.py        # Live forecast dashboard generator
-├── studies/                     # Archived analysis scripts
-├── tests/                       # 267 unit tests (33 PV-aware in v2.3)
-└── output/                      # Generated artifacts
-    ├── model_coefs.json
-    ├── model_dashboard.html
-    └── forecast.html
+├── studies/                     # Refit scripts (build_seasonal_components, v2513_layer4_spike_model, v253_solar_submodel) and historical analyses
+└── tests/                       # Unit + integration tests
 ```
