@@ -1,4 +1,4 @@
-# Tekninen toteutus: HA-spot-price-predictor (v2.8.0)
+# Tekninen toteutus: HA-spot-price-predictor (v2.8.1)
 
 Sähkön kuluttajahinnan ja D(k) = CVaR -kestokustannusten ennustaminen Home Assistantiin. Tuottaa 170 tunnin kuluttajahintaennusteen (EUR/kWh) ja 7 vrk D(k) halpa/kallis -kestokäyrät kuormanohjauksen kustannusoptimointiin, käyttäen nelitasoista putkea — L1 kausivaihteludekompositio, L2 fysiikkapohjainen Ridge, L3 AR(1)-momentum, L4 GPD POT -piikkimalli — yhdessä softplus-pohjavyöhykkeen ja tuntittaisen DtACI-kalibroijan kanssa. Valinnaisesti rikastaa jokaisen ennustetunnin PV-tietoisella marginaalisella efektiivisellä hinnalla `m_h` ja PV-tietoisilla D(k)-käyrillä, kun käyttäjä konfiguroi kotitalouden aurinkopaneelit.
 

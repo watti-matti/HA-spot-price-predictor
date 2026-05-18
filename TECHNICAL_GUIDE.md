@@ -1,4 +1,4 @@
-# Documentation: HA-spot-price-predictor (v2.8.0)
+# Documentation: HA-spot-price-predictor (v2.8.1)
 
 Consumer electricity price and D(k) = CVaR duration cost forecasting for Home Assistant. Produces 170-hour consumer price forecasts (EUR/kWh) and 7-day D(k) cheap/peak duration curves for cost-optimal load scheduling, using a four-layer pipeline — L1 seasonal decomposition, L2 physics-feature Ridge, L3 AR(1) momentum, L4 GPD POT spike model — together with a softplus negative-price floor and an hourly DtACI calibrator. Optionally augments every forecast hour with a PV-aware marginal effective price `m_h` and parallel PV-aware D(k) curves when the user configures household solar.
 

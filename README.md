@@ -2,7 +2,7 @@
 
 [![HACS Integration](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-2.8.0-blue.svg)](https://github.com/watti-matti/HA-spot-price-predictor/releases/tag/v2.8.0)
+[![Version](https://img.shields.io/badge/version-2.8.1-blue.svg)](https://github.com/watti-matti/HA-spot-price-predictor/releases/tag/v2.8.1)
 
 **Forecast consumer electricity costs and D(k) duration curves up to 7 days ahead** using machine learning with physics-based weather features, cross-border trade analysis, and nuclear outage awareness.
 
