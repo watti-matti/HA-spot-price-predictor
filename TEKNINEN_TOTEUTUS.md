@@ -1,36 +1,38 @@
-# Tekninen toteutus: HA-spot-price-predictor (v2.4.0)
+# Tekninen toteutus: HA-spot-price-predictor (v2.8.1)
 
-Sähkön kuluttajahinnan ja D(k) = CVaR -kestokustannusten ennustaminen Home Assistantiin. Tuottaa 170 tunnin kuluttajahintaennusteen (EUR/kWh) ja 7 vrk D(k) halpa/kallis -kestokäyrät kuormanohjauksen kustannusoptimointiin, käyttäen log-lineaarista Ridge-regressiota fysiikkapohjaisilla piirteillä ja useiden datalähteiden integrointia. Valinnaisesti rikastaa jokaisen ennustetunnin PV-tietoisella marginaalisella efektiivisellä hinnalla `m_h` ja PV-tietoisilla D(k)-käyrillä, kun käyttäjä konfiguroi kotitalouden aurinkopaneelit.
+Sähkön kuluttajahinnan ja D(k) = CVaR -kestokustannusten ennustaminen Home Assistantiin. Tuottaa 170 tunnin kuluttajahintaennusteen (EUR/kWh) ja 7 vrk D(k) halpa/kallis -kestokäyrät kuormanohjauksen kustannusoptimointiin, käyttäen nelitasoista putkea — L1 kausivaihteludekompositio, L2 fysiikkapohjainen Ridge, L3 AR(1)-momentum, L4 GPD POT -piikkimalli — yhdessä softplus-pohjavyöhykkeen ja tuntittaisen DtACI-kalibroijan kanssa. Valinnaisesti rikastaa jokaisen ennustetunnin PV-tietoisella marginaalisella efektiivisellä hinnalla `m_h` ja PV-tietoisilla D(k)-käyrillä, kun käyttäjä konfiguroi kotitalouden aurinkopaneelit.
 
 ## Arkkitehtuuri
 
-Järjestelmä koostuu kahdesta vaiheesta: **koulutus** (Python, ajetaan ajoittain PC:llä) ja **päättely** (Home Assistant -integraatio, jatkuvasti päällä). v2.3 lisää valinnaisen **päättelyn jälkeisen PV-muunnoksen**, joka ei vaadi uudelleenkoulutusta.
+Järjestelmässä on kaksi vaihetta: **päättely** (Home Assistant -integraatio, jatkuvasti päällä) ja **uudelleenkoulutus** (sovittaa mukana tulevat artefaktit pyynnöstä uudelleen Home Assistantin palvelun kautta). Molemmat vaiheet jakavat saman koodipolun `custom_components/spot_price_predictor/`:in alla.
 
-### Koulutusputki (muuttumaton v2.2:sta)
+### Uudelleenkoulutusvirta (Home Assistantin palvelu `spot_price_predictor.retrain_models`)
 
 ```
-Sahkotin API  ──┐
-Open-Meteo API ─┼──> Piirteiden käsittely ──> Log-lineaarinen Ridge ──> model_coefs.json
-Elpriset API ───┤    (9 merkkivalidoitua       + Tehovenytys            (tunti- ja kesto-
-Elering API ────┤     piirrettä v2.2-           + Kestomalli)            mallin kertoimet)
-Fingrid API ────┘     karsinnan jälkeen)
+Välimuistissa olevat hinta-     ──> studies/build_seasonal_components.py  ──> data/seasonal_components_default.json
+ja sääparquetit / Sahkotin          studies/v2513_layer4_spike_model.py     ──> data/spike_model_default.json
+                                    studies/v253_solar_submodel.py          ──> data/solar_submodel_default.json
+                                                                                  │
+                                                                                  v
+                                                                Atomiset JSON-kirjoitukset + Pipeline uudelleenlataus
+                                                                (laukaisee tapahtuman spot_price_predictor_models_retrained)
 ```
 
 ### Home Assistant -käyttöönotto
 
 ```
 Open-Meteo  ──┐
-Elpriset    ──┼──> Piirrerakentaja ──> Tuntimalli     ──> Spot-/kuluttajahinta-ennuste (170h)
-Elering     ──┤    (puhdas Python)     + Kestomalli       + D(k) halpa/kallis (7 vrk)
-Fingrid     ──┘                        (puhdas Python)    │
-Nord Pool UMM ─────────────────────────┘                  │
-                                                          │
-                                                          v
-                              (v2.3) PV-tietoinen muunnos ┴─> + effective_eur_kwh per tunti
-                              [valinnainen]                    + dk_cheap_pv / dk_peak_pv (7 vrk)
-                              ↑
-                              └── Open-Meteo irradianssi (sisäinen)
-                                  TAI pv_external_entity (Forecast.Solar / EMHASS / malli)
+Elpriset    ──┼──> Koordinaattori ──> Putki (L1 kausi + L2 Ridge + L3 AR(1) + L4 GPD POT)
+Elering     ──┤    + Datahaku        + Softplus-pohjavyöhyke + Tuntittainen DtACI-kalibroija
+Fingrid     ──┤    + Tariffi-        + Kestomalli (segmenttihierarkkinen Ridge + PAVA)
+Sahkotin    ──┤    muunnos                      │
+Nord Pool UMM ┘                                 v
+                                       Spot-/kuluttajahinta-ennuste (170h, P5/P25/P50/P75/P95 -viuhka)
+                                       + D(k) halpa/kallis (7 vrk)
+                                       + (valinnainen) PV-tietoinen efektiivinen hinta ja PV-D(k)
+                                       ↑
+                                       └── Open-Meteo irradianssi (sisäinen)
+                                           TAI pv_external_entity (Forecast.Solar / EMHASS / malli)
 ```
 
 ### Kojelaudat
@@ -58,94 +60,115 @@ Kaikki datalähteet konfiguroidaan tiedostossa `config/regions/finland.yaml`.
 
 ### Rajat ylittävät hintalähteet (ilmaiset, ei tunnistautumista)
 
-| Lähde | Haetut alueet | Käytössä v2.2-mallissa? |
-|-------|---------------|-------------------------|
-| [Elpriset](https://www.elprisetjustnu.se/api/v1/prices) | SE3 | Kyllä — `ar_se3` + `export_potential_se3` |
-| [Elpriset](https://www.elprisetjustnu.se/api/v1/prices) | SE1 | Haetaan vain spread-/historiakontekstia varten; `ar_se1` karsittiin v2.2:ssa (kollineaarinen `ar_se3`:n kanssa, koska FI↔SE-siirtoyhteys päättyy SE3-alueelle) |
-| [Elering API](https://dashboard.elering.ee/api/nps/price) | EE | Kyllä — `ar_ee` |
+| Lähde | Haetut alueet | Käyttääkö nykyinen ei-kausi-osan malli? |
+|-------|---------------|-----------------------------------------|
+| [Elpriset](https://www.elprisetjustnu.se/api/v1/prices) | SE3 | Ei — käytössä kestomallissa ja kojelaudoissa |
+| [Elpriset](https://www.elprisetjustnu.se/api/v1/prices) | SE1 | Ei — apukäyttö (spread / historiakonteksti) |
+| [Elering API](https://dashboard.elering.ee/api/nps/price) | EE | Ei — käytössä kestomallissa ja kojelaudoissa |
 
-AR(2)-mallit sovitetaan naapurihintojen poikkeamiin tuntiprofiileista. Analyysissa vahvistettu vahva autokorrelaatio (viikkotason lag-1 r = 0,54–0,73, suunnan pysyvyys 100 %).
+Rajat ylittävät hinnat ovat osa datakerrosta kestomallia ja historiakonteksti-attribuutteja varten, mutta ne eivät ole ei-kausi-osan hintamallin piirteitä.
 
 ### Valinnainen verkkodata (ilmainen API-avain)
 
 | Lähde | Tarkoitus |
 |-------|-----------|
-| [Fingrid Open Data](https://data.fingrid.fi) | Ydinvoimatuotanto (#188) `nuclear_x_scarcity`-piirteen interaktiotermiin |
+| [Fingrid Open Data](https://data.fingrid.fi) | Ydinvoimatuotanto (#188), kulutus-/tuuli-/aurinkoennusteet (#165 / #246 / #247) — kestomalli ja apuvirrat |
 
-Rekisteröidy ilmaiseksi osoitteessa data.fingrid.fi. Ilman Fingrid-avainta koulutus käyttää vain sää- ja rajat ylittäviä piirteitä, jolloin syntyvä malli jättää `nuclear_x_scarcity` -piirteen pois (8 mukana tulevasta 9:stä). Päättely voi silti ladata mukana tulevan v2.2:n 9-piirteisen mallin — `nuclear_x_scarcity` antaa arvon 0, kun ydinvoimadataa ei syötetä.
+Rekisteröidy ilmaiseksi osoitteessa data.fingrid.fi. Ilman Fingrid-avainta ei-kausi-osan hintamalli toimii muuttumattomana; kestomalli käyttää säävetoisia ominaisuuksiaan.
 
 ### Ydinvoimaseisokkiaikataulu (ilmainen, ei avainta)
 
 | Lähde | Tarkoitus |
 |-------|-----------|
-| [Nord Pool UMM](https://ummapi.nordpoolgroup.com/messages) | Suunnitellut ydinvoimaseisokit ennustehorisontin kapasiteettiin |
+| [Nord Pool UMM](https://ummapi.nordpoolgroup.com/messages) | Suunnitellut ydinvoimaseisokit — apuvirta, ei ei-kausi-osan hintamallissa |
 
 ---
 
 ## Piirteiden suunnittelu
 
-Koulutusputki voi laskea enintään 17 merkkivalidoitua ehdokaspiirrettä, mutta v2.2:n leave-one-out -redundanssianalyysi osoitti, että **vain 9 niistä tuo itsenäistä signaalia** — loput 8 olivat joko kollineaarisia jäljelle jäävien kanssa tai eivät tuoneet mitattavaa parannusta walk-forward MAE -mittariin. Mukana tuleva v2.2-malli (toimitetaan muuttumattomana myös v2.3:ssa) käyttää tasan näitä 9 piirrettä. Kaikki säädettävät parametrit ovat `config/regions/finland.yaml` -tiedoston `features`-osiossa.
+Ei-kausi-osan hintamalli on tarkoituksellisesti kompakti: kuusi Ridge-piirrettä yhdistettynä AR(1)-momentumtermiin ja raskasarvoiseen piikkikerrokseen. Täydellinen piirrejärjestys on määritelty tiedostossa `custom_components/spot_price_predictor/pipeline.py:68-75` (vakio `RIDGE_FEATURES`) — alla oleva dokumentaatiotaulukko vastaa täsmälleen tätä järjestystä.
 
-### Mukana tulevat 9 piirrettä
+### L1 — Kausivaihteludekompositio
 
-| # | Piirre | Kategoria | Lähde | Etumerkki | Tehtävä |
-|---|--------|-----------|-------|:---:|---------|
-| 1 | `wind_speed_weighted` | Tarjonta | Open-Meteo (7 kapasiteettipainotettua FI-pistettä) | − | Hinnan päävetäjä — enemmän tuulta, alempi spot |
-| 2 | `month_cos` | Kausivaihtelu | Kalenteri | syklinen | Vuotuinen lämmityskuormitus (talven huippu) |
-| 3 | `is_holiday` | Kalenteri | Pyhäpäivälaskuri / HA Workday | − | Pyhäpäivät → alempi teollisuuden kysyntä |
-| 4 | `hdd_sq` | Lämpökysyntä | Open-Meteo lämpötila | + | `max(0, 17°C − T)²` — kylmän epälineaarinen vahvistus |
-| 5 | `wind_log_scarcity` | Tuulen epälineaarisuus | Open-Meteo | + | `log1p(max(0, 8 − tuuli))` — terävä hintapiikki kun tuuli alle 8 m/s |
-| 6 | `ar_se3` | Rajat ylittävä | elprisetjustnu.se SE3 | + | AR(2) poikkeama SE3:n tuntityyppiprofiilista, normalisoitu ÷100 — kuvaa FI↔SE3-siirtoyhteyttä |
-| 7 | `ar_ee` | Rajat ylittävä | Elering EE | + | AR(2) poikkeama EE:n tuntityyppiprofiilista, normalisoitu ÷100 — kuvaa FI↔EE-yhteyttä |
-| 8 | `export_potential_se3` | Rajat ylittävä | SE3-hintaero | − | `max(0, −spread_7d_fi_se3)` — kun FI on halvempi kuin SE3, FI→SE3-vienti nostaa FI-hintaa |
-| 9 | `nuclear_x_scarcity` | Ydinvoima | Fingrid #188 + Nord Pool UMM | + | `nuclear_deficit × wind_log_scarcity` — seisokki vahvistaa sääpohjaista niukkuutta |
+`custom_components/spot_price_predictor/seasonal_decomposition.py` toteuttaa additiivisen Moazeni–Powell-dekomposition: jokainen syöteaikasarja jaetaan tuntittaisiin, päivittäisiin ja viikoittaisiin komponentteihin, sovitetaan koulutushistorialla ja toimitetaan tiedostossa `data/seasonal_components_default.json`. Päättelyvaiheessa putki vähentää komponentit tuottaen kausitasoittuneet residuaalit (`Y_*`). FI-hinta käyttää koko tunti+päivä+viikko-syvyyden; lämpötila käyttää tunti+viikko; tuuli ja aurinko keskitetään paikallisesti L1:n sijaan ennen Ridge-vaihetta.
 
-AR(2)-mallit hajottavat naapurihinnat deterministiseen päiväprofiiliin (arkipäivä vs viikonloppu, 24 tuntia kumpaakin) plus stokastinen AR(2)-poikkeama. AR-poikkeama vaimennetaan (maksimijuuri < 0,95), joten useamman askeleen ennusteet konvergoituvat päiväprofiiliin noin 24 tunnissa, mikä takaa vakauden koko 170 tunnin ennusteikkunassa.
+### L2 — Ei-kausi-osan Ridge-regressio
 
-`nuclear_x_scarcity` vaatii ilmaisen Fingrid API-avaimen reaaliaikaiseen ydinvoimadataan; suunnitellut seisokkiaikataulut tulevat [Nord Pool UMM -alustalta](https://umm.nordpoolgroup.com/) (julkinen rajapinta, ei avainta). Ilman Fingrid-avainta koulutus jättää tämän yhden piirteen pois (mallissa 8 piirrettä) ja päättely voi silti ladata mukana tulevan 9-piirteisen mallin — piirre antaa vain arvon 0, kun ydinvoimadataa ei syötetä.
+Kuusi piirrettä kasataan suunnittelumatriisiin tässä järjestyksessä (vastaa `RIDGE_FEATURES`):
 
-### v2.2:ssa karsitut piirteet (ja syy)
+| # | Piirre (koodinimi) | Rakennetaan kohdassa | Määritelmä |
+|---|---|---|---|
+| 1 | `intercept` | `pipeline.py:241` | Vakio 1. Kaappaa kausitasoittuneen keskiarvon. |
+| 2 | `Y_fi_lag168` | `pipeline.py:242` | Kausitasoittunut FI-residuaali 7 päivää aiemmin — paikallisen markkinaregiimin omanvältin muisti. Kylmäkäynnistyksessä nollia. |
+| 3 | `is_workday` | `pipeline.py:243`, lasketaan `:251-256` | `weekday < 5`. Kaappaa teollisuuden kysyntäkuvion. |
+| 4 | `Y_sigmoid_wind_rho` | `pipeline.py:244`, apufunktio `_sigmoid_turbine_rho` `:87-93` | `σ((tuuli − 7,5) / 1,5) × ρ(T) / 1,225`. Sigmoidaalinen tuuliturbiinikäyrä skaalattuna ilman suhteellisella tiheydellä; fysiikkapohjainen tarjonta-ajuri. Keskitetään paikallisesti ennen Ridgeä. |
+| 5 | `Y_solar_effective` | `pipeline.py:245`, apufunktio `_solar_effective` `:96-102` | `GHI × (1 − 0,004 · max(0, T_cell − 25))`, missä `T_cell = T + 0,03 · GHI`. Lämpötilakompensoitu efektiivinen irradianssi. Keskitetään paikallisesti ennen Ridgeä. |
+| 6 | `Y_temp` | `pipeline.py:246`, kausitasoitetaan `:239` | Kausitasoittunut lämpötila — lämmityskuorman residuaalisignaali. |
 
-Leave-one-out -pyyhkäisy poisti 8 ehdokasta v2.0/v2.1:n 17-piirteisestä joukosta:
+Ridge-kerroinvektori on tiedostossa `data/spike_model_default.json` avaimella `ridge_coef`; se sovelletaan kohdassa `pipeline.py:367` lausekkeena `ridge = X @ self._ridge_coef`.
 
-| Karsittu piirre | Syy |
+### L3 — AR(1)-momentum
+
+Ennustehorisontilla `h` AR(1)-termin osuus on `φ^h · η(t₀−1)`, missä `η(t₀−1)` on viimeisin havaittu kausitasoittunut FI-residuaali ja `φ` on AR(1)-kerroin (tyypillisesti `φ ≈ 0,904`) ladattuna tiedostosta `spike_model_default.json`. Toteutus: `pipeline.py:260-266`; residuaalitila päivitetään funktiossa `update_with_actuals()` (`:429-446`).
+
+### L4 — GPD POT -piikkimalli
+
+Normaalirungon ja yleistetyn Pareto-hännän sekoitusta otetaan 500 näytettä L1+L2+L3-pisteen ennusteen ympärillä, mikä tuottaa P5/P25/P50/P75/P95-viuhkavyöt. Parametrit tiedostossa `spike_model_default.json`:
+
+| Parametri | Tehtävä |
 |---|---|
-| `solar_irradiance_weighted` | Suomen aurinkoenergian osuus liian pieni vaikuttaakseen spot-hintaan; kerroin oli erottumaton nollasta. |
-| `hour_sin`, `hour_cos` | Tunti-vuorokaudessa-kuvio kaappautuu täysin AR(2):n päivätyyppiprofiileihin (`ar_se3` / `ar_ee`). |
-| `month_sin` | Vuoden kuukausi kaappautuu riittävästi pelkällä `month_cos`:lla (lämmityshuippu ↔ kosinin ääriarvo). |
-| `wind_calm_x_peak_am`, `wind_calm_x_peak_pm` | Voimakkaasti kollineaarisia `wind_log_scarcity`:n kanssa; lisäys-MAE-hyöty oli pyyhkäisyssä negatiivinen. |
-| `ar_se1` | Voimakkaasti kollineaarinen `ar_se3`:n kanssa. Fenno-Skan / Fenno-Skan 2 -kaapelit yhdistävät FI:n SE3-alueelle, eivät SE1:lle, joten SE3 hallitsee siirtosignaalia. SE1 haetaan edelleen spread-kontekstia varten mutta ei enää piirteenä. |
-| `nuclear_deficit` | Yksinään ydinvoimavajeesta tuli vain vähän hyötyä, kun `nuclear_x_scarcity` (interaktiotermi) säilytettiin. Molempien sisällyttäminen aiheutti multikollineaarisuutta. |
+| `stats.eta_train_mean`, `stats.eta_train_sigma` | Normaalirungon keskiarvo ja skaala residuaalille `η` |
+| `gpd_right.{threshold, shape, scale, p_exceed}` | Oikean hännän ylitysmalli |
+| `gpd_left.{threshold, shape, scale, p_exceed}` | Vasemman hännän ylitysmalli |
 
-Karsinnan vaikutus (koulutuksen testijako, 4 vuoden historia): MAE 23,94 → 20,07 EUR/MWh (−16 %); R² 0,515 → 0,719 (+40 %). Walk-forward MAE 180 vrk testijaksolla on 20,99 EUR/MWh, selvästi alle pelkän AR(2):n naapurihintaperustason 37,82.
+Näytteistäjän toteutus: `_sample_fan_chart` (`pipeline.py:270-320`). Viuhkavyöt näkyvät `forecast`-sensorissa avaimilla `P5_eur_mwh` … `P95_eur_mwh`.
 
-### Mukana tuleva malli vs uudelleenkoulutus: piirremäärä
+### Softplus-pohjavyöhyke ja tuntittaiset DtACI-kalibroijat
 
-Mukana tuleva `model_coefs_default.json` on kiinteästi 9-piirteinen v2.2-malli riippumatta siitä mitä rajapintoja päättely tavoittaa. Jos koulutat paikallisesti uudelleen (`python -m src.train_model …`), syntyvä malli käyttää suurinta 9:n osajoukkoa, jonka datalähteesi tukevat:
+Ennen viuhkavöiden näytteistämistä L1+L2+L3-keskiarvo rajataan alarajaan −5 EUR/MWh softplus-funktiolla (`price_floor.py`). Tuntittainen DtACI-biaskorjaaja (`hourly_calibration.HourlyBiasCorrector`, puoliintumisaika 14 vrk, 168 tunnin lämmittely) vähentää hitaasti liikkuvan systemaattisen biaksen; rinnakkainen `HourlyFanChartCalibrator` mukauttaa tuntittaiset viuhkaleveydet seuraamaan 0,5:n ja 0,9:n marginaalikattavuustavoitteita. `RefitMonitor` merkitsee jatkuvan ryöminnän 14 vrk ikkunassa (`spot_price_predictor_pipeline/refit_monitor.json`).
 
-| Saatavilla oleva data | Koulutetut piirteet | Huomautukset |
-|---|:---:|---|
-| Vain Open-Meteo | 5 | Pudottaa `ar_se3`, `ar_ee`, `export_potential_se3`, `nuclear_x_scarcity` |
-| + elprisetjustnu.se (SE3) + Elering (EE) | 8 | Pudottaa `nuclear_x_scarcity` |
-| + Fingrid (ilmainen avain) | **9** | Täysi mukana tulevan mallin piirrejoukko |
+### Arvioidut mutta ei tällä hetkellä aktiivisesti käytetyt syötteet
+
+Aikaisemmassa toteutettavuustyössä tutkittiin ydinvoimavajesignaalin `nuclear_deficit ∈ [0, 1]` (Fingrid-tietojoukko #188) ja SE3:n rajat ylittävän siirtokapasiteetin / vientispredin proksin käyttöä piirteinä. Nykyinen ei-kausi-osan malli ei käytä kumpaakaan:
+
+- Fingrid-ydinvoimadata haetaan edelleen (`coordinator.py:871`) ja näkyy kestomallissa sekä diagnostiikassa, mutta ei ole `RIDGE_FEATURES`-listalla.
+- SE3 / SE1 / EE -hinnat haetaan edelleen (`coordinator.py:852`) ja syötetään kestomalliin; putken kutsupiste (`coordinator.py:1210-1215`) välittää vain sään ja lag168-residuaalin.
+
+Kummankin signaalin uudelleenkäyttöönotto vaatisi tuoreen ablaation nykyistä kerroinvektoria vastaan ja on sijoitettu erilliseen kokeelliseen haaraan — katso "Avoin kysymys — syötekohtainen tarkkuusvaikutus" alla.
+
+### Avoin kysymys — syötekohtainen tarkkuusvaikutus
+
+Ainoa tässä repossa nykyisin julkaistu syötekohtainen ablaatio on [studies/results/v2511_physics_features.md](studies/results/v2511_physics_features.md), joka arvioi sigmoid-tuuli / aurinko / raakatuuli -variantteja perusasetelmaa vastaan. Se on hyödyllinen taustaluku fysiikkapiirteiden suunnittelulle, mutta ei pinnoittele kunkin L2-piirteen marginaalivaikutusta nykyiseen kerroinvektoriin. Leave-one-out -tutkimus nykyiselle `ridge_coef`-vektorille on ehto syötelistan muutoksille.
 
 ---
 
 ## Malliarkkitehtuuri
 
-### Tuntimalli: Log-lineaarinen Ridge-regressio
+### Tuntimalli: Nelitasoinen putki
 
-**Ennustekaava:** `hinta = skaala × max(0, exp(Σ kerroin_i × piirre_i + vakio) − log_offset) ^ potenssi`
+Tuntittaisen pisteen ennuste on kolmen additiivisen kontribuution summa, softplus-rajattu ja bias-korjattu:
 
-Log-muunnos käsittelee luonnollisesti epälineaarisen hinta-niukkuussuhteen: lähes lineaarinen matalilla hinnoilla, eksponentiaalinen vahvistus korkeilla hinnoilla.
+```
+pipeline_mean(h) = L1_seasonal_fi(h)
+            + L2_ridge(h)          # kuusi yllä olevaa piirrettä
+            + L3_ar(h)              # φ^h · η(t₀−1)
+            - hourly_bias_ema(h)    # DtACI-biaskorjaaja
+            (softplus-pohjavyöhyke −5 EUR/MWh:llä)
+```
 
-- Ridge-regressio kohteella `log(hinta + log_offset)` (v2.2 viritti `log_offset`-arvon 55 → 100 sopimaan paremmin 2025–2026 hintaregiimiin)
-- **9 merkkivalidoitua piirrettä** v2.2:n mukana tulevassa mallissa (8 ehdokaspiirrettä karsittiin leave-one-out -redundanssipyyhkäisyssä)
-- Tehovenytys (`skaala`, `eksponentti`) sovitetaan Nelder-Mead-optimoinnilla testijoukolla
-- Aikapainotus: puoliintumisaika 120 päivää (alueittain konfiguroitavissa)
-- Ridge α = 50, laajennettu matriisi (ei sakkoa vakiotermille)
+Täysi näytteistäjä tuottaa sen jälkeen viuhkavyöt `P5_eur_mwh` … `P95_eur_mwh` pisteen ennusteen (`spot_eur_mwh`) ympärille. Julkinen sisääntulo: `Pipeline.compute_forecast` (`pipeline.py:324`).
 
-**Koulutus:** 4+ vuoden historiallinen data, aikajärjestetty 85/15 jako, eräpohjainen normaaliyhtälöiden ratkaisu (512 riviä). v2.3 toimittaa saman kerroinkartiotiedoston kuin v2.2 — PV-tietoiset tulosteet lasketaan koordinaattorissa, ei koulutetussa mallissa.
+Rakentamisen yhteydessä ladattavat artefaktit:
+
+- `data/seasonal_components_default.json` — L1-komponentit FI-hinnalle ja sääsyötteille.
+- `data/spike_model_default.json` — L2 Ridge-kertoimet (`ridge_coef`), L3 AR(1) (`ar1_phi`), L4 Normaalirungon + GPD-hännän parametrit (`stats`, `gpd_left`, `gpd_right`).
+- `data/solar_submodel_default.json` — selkeän taivaan × pilvisyys -aurinkotuotantomalli, jota PV-tietoinen polku käyttää.
+
+Pysyvä kalibroijan tila kansiossa `<config>/.storage/spot_price_predictor_pipeline/`:
+
+- `hourly_bias.json` — DtACI-biaskorjaajan tila.
+- `hourly_fan_chart.json` — viuhkan DtACI-paketti kattavuustavoitteittain.
+- `refit_monitor.json` — refit-monitorin ryömintälaukaisutila.
 
 ### Kestomalli: Segmenttihierarkkinen Ridge + PAVA
 
@@ -153,12 +176,12 @@ Ennustaa D(k) = keskimääräisen spot-hinnan halvimmille k tunnille päivässä
 
 **PAVA** (Pool Adjacent Violators Algorithm) on isotonisen regression menetelmä, joka pakottaa monotonisuuden. Koska D(k) on määritelmän mukaan ei-vähenevä — useampien tuntien lisääminen keskiarvoon voi sisältää vain yhtä kalliita tai kalliimpia tunteja — PAVA yhdistää itsenäisten Ridge-ennusteiden rikkomukset keskiarvoistamalla vierekkäisiä pareja kunnes D(1) ≤ D(2) ≤ ... ≤ D(N) toteutuu kaikkialla.
 
-**Arkkitehtuuri (Phase A halpa/kallis -kaksisuuntainen koulutus):**
+**Arkkitehtuuri (halpa/kallis -kaksisuuntainen koulutus):**
 - 4 päiväsegmenttiä tariffirajojen mukaan: yö (22-07, 9 tasoa), aamu (07-12, 5 tasoa), keskipäivä (12-18, 6 tasoa), ilta (18-22, 4 tasoa). Yhteensä 24 tuntipaikkaa.
 - Jokainen `(segmentti, suunta, k)`: itsenäinen Ridge-malli. Jokainen segmentti sisältää `cheap_models` (k = 1..n_levels) ja `peak_models` (k = 1..n_levels). Mukana tulevia Ridge-sovituksia yhteensä = 2 × (9 + 5 + 6 + 4) = **48 pientä mallia**.
 - Segmenttikohtaiset **12 piirrettä** (segmentin tuntien yli laskettuja keskiarvoja):
   `wind_mean`, `solar_mean`, `hdd_mean`, `se3_mean`, `se1_mean`, `nuclear_deficit`, `is_workday`, `month_sin`, `month_cos`, `wind_log_scarcity`, `net_load_mean`, `net_load_squared_mean`. Kaksi viimeistä asetetaan nollaksi kun Fingrid-kuormitusennusteita ei ole saatavilla, vastaten koulutuspuolen oletusarvoa.
-- Log-lineaarinen kohde v2.2:n uudelleen viritetyllä offsetilla: `log(D(k) + 100)`
+- Log-lineaarinen kohde: `log(D(k) + 100)`
 - Unohtamiskerroin λ = 0,960 (puoliintumisaika 17 päivää, optimoitu pyyhkäisyllä)
 - PAVA isotoninen jälkikäsittely suunnittain:
   - Halpa pää: pakottaa `dk_cheap[0] ≤ dk_cheap[1] ≤ … ≤ dk_cheap[11]`
@@ -174,7 +197,7 @@ Ennustaa D(k) = keskimääräisen spot-hinnan halvimmille k tunnille päivässä
 | D(8) | Halvimmat 8h | 0,937 |
 | D(24) | Päivän keskiarvo | 0,940 |
 
-**Tuloste:** `model_coefs.json` sisältäen tuntimallin Ridge-kertoimet (9-piirteinen v2.2 mukana tuleva), AR(2)-parametrit `ar_se3`:lle ja `ar_ee`:lle, sekä kaksisuuntaiset halpa/kallis-kestomallin kertoimet (48 segment-suunta-k Ridge-sovitusta).
+**Tulosteartefaktit:** nelitasoisen tuntimallin parametrit sijaitsevat tiedostoissa `data/spike_model_default.json` ja `data/seasonal_components_default.json`; kestomalli sisältää AR(2)-parametrit `ar_se3`:lle ja `ar_ee`:lle sekä kaksisuuntaiset halpa/kallis-kertoimet (48 segment-suunta-k Ridge-sovitusta).
 
 ---
 
@@ -215,7 +238,7 @@ Konfiguroitavissa operaattorikohtaisesti tiedostossa `finland.yaml`. Oletus: Ele
 
 | Attribuutti | Tyyppi | Kuvaus |
 |-------------|--------|--------|
-| `forecast` | array[170] | `{timestamp, spot_eur_mwh, consumer_eur_kwh, wind, solar, temp}` per tunti |
+| `forecast` | array[170] | Per tunti: `{timestamp, spot_eur_mwh, consumer_eur_kwh, wind, solar, temp, P5_eur_mwh, P25_eur_mwh, P50_eur_mwh, P75_eur_mwh, P95_eur_mwh}`. `spot_eur_mwh` on putken pisteen ennuste (EUR/MWh); `P*_eur_mwh` ovat L4 GPD POT -kerroksen viuhkapersentiilit. |
 | `current_spot_eur_mwh` | float | Nykyisen tunnin spot-hinta (EUR/MWh) |
 | `week_min_eur_kwh` | float | Ennusteikkunan minimi kuluttajahinta |
 | `week_avg_eur_kwh` | float | Ennusteikkunan keskimääräinen kuluttajahinta |
@@ -228,7 +251,7 @@ Konfiguroitavissa operaattorikohtaisesti tiedostossa `finland.yaml`. Oletus: Ele
 
 #### Duration Forecast -attribuutit — D(k) halpa/kallis -käyrät
 
-`daily_forecast`-attribuutti sisältää enintään 7 päivää. Jokaiselle päivälle annetaan sekä uusi (Phase A) että vanha (poistuva) skeema rinnakkain siirtymävaiheen ajan. Anturin tila on tämän päivän `dk_cheap_eur_kwh[3]` — halvimpien 4 tunnin keskihinta.
+`daily_forecast`-attribuutti sisältää enintään 7 päivää. Jokaiselle päivälle annetaan neljä 24-paikkaista taulukkoa (0-indeksoituna): halpa- ja kallispään käyrät sekä spot-hinnassa (EUR/MWh) että kuluttajahinnassa (EUR/kWh). Anturin tila on tämän päivän `dk_cheap_eur_kwh[3]` — halvimpien 4 tunnin keskihinta.
 
 | Attribuutti | Muoto | Yksikkö | Kuvaus |
 |-------------|-------|---------|--------|
@@ -236,19 +259,15 @@ Konfiguroitavissa operaattorikohtaisesti tiedostossa `finland.yaml`. Oletus: Ele
 | `daily_forecast[i].date` | string | — | ISO-päivämäärä (VVVV-KK-PP) |
 | `daily_forecast[i].weekday` | string | — | Mon–Sun |
 | `daily_forecast[i].source` | string | — | `forecast` tai `actual` (toteutuneet päivät Sahkotinista) |
-| **Phase A (suositeltu):** | | | |
-| `daily_forecast[i].dk_cheap_eur_kwh` | float[12] | EUR/kWh | Halvimpien k tunnin keskihinta, k=1..12 (ei-laskeva) |
-| `daily_forecast[i].dk_peak_eur_kwh`  | float[12] | EUR/kWh | Kalleimpien k tunnin keskihinta, k=1..12 (ei-nouseva) |
-| `daily_forecast[i].dk_cheap_spot_eur_mwh` | float[12] | EUR/MWh | Sama spot-hinnoissa |
-| `daily_forecast[i].dk_peak_spot_eur_mwh`  | float[12] | EUR/MWh | Sama spot-hinnoissa |
-| **Vanha (poistuva):** | | | |
-| `daily_forecast[i].dk_consumer_eur_kwh` | float[24] | EUR/kWh | Vanha kumulatiivinen D(k); `dk_consumer_eur_kwh[k-1] == dk_cheap_eur_kwh[k-1]` arvoille k=1..12 |
-| `daily_forecast[i].dk_spot_eur_mwh` | float[24] | EUR/MWh | Vanha spot-D(k) |
+| `daily_forecast[i].dk_cheap_eur_mwh` | float[24] | EUR/MWh | Päivän (i+1) halvimman tunnin keskimääräinen spot-hinta, i = 0..23 (monotonisesti ei-laskeva) |
+| `daily_forecast[i].dk_peak_eur_mwh`  | float[24] | EUR/MWh | Päivän (i+1) kalleimman tunnin keskimääräinen spot-hinta, i = 0..23 (monotonisesti ei-nouseva) |
+| `daily_forecast[i].dk_cheap_eur_kwh` | float[24] | EUR/kWh | Sama halpa-pään käyrä kuluttajahintana (tuntikohtainen tariffimuunnos sovellettu) |
+| `daily_forecast[i].dk_peak_eur_kwh`  | float[24] | EUR/kWh | Sama kallis-pään käyrä kuluttajahintana |
 | `forecast_days` | int | — | Päivien lukumäärä (enintään 7) |
 
 **Käyttötavat:**
-- Halvimmat k tuntia päivänä d: `daily_forecast[d].dk_cheap_eur_kwh[k-1]` (siirrettävien kuormien aikataulutus)
-- Kalleimmat k tuntia päivänä d: `daily_forecast[d].dk_peak_eur_kwh[k-1]` (varakapasiteetti, pahimman tapauksen suunnittelu)
+- Halvimmat k tuntia päivänä d: `daily_forecast[d].dk_cheap_eur_kwh[k-1]` arvoille k = 1..24 (siirrettävien kuormien aikataulutus)
+- Kalleimmat k tuntia päivänä d: `daily_forecast[d].dk_peak_eur_kwh[k-1]` arvoille k = 1..24 (varakapasiteetti, pahimman tapauksen suunnittelu)
 - Yhtälöllinen tarkistus: `cheap[11] + peak[11] = 2 × päiväkeskiarvo` (pätee aina numeerisen kohinan tarkkuudella)
 - Kuluttajahinnat sisältävät segmenttikohtaisen tariffimuunnoksen: yötunnit yösiirtotariffilla, päivätunnit päivätariffilla, yhdistetty ja uudelleenlajiteltu
 
@@ -283,7 +302,7 @@ Tunnille `h`:
 |---------|----------|
 | `b_h` | Kuluttajan ostohinta (EUR/kWh) = `(spot/1000 + marginaali + siirtohinta + vero) × ALV` |
 | `s_h` | Myyntihinta (EUR/kWh) = `spot/1000 − myyntipalkkio − valinn. verkkomaksu`. EI rajoitettu nollaan — voi olla negatiivinen ylituotantoaikoina. |
-| `c_h` | Konfiguroitu perustaso (kWh) = `baseload_kwh_per_hour × {päivä-/yökerroin}` |
+| `c_h` | Konfiguroitu perustaso (kWh) = `annual_consumption_kwh / 8760 × kuukausikerroin` |
 | `p_h` | Tunnittainen PV-tuotto (kWh) sisäisestä estimaattorista tai ulkoisesta entiteetistä. Rajoitettu välille `[0, capacity_kwp · efficiency]`. |
 
 ### Marginaalinen efektiivinen hinta (D(k):n syöte)
@@ -314,7 +333,7 @@ Lasketaan suoraan paikallisen päivän 24 tuntittaisesta `effective_eur_kwh` -ar
 Ennusteen on pysyttävä deterministisenä funktiona `(spot, sää, PV-konfiguraatio, perustaso-konfiguraatio)` -syötteistä, jotta alavirran optimoijan joustavakuorma-päätökset eivät voi syöttyä takaisin seuraavan syklin hintaennusteeseen. Konkreettisesti:
 
 - **`_resolve_baseload(ts)` EI saa kutsua `hass.states.get` -kutsua tai mitään HA-entiteetinlukua.** Varmistettu grep-testillä tiedostossa `tests/test_coordinator_pv.py`.
-- **Konfiguroidun `baseload_kwh_per_hour`-arvon tulisi edustaa käyttäjän tyypillistä KOKONAISTUNTIKULUTUSTA** — laskupohjaista kokonaiskysyntää mukaan lukien kaikki kuormat (lämpöpumppu, sähköauto, sauna, vedenlämmitin jne.). Staattinen konfiguraatio ei voi luoda optimoijan takaisinkytkentää koska se ei riipu havaitusta kulutuksesta; varsinainen vakausvaatimus koskee vain sitä mitä ennustaja LUKEE HA:sta.
+- **Konfiguroidun `annual_consumption_kwh`-arvon tulisi edustaa käyttäjän tyypillistä KOKONAISKULUTUSTA vuodessa** — laskupohjaista kokonaiskysyntää mukaan lukien kaikki kuormat (lämpöpumppu, sähköauto, sauna, vedenlämmitin jne.). Staattinen konfiguraatio ei voi luoda optimoijan takaisinkytkentää koska se ei riipu havaitusta kulutuksesta; varsinainen vakausvaatimus koskee vain sitä mitä ennustaja LUKEE HA:sta.
 - **`_read_external_pv_forecast()` SAA lukea HA-entiteetin** koska PV-ennuste on säävetoinen ja riippumaton optimoijan päätöksistä — takaisinkytkentää ei muodostu.
 
 #### Miksi "tyypillinen kokonais" eikä "vain ei-joustava" — esimerkkilaskelma
@@ -328,13 +347,9 @@ Aurinkoinen keskipäivä, 4 kWh PV, lämpöpumpputalous 16 000 kWh/v tyypillisel
 
 PV:n ollessa vain 2 kWh, Tapaus B palauttaa oikein m_h ≈ 14 c/kWh (PV pääosin tyypillisen kysynnän käyttämä, vain 0,17 kWh marginaalia). Tapaus A olisi palauttanut ~10 c/kWh — silti optimistinen. Molemmat tapaukset täyttävät vakausinvariantin koska molemmat ovat staattista konfiguraatiota; Tapaus B on **tarkempi** koska PV/verkko-suhde joka määrittää marginaalikustannuksen on aidosti kokonaiskysynnän — ei ei-joustavan kysynnän — funktio.
 
-#### v2.3 → v2.3.1 dokumentaatiokorjaus
+#### Perustasoskeema
 
-v2.3.0 -julkaisu sisälsi virheellisen ohjeen "vain ei-joustava". **Ohje oli väärä** — se sekoitti kaksi erillistä vakaushuolta. Varsinainen vaatimus koskee vain sitä mitä ennustaja LUKEE (ei optimoijan vaikuttamia HA-entiteettejä), ei sitä mitä staattinen arvo EDUSTAA. Vanhaa ohjetta noudattavat käyttäjät saavat Tapauksen A optimismivinouman lämpöpumppupäivinä. Nosta `baseload_kwh_per_hour` tyypilliseen KOKONAISKULUTUKSEEN (≈ vuosilasku_kWh / 8760).
-
-#### v2.4.0 perustasoskeemauudistus
-
-v2.4.0 korvaa kolme v2.3-kenttää (`baseload_kwh_per_hour`, `baseload_day_factor`, `baseload_night_factor`) kahdella ystävällisemmällä:
+PV-tietoinen polku käyttää kahta konfiguraatiokenttää johtaakseen per-tunti-perustason:
 
 - **`annual_consumption_kwh`** (oletus 12 000) — käyttäjän tyypillinen KOKONAISKULUTUS vuodessa sähkölaskun mukaan. Yksi käyttäjäystävällinen luku. Sisäisesti:
 
@@ -342,7 +357,7 @@ v2.4.0 korvaa kolme v2.3-kenttää (`baseload_kwh_per_hour`, `baseload_day_facto
   baseload(h) = annual_consumption_kwh / 8760 × monthly_factor[month_of_h]
   ```
 
-  jossa `monthly_factor` on 12-elementtinen suomalaisen ei-sähkölämmitteisen asuinrakennuksen kausiprofiili `const.py`:ssä (`FINLAND_RESIDENTIAL_MONTHLY_FACTORS`). Kerroinsumma = 12,00 tarkasti (normalisointi-invariantti); vaihteluväli ≈ ±19 % keskiarvon ympärillä (60°N leveysasteen kuvio: valaistuksen vetämä talvihuippu joulu/tammikuussa, loma-ajan/pitkien päivien aallonpohja heinäkuussa). Lähde: kirjallisuuspohjainen estimaatti suomalaisesta tutkimuksesta (VTT Publications 289, Adato Energia, Tilastokeskus 2024). **TODO**: korvaa Fingrid Open Data -aineisto #360:n (BE03 tyyppikäyrä) sanasta-sanaan-arvoilla v2.4.x-päivityksessä.
+  jossa `monthly_factor` on 12-elementtinen suomalaisen ei-sähkölämmitteisen asuinrakennuksen kausiprofiili `const.py`:ssä (`FINLAND_RESIDENTIAL_MONTHLY_FACTORS`). Kerroinsumma = 12,00 tarkasti (normalisointi-invariantti); vaihteluväli ≈ ±19 % keskiarvon ympärillä (60°N leveysasteen kuvio: valaistuksen vetämä talvihuippu joulu/tammikuussa, loma-ajan/pitkien päivien aallonpohja heinäkuussa). Lähde: kirjallisuuspohjainen estimaatti suomalaisesta tutkimuksesta (VTT Publications 289, Adato Energia, Tilastokeskus 2024). **TODO**: korvaa Fingrid Open Data -aineisto #360:n (BE03 tyyppikäyrä) sanasta-sanaan-arvoilla.
 
 - **`consumption_entity`** (valinnainen) — mikä tahansa HA-kulutusanturi; integraatio tunnistaa tyypin ja tasaa sisäisesti:
 
@@ -355,12 +370,10 @@ v2.4.0 korvaa kolme v2.3-kenttää (`baseload_kwh_per_hour`, `baseload_day_facto
 
   Tasattu arvo välimuistissa `.storage/spot_price_predictor_consumption_cache.json`:issa, lasketaan uudelleen enintään kerran päivässä. 5 % hysteresis-aluekielto välimuistissa olevalle arvolle estää pieniä anturimelu-värähtelyitä laukaisemasta uudelleen koordinaattorin päivityksiä.
 
-**Vakaustarkistus v2.4-skeemalla**:
+**Vakaustarkistus**:
 
-- **Oletustila** (`consumption_entity = ""`): `baseload(h)` on deterministinen funktio vain `(annual_consumption_kwh, h)` -syötteistä — ei HA-entiteetinlukua, täysin avoin silmukka. Identtinen turvaominaisuus Phase 1:n kanssa.
+- **Oletustila** (`consumption_entity = ""`): `baseload(h)` on deterministinen funktio vain `(annual_consumption_kwh, h)` -syötteistä — ei HA-entiteetinlukua, täysin avoin silmukka.
 - **HA-anturitila**: 14 päivän liukuva keskiarvo vaimentaa yksittäisen päivän häiriön `1/14 ≈ 7 %`:iin. Yhdistettynä 5 % hysteresis-aluekieltoon, EMHASS:n 5 kWh kuorman uudelleenajoittaminen päivien välillä tuottaa `5/14 ≈ 0,36 kWh` liukuvan muutoksen, vain ~3 % 12 kWh/päivä perustasosta — alueen sisällä, joten välimuistissa oleva perustaso ei muutu ja EMHASS näkee vakaan ennusteen.
-
-**Migraatio v2.3.x:stä**: kun konfiguraatiomerkintä sisältää vain vanhan `baseload_kwh_per_hour` -kentän, koordinaattorin `__init__` päättelee vastaavan vuosittaisen arvon ja kirjaa INFO-rivin. Vanhat kentät säilyvät `entry.data`:ssa kunnes käyttäjä avaa Asetukset-dialogin ja tallentaa uudelleen. v2.3.0:n oletusta noudattanut käyttäjä saa noin 7660 kWh/v päättelyn — selvästi alhainen tyypilliselle suomalaiselle lämpöpumpputalolle, mikä kannustaa virittämään todelliseen laskuun.
 
 ### Ulkoinen PV-ennuste — tuetut attribuutti-konventiot
 
@@ -387,13 +400,10 @@ PV-järjestelmän parametrit asetetaan HA-asennusvelhon valinnaisessa "PV system
 | `pv_system_efficiency` | 0,85 | DC/AC + likaantuminen + häviöt yhteenlaskettuna |
 | `pv_external_entity` | "" | Valinnainen HA-sensori, joka korvaa sisäisen estimaattorin |
 | `pv_export_grid_fee` | 0 | Lisämaksu viedystä energiasta (myyntipalkkion yli) |
-| `annual_consumption_kwh` (v2.4) | 12 000 | Tyypillinen KOKONAISKULUTUS vuodessa laskun mukaan, mukaan lukien PV-itsekulutus JA optimoijan ohjaamat kuormat. Kerrotaan sisäänrakennetulla suomalaisella asuinrakennuksen kuukausittaisella kausiprofiilla per-tunti-perustasoa varten. |
-| `consumption_entity` (v2.4, valinnainen) | "" | Mikä tahansa HA-kulutusanturi (kumulatiivinen kWh-laskuri, päivä/kuukausi-utility_meter, hetkellinen teho). Integraatio tunnistaa tyypin ja tasaa sisäisesti 14 päivän liukuvalla keskiarvolla + 5 % hysteresiksellä. Suositeltu placeholder: `sensor.energy_yesterday`. |
-| `baseload_kwh_per_hour` (v2.3, vanha) | 0,8 | Auto-migroidaan `annual_consumption_kwh`-arvoon latauksessa. Säilytetty taaksepäin yhteensopivuuden vuoksi. |
-| `baseload_day_factor` (v2.3, vanha) | 1,2 | Auto-migroidaan; sivuutetaan v2.4:ssä. |
-| `baseload_night_factor` (v2.3, vanha) | 0,7 | Auto-migroidaan; sivuutetaan v2.4:ssä. |
+| `annual_consumption_kwh` | 12 000 | Tyypillinen KOKONAISKULUTUS vuodessa laskun mukaan, mukaan lukien PV-itsekulutus JA optimoijan ohjaamat kuormat. Kerrotaan sisäänrakennetulla suomalaisella asuinrakennuksen kuukausittaisella kausiprofiililla per-tunti-perustasoa varten. |
+| `consumption_entity` (valinnainen) | "" | Mikä tahansa HA-kulutusanturi (kumulatiivinen kWh-laskuri, päivä/kuukausi-utility_meter, hetkellinen teho). Integraatio tunnistaa tyypin ja tasaa sisäisesti 14 päivän liukuvalla keskiarvolla + 5 % hysteresiksellä. Suositeltu placeholder: `sensor.energy_yesterday`. |
 
-`pv_capacity_kwp = 0` (oletus) ja tyhjä `pv_external_entity` poistavat kaikki PV-tietoiset tulosteet siististi — integraatio tuottaa tavupareittain identtiset PV:ttömät tulokset, jotka vastaavat v2.2:n käyttäytymistä.
+`pv_capacity_kwp = 0` (oletus) ja tyhjä `pv_external_entity` poistavat kaikki PV-tietoiset tulosteet siististi — integraatio tuottaa tavupareittain identtiset PV:ttömät tulokset.
 
 ---
 
@@ -426,9 +436,9 @@ Järjestelmää ohjaa aluekonfiguraatiotiedosto (`config/regions/finland.yaml`).
 2. **Luo uusi YAML-tiedosto** (esim. `sweden.yaml`)
 3. **Määrittele paikallinen hinta-API** — ilmainen day-ahead spot-hintarajapinta
 4. **Konfiguroi pyhäpäivät** — kiinteät, pääsiäispohjaiset ja erikoissäännöt
-5. **Lisää naapurihintalähteet** rajat ylittäville piirteille
+5. **Lisää naapurihintalähteet** kestomallia varten
 6. **Aseta kuluttajahinnoittelu** — ALV, energiavero, operaattoritariffit
-7. **Aja koulutus** komennolla `--region sweden`
+7. **Sovita** uudelleen `spot_price_predictor.retrain_models` -palvelulla alueellisen datan ollessa paikallisesti välimuistissa
 
 Katso englanninkielisestä dokumentaatiosta ([TECHNICAL_GUIDE.md](TECHNICAL_GUIDE.md#regional-localization)) tekoälykehotepohja uusien alueiden säämittauspisteiden tunnistamiseen.
 
@@ -436,55 +446,45 @@ Katso englanninkielisestä dokumentaatiosta ([TECHNICAL_GUIDE.md](TECHNICAL_GUID
 
 ## Tarkkuus ja uudelleenkoulutus
 
-### Nykyinen suorituskyky (v2.3.0 — mukana tuleva v2.2:n 9-piirteinen karsittu malli, 4 vuoden koulutusdata)
+### Nykyinen päästä päähän -suorituskyky
 
-**Tuntimalli:**
+Alla olevat luvut kuvaavat tällä hetkellä toimitettavan kokoonpanon tarkkuutta FI-testijakson holdout-ikkunassa.
 
-| Mittari | v2.1 (17 piirrettä) | v2.2 / v2.3 (9 piirrettä) | Muutos |
-|---|:---:|:---:|:---:|
-| MAE (koulutuksen testijako) | 23,94 EUR/MWh | **20,07 EUR/MWh** | −16 % |
-| R² | 0,515 | **0,719** | +40 % |
-| Walk-forward MAE (180 vrk testijakso) | — | **20,99 EUR/MWh** | vs. AR(2)-perustaso 37,82 |
+**Tuntimalli (spot-pisteen ennuste):**
 
-**Kestomalli (Spearmanin ρ, viimeiset 365 päivää):**
+| Mittari | Arvo |
+|---|:---:|
+| MAE (h = 24 … 168) | ≈ 10 EUR/MWh |
+| R² | ≈ 0,93 |
+| Kynnysylityskorkeiden tuntien osumatarkkuus | 98 % |
 
-| D(k) | Käyttötapaus | ρ |
-|:---:|:-:|:---:|
-| D(4) | Halvimmat 4h | 0,930 |
-| D(8) | Halvimmat 8h | 0,937 |
-| D(24) | Päivän keskiarvo | 0,940 |
+**Kestomalli (R², per D(k)-indeksi):**
 
-**v2.3 PV-tietoisen D(k):n vahvistus** (päättelyn jälkeinen muunnos, ei uudelleenkoulutusta; 5 kWp / 1 kWh-h perustasoa, 4 vuoden takautuva testaus 1 460 päivällä): nolla PAVA-monotonisuusrikkomusta, PV-tietoisen D(1):n keskiarvo 6,90 c/kWh (keskihajonta 6,0), analyyttisesti rajattu välille `[s_h, b_h]` jokaiselle tunnille. Arvioitu vuosittainen säästö pelkän verkko-D(4):n yli ≈ 600 EUR/v.
+- Sekä `dk_cheap[i]` että `dk_peak[i]` saavuttavat R² ≥ 0,95 kaikilla i = 0 … 23 ([studies/results/V2_5_17_DK_FULL_RANGE.md](studies/results/V2_5_17_DK_FULL_RANGE.md)).
+- cheap_4 MAE 4,4 EUR/MWh, peak_4 MAE 6,9 EUR/MWh testijaksolla.
+
+**PV-tietoisen D(k):n vahvistus** (5 kWp viitekokoonpano, 4 vuoden takautuva testaus 1 460 päivällä): nolla PAVA-monotonisuusrikkomusta, PV-tietoisen D(1):n keskiarvo 6,90 c/kWh (keskihajonta 6,0), analyyttisesti rajattu välille `[s_h, b_h]` jokaiselle tunnille. Arvioitu vuosittainen säästö pelkän verkko-D(4):n yli ≈ 600 EUR/v.
 
 ### Suositeltu uudelleenkoulutustaajuus
 
-**Kouluta uudelleen 3-4 kuukauden välein (neljännesvuosittain).**
+Neljännesvuosittain on järkevä oletus; `RefitMonitor`-kalibroija merkitsee myös jatkuvan ryöminnän 14 vrk ikkunassa, joten käyttäjät voivat sovittaa uudelleen pyynnöstä, kun tuotantoympäristö muuttuu.
 
 ### Uudelleenkoulutuksen suorittaminen
 
-```bash
-cd HA-spot-price-predictor
-pip install -r requirements.txt
+`spot_price_predictor.retrain_models` Home Assistant -palvelu sovittaa mukana tulevat artefaktit paikan päällä uudelleen. Developer Tools → Services -valikosta tai automaatiosta:
 
-# Kouluta uusimmalla datalla
-export FINGRID_API_KEY=avaimesi  # valinnainen
-python -m src.train_model --region finland --fingrid-key YOUR_KEY
-
-# Luo seurantakojelauta
-python model_dashboard.py
-
-# Luo 7 vrk ennustekojelauta
-python forecast_dashboard.py
-
-# Kopioi kertoimet HA-integraatioon
-cp output/model_coefs.json custom_components/spot_price_predictor/data/model_coefs_default.json
+```yaml
+service: spot_price_predictor.retrain_models
+data:
+  layers: ["seasonal", "spike", "solar"]   # jätä pois sovittaaksesi kaikki kolme
+  # fingrid_api_key: "..."                  # tarvitaan vain aurinkokerroksessa
 ```
 
-### Puoliintumisaika-parametri
+Palvelu kirjoittaa kolme JSON-artefaktia atomisesti uudelleen kansioon `custom_components/spot_price_predictor/data/`, ja koordinaattorit lataavat ne automaattisesti uudelleen seuraavalla päivityssyklillä. Valmistuessaan palvelu laukaisee tapahtuman `spot_price_predictor_models_retrained`.
 
-`half_life_days` (oletus: 120) määrittää miten malli painottaa historiallista dataa koulutettaessa. 120 päivää vanha data painolla 50%. Optimoitu Suomen nopeasti kasvavalle tuulivoimakapasiteetille.
+### Avoin kysymys — syötekohtainen tarkkuusvaikutus
 
-Kestomalli käyttää erillistä unohtamiskerrointa λ = 0,960 (puoliintumisaika 17 päivää), optimoitu sääregiimimuutosten seuraamiseen.
+Leave-one-out / SHAP-tyyppinen ablaatio nykyiselle Ridge-kerroinjoukolle antaisi mahdollisuuden määrittää kunkin L2-piirteen marginaalivaikutuksen ja arvioida uudelleen syötteet, jotka todettiin aiemmassa toteutettavuustyössä toimiviksi (ydinvoimavaje, SE3:n siirtokapasiteettiproksi). Tämä tutkimus ei kuulu tämän dokumentaatiokierroksen piiriin — se kuuluu erilliseen kokeelliseen haaraan ja yhdistettäisiin `main`-haaraan vain todistusaineiston perusteella.
 
 ---
 
@@ -495,31 +495,28 @@ HA-spot-price-predictor/
 ├── README.md
 ├── TECHNICAL_GUIDE.md           # Englanninkielinen dokumentaatio
 ├── TEKNINEN_TOTEUTUS.md         # Tämä dokumentti (suomeksi)
+├── INSTALLATION.md              # Vaiheittainen asennusopas
 ├── config/regions/
 │   └── finland.yaml             # Keskitetty konfiguraatio (kaikki parametrit)
-├── src/
-│   ├── train_model.py           # Koulutusputki
-│   ├── features.py              # Piirteiden käsittely (koulutus)
-│   ├── data_sources.py          # API-asiakasohjelmat (koulutus)
-│   └── holidays.py              # Pyhäpäivälaskuri
 ├── custom_components/
 │   └── spot_price_predictor/    # HA HACS -integraatio
-│       ├── model.py             # Puhdas Python päättely (tunti + kesto)
-│       ├── features.py          # Puhdas Python piirrerakentaja
-│       ├── coordinator.py       # HA-datakoordinaattori
-│       ├── sensor.py            # HA-sensorientiteetit
-│       ├── api_client.py        # Asynkroniset API-asiakkaat
-│       ├── const.py             # Vakiot ja oletusarvot
+│       ├── __init__.py              # Sisääntulo + palvelujen rekisteröinti (sis. retrain_models)
+│       ├── coordinator.py           # Datahaku + Pipeline-orkestrointi
+│       ├── pipeline.py          # L1+L2+L3+L4-putki + softplus-pohjavyöhyke + DtACI
+│       ├── seasonal_decomposition.py # L1-komponenttien sovittaja / haku
+│       ├── hourly_calibration.py    # DtACI-biaskorjaaja / viuhka / refit-monitori
+│       ├── price_floor.py           # Softplus-pohjavyöhyke
+│       ├── solar_clear_sky.py       # Selkeän taivaan × pilvisyys -aurinkomalli
+│       ├── retrain.py               # Uudelleenkoulutuksen orkestroija (HA-palvelun backend)
+│       ├── sensor.py                # HA-sensorientiteetit
+│       ├── api_client.py            # Asynkroniset API-asiakkaat
+│       ├── const.py                 # Vakiot ja oletusarvot
 │       └── data/
-│           ├── model_coefs_default.json  # Esiasennettu malli
-│           └── finland.yaml              # Esiasennettu konfiguraatio
+│           ├── seasonal_components_default.json
+│           ├── spike_model_default.json
+│           ├── solar_submodel_default.json
+│           └── finland.yaml
 ├── ha_dashboard.yaml            # Home Assistant Lovelace -kojelauta (ApexCharts + Mushroom)
-├── model_dashboard.py           # Seurantakojelauta
-├── forecast_dashboard.py        # Ennustekojelauta
-├── studies/                     # Arkistoidut analyysiskriptit
-├── tests/                       # 267 yksikkötestiä (33 PV-tietoista v2.3:ssa)
-└── output/                      # Tuotetut artefaktit
-    ├── model_coefs.json
-    ├── model_dashboard.html
-    └── forecast.html
+├── studies/                     # Sovitusskriptit ja historialliset analyysit
+└── tests/                       # Yksikkö- ja integraatiotestit
 ```

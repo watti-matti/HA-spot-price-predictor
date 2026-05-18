@@ -167,7 +167,18 @@ You can change all settings after installation. Go to **Settings** → **Devices
 - The sensor applies the same overhead (margin + transfer + tax + VAT) as the forecast consumer price
 
 **Forecast seems inaccurate:**
-- The bundled model was trained on recent Finnish data. For best accuracy, retrain quarterly — see [TECHNICAL_GUIDE.md](TECHNICAL_GUIDE.md#accuracy-and-retraining).
+- The bundled model was trained on recent Finnish data. For best accuracy, refit quarterly via the `spot_price_predictor.retrain_models` service — see the next section.
+
+## Retraining (optional)
+
+The integration ships with pre-trained models for Finland, so no retraining is needed for normal use. If you want to refit on more recent data — for example after a major change in wind capacity or a regime shift in spot prices — use the built-in Home Assistant service.
+
+1. Go to **Developer Tools** → **Services**.
+2. Pick **Spot Price Predictor: Retrain Models** (`spot_price_predictor.retrain_models`).
+3. Optionally set `layers` to a subset of `seasonal`, `spike`, `solar` (omit to refit all three). The `solar` layer needs a Fingrid API key, which the service reads from the `fingrid_api_key` field or the `FINGRID_API_KEY` environment variable.
+4. Call the service.
+
+The service rewrites the three artifacts under `custom_components/spot_price_predictor/data/` atomically and the coordinators auto-reload them — no Home Assistant restart needed. On completion it fires the `spot_price_predictor_models_retrained` event, which you can hook from an automation to send a confirmation notification.
 
 ---
 

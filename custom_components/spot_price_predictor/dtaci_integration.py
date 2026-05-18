@@ -81,13 +81,14 @@ def attach_dk_intervals(
 ) -> None:
     """Mutate `daily_forecast` in place to add per-(direction, k) bands.
 
-    For each day entry that has both `dk_cheap_eur_kwh[12]` and
-    `dk_peak_eur_kwh[12]`, we read the forecast arrays and write back:
+    For each day entry that carries the 24-level `dk_cheap_eur_kwh` and
+    `dk_peak_eur_kwh` arrays, the bundle scores all 24 indices per
+    direction and writes back per-direction band attributes:
 
-        dk_cheap_lower_eur_kwh[12]
-        dk_cheap_upper_eur_kwh[12]
-        dk_peak_lower_eur_kwh[12]
-        dk_peak_upper_eur_kwh[12]
+        dk_cheap_lower_eur_kwh[24]
+        dk_cheap_upper_eur_kwh[24]
+        dk_peak_lower_eur_kwh[24]
+        dk_peak_upper_eur_kwh[24]
 
     During the bundle's warmup the bands collapse to the point — by
     design (no spurious confidence before enough observations).
@@ -100,9 +101,9 @@ def attach_dk_intervals(
     for day in daily_forecast:
         cheap = day.get("dk_cheap_eur_kwh") or []
         peak = day.get("dk_peak_eur_kwh") or []
-        if len(cheap) < 12 or len(peak) < 12:
+        if len(cheap) < 24 or len(peak) < 24:
             continue
-        bands = bundle.predict_intervals(list(cheap[:12]), list(peak[:12]))
+        bands = bundle.predict_intervals(list(cheap[:24]), list(peak[:24]))
         day["dk_cheap_lower_eur_kwh"] = [round(v, 4) for v in bands["cheap"]["lower"]]
         day["dk_cheap_upper_eur_kwh"] = [round(v, 4) for v in bands["cheap"]["upper"]]
         day["dk_peak_lower_eur_kwh"] = [round(v, 4) for v in bands["peak"]["lower"]]
@@ -117,10 +118,10 @@ def update_from_actuals(
     """Feed reconciled (forecast, actual) D(k) pairs to the bundle.
 
     Args:
-        forecast_history: {date_str: {"cheap": [12], "peak": [12]}}
+        forecast_history: {date_str: {"cheap": [24], "peak": [24]}}
             forecast issued for that day, captured at the time the
             forecast cycle ran.
-        actual_dk_history: {date_str: {"cheap": [12], "peak": [12]}}
+        actual_dk_history: {date_str: {"cheap": [24], "peak": [24]}}
             computed once that day's 24 hourly actuals reconcile.
 
     Returns the number of (date, direction, k) updates performed.

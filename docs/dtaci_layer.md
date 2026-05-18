@@ -1,8 +1,8 @@
-# DtACI Online Calibration Layer (v2)
+# DtACI Online Calibration Layer
 
-> **v2 architecture:** DtACI is applied **per-(direction, k) order
-> statistic** — 24 instances per zone (cheap[k] for k=1..12, peak[k] for
-> k=1..12), not per hourly forecast. The thermal LP consumes D(k)
+> **Architecture:** DtACI is applied **per-(direction, k) order
+> statistic** — 48 instances per zone (cheap[k] for k=1..24, peak[k] for
+> k=1..24), not per hourly forecast. The thermal LP consumes D(k)
 > directly, so calibrating the exact statistic the consumer uses gives
 > tight, properly-calibrated bands. The reference card in
 > `dtaci_info_cards.html` describes the diagnostic surface this design

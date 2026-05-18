@@ -72,7 +72,7 @@ from .pv_estimate import (
     marginal_effective_eur_kwh,
     net_household_cost_eur,
 )
-from .v26_pipeline import V26Pipeline
+from .pipeline import Pipeline
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -232,21 +232,37 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
 
         # v2.6.0 — additive L1+L2+L3+L4+floor+calibrators pipeline.
         # Runs alongside the v2.2 model; its outputs land in additional
-        # keys on each forecast row and duration_forecast entry so
-        # existing dashboards keep working unchanged.
-        self._v26 = None
+        # Prediction pipeline (L1+L2+L3+L4+softplus floor+DtACI calibrators).
+        # Persistent calibrator state lives under
+        # `<config>/.storage/spot_price_predictor_pipeline/`. One-time
+        # migration: rename the legacy directory if it still exists, so
+        # users keep the accumulated bias-corrector history across the
+        # rename.
+        self._pipeline = None
         try:
             data_dir = Path(__file__).resolve().parent / "data"
             storage_dir = Path(hass.config.path(
+                ".storage", "spot_price_predictor_pipeline"))
+            legacy_dir = Path(hass.config.path(
                 ".storage", "spot_price_predictor_v26"))
-            self._v26 = V26Pipeline(data_dir=data_dir,
-                                     storage_dir=storage_dir)
-            _LOGGER.info("v26 pipeline ready (Ridge β shape %s, AR(1) φ=%.3f)",
-                          self._v26._ridge_coef.shape,
-                          self._v26._ar1_phi)
+            if legacy_dir.exists() and not storage_dir.exists():
+                try:
+                    legacy_dir.rename(storage_dir)
+                    _LOGGER.info("Migrated calibrator state %s → %s",
+                                 legacy_dir, storage_dir)
+                except OSError as e:
+                    _LOGGER.warning("Calibrator-state migration failed (%s); "
+                                    "cold-starting under %s", e, storage_dir)
+            self._pipeline = Pipeline(data_dir=data_dir,
+                                       storage_dir=storage_dir)
+            _LOGGER.info(
+                "Prediction pipeline ready (Ridge β shape %s, AR(1) φ=%.3f)",
+                self._pipeline._ridge_coef.shape,
+                self._pipeline._ar1_phi,
+            )
         except Exception as e:
-            _LOGGER.warning("v26 pipeline disabled — init failed: %s", e)
-            self._v26 = None
+            _LOGGER.warning("Prediction pipeline disabled — init failed: %s", e)
+            self._pipeline = None
 
     def _get_local_hour(self, ts_utc: datetime) -> int:
         """Get local hour for a UTC timestamp."""
@@ -259,6 +275,17 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                 pass
         # Fallback: UTC+3 (Finland without DST)
         return (ts_utc.hour + 3) % 24
+
+    def _local_date_str(self, ts_utc: datetime) -> str:
+        """Return the local-time YYYY-MM-DD date for a UTC timestamp."""
+        if self._tz:
+            try:
+                from zoneinfo import ZoneInfo
+                aware = ts_utc.replace(tzinfo=ZoneInfo("UTC")) if ts_utc.tzinfo is None else ts_utc
+                return aware.astimezone(self._tz).strftime("%Y-%m-%d")
+            except Exception:
+                pass
+        return (ts_utc + timedelta(hours=3)).strftime("%Y-%m-%d")
 
     def _spot_to_consumer_eur_kwh(self, spot_eur_mwh: float, is_night: bool) -> float:
         """Convert spot EUR/MWh to consumer EUR/kWh using configured tariffs."""
@@ -701,10 +728,10 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
             date_str = d.get("date")
             cheap = d.get("dk_cheap_eur_kwh") or []
             peak = d.get("dk_peak_eur_kwh") or []
-            if not (date_str and len(cheap) >= 12 and len(peak) >= 12):
+            if not (date_str and len(cheap) >= 24 and len(peak) >= 24):
                 continue
             slot = self._dk_forecast_history.setdefault(date_str, {})
-            slot["fi"] = {"cheap": list(cheap[:12]), "peak": list(peak[:12])}
+            slot["fi"] = {"cheap": list(cheap[:24]), "peak": list(peak[:24])}
         # Prune to last 14 days
         cutoff = (datetime.now(timezone.utc) - timedelta(days=14)
                   ).strftime("%Y-%m-%d")
@@ -742,14 +769,14 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                 continue
             actual_cheap = d.get("dk_cheap_eur_kwh") or []
             actual_peak = d.get("dk_peak_eur_kwh") or []
-            if len(actual_cheap) < 12 or len(actual_peak) < 12:
+            if len(actual_cheap) < 24 or len(actual_peak) < 24:
                 continue
             try:
                 bundle.update(
                     forecast_dk_cheap=forecast_entry["cheap"],
                     forecast_dk_peak=forecast_entry["peak"],
-                    actual_dk_cheap=list(actual_cheap[:12]),
-                    actual_dk_peak=list(actual_peak[:12]),
+                    actual_dk_cheap=list(actual_cheap[:24]),
+                    actual_dk_peak=list(actual_peak[:24]),
                 )
                 self._dk_reconciled_dates.add(key)
                 n += 1
@@ -1025,33 +1052,30 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
 
                 forecast.append(entry)
 
-            # ── v2.7.0 cutover ──────────────────────────────────────
-            # Replace v2.2 spot/consumer values with v26 outputs BEFORE
-            # the duration model runs, so D(k) is computed from the
-            # (much more accurate) v26 predictions.
-            v26_diagnostics: dict[str, Any] = {}
-            v26_dk_v26_by_date: dict[str, dict] = {}
-            if self._v26 is not None and forecast:
+            # Run the prediction pipeline before the duration model so
+            # the D(k) curves see the pipeline's spot/consumer values.
+            pipeline_diagnostics: dict[str, Any] = {}
+            dk_by_date: dict[str, dict] = {}
+            if self._pipeline is not None and forecast:
                 try:
-                    v26_diagnostics, v26_dk_v26_by_date = self._apply_v26_pipeline_pre_dk(
+                    pipeline_diagnostics, dk_by_date = self._apply_pipeline_pre_dk(
                         forecast)
                 except Exception as e:
-                    _LOGGER.warning("v26 pipeline overwrite failed: %s", e)
-                    v26_diagnostics = {"error": str(e)}
+                    _LOGGER.warning("Prediction pipeline overwrite failed: %s", e)
+                    pipeline_diagnostics = {"error": str(e)}
 
-            # D(k) duration curve forecast (7-day daily curves) — now
-            # uses v26-overwritten spot prices automatically.
+            # Per-day metadata (date/weekday/source + optional PV-aware
+            # effective-price D(k)). The canonical price D(k) arrays are
+            # injected from the pipeline below.
             duration_forecast = self._compute_duration_forecast(
                 forecast, weather, ar_neighbor_hourly, nuclear_data, now,
                 netload_hourly=netload_hourly,
             )
-            # Inject the v26-derived 24-entry D(k) vectors onto each
-            # matching duration_forecast entry (additive).
             for day in duration_forecast:
-                m = v26_dk_v26_by_date.get(day.get("date"))
+                m = dk_by_date.get(day.get("date"))
                 if m is not None:
-                    day["dk_cheap_v26_eur_mwh"] = m["dk_cheap_eur_mwh"]
-                    day["dk_peak_v26_eur_mwh"]  = m["dk_peak_eur_mwh"]
+                    for k, v in m.items():
+                        day[k] = v
 
             # Prepend actual D(k) from historical spot prices (yesterday + day before)
             try:
@@ -1109,9 +1133,9 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                 self._forecast_history.values(), key=lambda x: x["timestamp"]
             )
 
-            # (v26 pipeline ran earlier — before _compute_duration_forecast
-            # — so its v26-overwritten spot prices feed both the forecast
-            # rows AND the D(k) duration curves consistently.)
+            # (Pipeline ran earlier — before _compute_duration_forecast —
+            # so the same spot prices feed both the forecast rows AND the
+            # D(k) duration curves.)
 
             # Active data sources description
             sources = ["weather"]
@@ -1144,8 +1168,8 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                     forecast[0].get("effective_eur_kwh")
                     if (self._pv_enabled and forecast) else None
                 ),
-                # v2.6.0 — additive diagnostics from the L1-L4 pipeline
-                "v26_diagnostics": v26_diagnostics,
+                # Diagnostics from the L1-L4 prediction pipeline
+                "pipeline_diagnostics": pipeline_diagnostics,
             }
 
             # Cache successful result and restore normal interval
@@ -1164,31 +1188,26 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
             _LOGGER.exception("Unexpected error during update")
             return self._return_cached_or_fail(err)
 
-    def _apply_v26_pipeline_pre_dk(
+    def _apply_pipeline_pre_dk(
         self,
         forecast: list[dict[str, Any]],
     ) -> tuple[dict[str, Any], dict[str, dict]]:
-        """v2.7.0 — v26 prediction REPLACES the v2.2 Ridge spot.
-
-        Runs the L1+L2+L3+L4+floor pipeline plus fan-chart sampling,
-        then overwrites `forecast[i]["spot_eur_mwh"]` and
-        `forecast[i]["consumer_eur_kwh"]` with the v26 values. The
-        v2.2 Ridge prediction is still computed (loaded with the
-        existing path) but its output is shadowed here. Users see
-        the better v26 prediction without any sensor renaming.
-
-        Per v2.6.1 benchmark on real FI test data:
-          v2.2: MAE 35.20  R² +0.49  hit rate 29%
-          v26:  MAE 10.00  R² +0.93  hit rate 98%
+        """Run the L1+L2+L3+L4+floor prediction pipeline plus fan-chart
+        sampling and write the result into every row of ``forecast``.
+        Both ``spot_eur_mwh`` and ``consumer_eur_kwh`` are set from the
+        pipeline output; per-row ``P5_eur_mwh`` … ``P95_eur_mwh``
+        percentiles are added alongside.
 
         Returns:
-            (diagnostics_dict, dk_v26_by_date) where dk_v26_by_date
-            maps ISO date string to {"dk_cheap_eur_mwh": [24],
-            "dk_peak_eur_mwh": [24]}.
+            (diagnostics_dict, dk_by_date) where dk_by_date maps ISO
+            date string to a dict with the canonical 24-level D(k)
+            arrays — ``dk_cheap_eur_mwh``, ``dk_peak_eur_mwh``,
+            ``dk_cheap_eur_kwh``, ``dk_peak_eur_kwh`` — for the caller
+            to inject onto duration_forecast entries.
         """
         import numpy as np
 
-        if not forecast or self._v26 is None:
+        if not forecast or self._pipeline is None:
             return {}, {}
 
         # Build the input arrays the pipeline expects
@@ -1200,65 +1219,81 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
         solar = np.array([float(f.get("solar") or 0.0) for f in forecast])
         temp  = np.array([float(f.get("temp")  or 0.0) for f in forecast])
 
-        # Y_fi_lag168: actual deseasonalized FI residual 7 days ago.
-        # Approximate using combined_forecast (most-recent observations)
-        # — when we don't have 7-day history, fall back to zeros.
+        # Y_fi_lag168 cold-start prior (rolling history not yet 7 days deep)
         lag168 = np.zeros(len(forecast), dtype=float)
-        # combined_forecast is rolling 24h; lag168 falls outside that
-        # window so for v2.6.0 we use zero as the cold-start prior.
 
-        out = self._v26.compute_forecast(
+        out = self._pipeline.compute_forecast(
             timestamps=timestamps,
             wind=wind, solar=solar, temp=temp,
             recent_fi_residuals={"lag168": lag168},
             enable_fan_chart=True,
         )
-        v26_mean = out["mean_eur_mwh"]
+        pipeline_mean = out["mean_eur_mwh"]
 
-        # v2.7.0 CUTOVER (per v2.6.1 benchmark, decisive win):
-        # The v26 mean prediction REPLACES the v2.2 Ridge prediction as
-        # the primary point forecast. Users see materially better
-        # accuracy (MAE 35 → 10 EUR/MWh, R² 0.49 → 0.93) without any
-        # dashboard or automation change.
+        # Overwrite each forecast row with the pipeline's spot, consumer,
+        # and fan-chart percentiles. Group consumer prices by local date
+        # so we can build the per-day D(k) arrays in one pass.
+        by_date_consumer: dict[str, list[float]] = {}
         for i, f in enumerate(forecast):
-            v26_spot = float(v26_mean[i])
-            # PRIMARY attributes — overwritten with v26 values
-            f["spot_eur_mwh"] = round(v26_spot, 4)
-            # Re-derive consumer price using the same tariff conversion
-            # the v2.2 path used; v26 only changes the spot estimate.
+            spot = float(pipeline_mean[i])
+            f["spot_eur_mwh"] = round(spot, 4)
+            consumer = f.get("consumer_eur_kwh")
             try:
                 ts = _iso_to_naive_ts(f["timestamp"]).replace(tzinfo=timezone.utc)
                 local_h = self._get_local_hour(ts)
                 is_night = local_h < 7 or local_h >= 22
-                f["consumer_eur_kwh"] = round(
-                    self._spot_to_consumer_eur_kwh(v26_spot, is_night), 4)
+                consumer = self._spot_to_consumer_eur_kwh(spot, is_night)
+                f["consumer_eur_kwh"] = round(consumer, 4)
+                local_date = self._local_date_str(ts)
             except Exception:
-                pass  # keep the v2.2-derived consumer price on failure
-            # ADDITIONAL v26_* attributes — fan-chart bands (kept from v2.6.0)
-            f["v26_mean_eur_mwh"] = v26_spot
+                local_date = None
             for q in ("P5", "P25", "P50", "P75", "P95"):
-                key = f"v26_{q}_eur_mwh"
-                f[key] = float(out[f"{q}_eur_mwh"][i])
+                f[f"{q}_eur_mwh"] = float(out[f"{q}_eur_mwh"][i])
+            if local_date is not None and consumer is not None:
+                by_date_consumer.setdefault(local_date, []).append(float(consumer))
 
-        # Extended 24-entry D(k) from v26 mean — return by-date map
-        # for the caller to inject onto duration_forecast entries
-        # AFTER _compute_duration_forecast runs.
-        v26_dk = self._v26.compute_duration_curves(v26_mean, timestamps)
-        dk_by_date = {d["date"]: d for d in v26_dk}
+        # Spot 24-level D(k) directly from the pipeline's hourly means.
+        spot_curves = self._pipeline.compute_duration_curves(pipeline_mean, timestamps)
+        dk_by_date: dict[str, dict[str, list[float]]] = {}
+        for d in spot_curves:
+            if d.get("hours_in_day") != 24:
+                continue
+            dk_by_date[d["date"]] = {
+                "dk_cheap_eur_mwh": [round(v, 2) for v in d["dk_cheap_eur_mwh"]],
+                "dk_peak_eur_mwh":  [round(v, 2) for v in d["dk_peak_eur_mwh"]],
+            }
+
+        # Consumer 24-level D(k) — sort the per-hour consumer prices for
+        # each complete day and take cumulative means in both directions.
+        for date_str, prices in by_date_consumer.items():
+            if len(prices) != 24:
+                continue
+            entry = dk_by_date.setdefault(date_str, {})
+            asc = sorted(prices)
+            desc = sorted(prices, reverse=True)
+            cheap = []
+            peak = []
+            s_c = 0.0
+            s_p = 0.0
+            for i in range(24):
+                s_c += asc[i]
+                s_p += desc[i]
+                cheap.append(round(s_c / (i + 1), 4))
+                peak.append(round(s_p / (i + 1), 4))
+            entry["dk_cheap_eur_kwh"] = cheap
+            entry["dk_peak_eur_kwh"] = peak
 
         # Persist calibrator state every cycle
         try:
-            self._v26.save_state()
+            self._pipeline.save_state()
         except Exception as e:
-            _LOGGER.debug("v26 save_state non-critical: %s", e)
+            _LOGGER.debug("pipeline save_state non-critical: %s", e)
 
         diagnostics = {
-            "v26_bias_eur_mwh": out.get("bias_eur_mwh", 0.0),
-            "v26_phi": self._v26._ar1_phi,
-            "v26_n_features": int(self._v26._ridge_coef.size),
-            "v26_floor_eur_mwh": -5.0,
-            "v26_pipeline_version": "2.7.0",
-            "v26_primary_for_spot": True,
+            "pipeline_bias_eur_mwh": out.get("bias_eur_mwh", 0.0),
+            "pipeline_ar1_phi": self._pipeline._ar1_phi,
+            "pipeline_n_features": int(self._pipeline._ridge_coef.size),
+            "pipeline_floor_eur_mwh": -5.0,
         }
         return diagnostics, dk_by_date
 
@@ -1271,13 +1306,11 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
         now: datetime,
         netload_hourly: dict[str, list[dict[str, Any]]] | None = None,
     ) -> list[dict[str, Any]]:
-        """Compute 7-day D(k) duration curve forecast.
-
-        Returns list of daily entries (only complete 24h days):
-        [{"date": "2026-04-13", "weekday": "Mon",
-          "dk_consumer_eur_kwh": [24 floats], "dk_spot_eur_mwh": [24 floats]}, ...]
-        dk_consumer_eur_kwh[k-1] = D(k) consumer price in EUR/kWh, k=1..24
-        dk_spot_eur_mwh[k-1] = D(k) spot price in EUR/MWh, k=1..24
+        """Build the per-day skeleton (date / weekday / source / optional
+        PV-aware D(k)). The canonical 24-level price D(k) arrays
+        (`dk_cheap_eur_mwh`, `dk_peak_eur_mwh`, `dk_cheap_eur_kwh`,
+        `dk_peak_eur_kwh`) are injected by the caller from
+        `_apply_pipeline_pre_dk`.
         """
         if not self.model.duration_model:
             return []
@@ -1468,7 +1501,7 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                         # v2.1.1: removed the `max(0, p)` floor here
                         # (matching the same fix in DurationModel) so
                         # negative spot forecasts surface in
-                        # `dk_cheap_spot_eur_mwh`. The consumer-side
+                        # the spot D(k) array. The consumer-side
                         # conversion via `_spot_to_consumer_eur_kwh`
                         # still floors at the fixed-overhead level.
                         p = (i + 1) * curve[i] - i * curve[i - 1]
@@ -1528,15 +1561,11 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                 "date": date_str,
                 "weekday": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][dow],
                 "source": "forecast",
-                # New dual cheap/peak schema (length 12 each)
-                "dk_cheap_eur_kwh": [round(v, 4) for v in dk_cheap_cons],
-                "dk_peak_eur_kwh": [round(v, 4) for v in dk_peak_cons],
-                "dk_cheap_spot_eur_mwh": [round(v, 2) for v in dk_cheap_spot],
-                "dk_peak_spot_eur_mwh": [round(v, 2) for v in dk_peak_spot],
-                # Legacy 24-element cumulative D(k) (deprecated, kept for
-                # one transition release)
-                "dk_consumer_eur_kwh": dk_consumer,
-                "dk_spot_eur_mwh": [round(v, 2) for v in dk_spot],
+                # Canonical 24-level D(k) arrays (`dk_cheap_eur_mwh`,
+                # `dk_peak_eur_mwh`, `dk_cheap_eur_kwh`,
+                # `dk_peak_eur_kwh`) are injected by the caller from the
+                # pipeline output to keep all per-day prices aligned with
+                # the per-hour forecast rows.
             }
 
             # ── Phase 1 PV-aware D(k) cheap/peak ────────────────────
@@ -1554,18 +1583,19 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                         if m_val is not None:
                             day_effectives.append(float(m_val))
                 if len(day_effectives) == 24:
-                    try:
-                        dk_cheap_pv, dk_peak_pv = compute_dk_cheap_peak(
-                            day_effectives)
-                        day_entry["dk_cheap_pv_eur_kwh"] = [
-                            round(v, 4) for v in dk_cheap_pv]
-                        day_entry["dk_peak_pv_eur_kwh"] = [
-                            round(v, 4) for v in dk_peak_pv]
-                    except ValueError as exc:
-                        _LOGGER.warning(
-                            "PV-aware cheap/peak D(k) failed for %s: %s",
-                            date_str, exc,
-                        )
+                    asc = sorted(day_effectives)
+                    desc = sorted(day_effectives, reverse=True)
+                    cheap_pv: list[float] = []
+                    peak_pv: list[float] = []
+                    s_c = 0.0
+                    s_p = 0.0
+                    for i in range(24):
+                        s_c += asc[i]
+                        s_p += desc[i]
+                        cheap_pv.append(round(s_c / (i + 1), 4))
+                        peak_pv.append(round(s_p / (i + 1), 4))
+                    day_entry["dk_cheap_pv_eur_kwh"] = cheap_pv
+                    day_entry["dk_peak_pv_eur_kwh"] = peak_pv
 
             result.append(day_entry)
 
@@ -1624,54 +1654,37 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
             if len(hours_map) < 24:
                 continue
 
-            # Sort 24 hourly spot prices ascending, compute D(k)
             spot_prices_24 = [hours_map[h] for h in range(24)]
-            sorted_spot = sorted(spot_prices_24)
-            running_spot = 0.0
-            dk_spot: list[float] = []
-            for i, p in enumerate(sorted_spot):
-                running_spot += p
-                dk_spot.append(round(running_spot / (i + 1), 2))
+            consumer_prices: list[float] = [
+                self._spot_to_consumer_eur_kwh(hours_map[h], h < 7 or h >= 22)
+                for h in range(24)
+            ]
 
-            # Convert to consumer EUR/kWh with day/night tariffs
-            consumer_prices: list[float] = []
-            for h in range(24):
-                is_night = h < 7 or h >= 22
-                consumer_prices.append(
-                    self._spot_to_consumer_eur_kwh(hours_map[h], is_night))
-            consumer_prices_sorted = sorted(consumer_prices)
-            running_cons = 0.0
-            dk_consumer: list[float] = []
-            for cp in consumer_prices_sorted:
-                running_cons += cp
-                dk_consumer.append(round(running_cons / (len(dk_consumer) + 1), 4))
+            spot_asc  = sorted(spot_prices_24)
+            spot_desc = sorted(spot_prices_24, reverse=True)
+            cons_asc  = sorted(consumer_prices)
+            cons_desc = sorted(consumer_prices, reverse=True)
 
-            # Phase A: dual cheap/peak D(k) curves (length 12 each).
-            try:
-                dk_cheap_cons, dk_peak_cons = compute_dk_cheap_peak(
-                    consumer_prices)
-                dk_cheap_spot, dk_peak_spot = compute_dk_cheap_peak(
-                    spot_prices_24)
-            except ValueError as exc:
-                _LOGGER.warning(
-                    "Actual cheap/peak D(k) failed for %s: %s",
-                    date_str, exc,
-                )
-                continue
+            dk_cheap_mwh: list[float] = []
+            dk_peak_mwh:  list[float] = []
+            dk_cheap_kwh: list[float] = []
+            dk_peak_kwh:  list[float] = []
+            s_sa = s_sd = s_ca = s_cd = 0.0
+            for i in range(24):
+                s_sa += spot_asc[i];  dk_cheap_mwh.append(round(s_sa / (i + 1), 2))
+                s_sd += spot_desc[i]; dk_peak_mwh.append(round(s_sd / (i + 1), 2))
+                s_ca += cons_asc[i];  dk_cheap_kwh.append(round(s_ca / (i + 1), 4))
+                s_cd += cons_desc[i]; dk_peak_kwh.append(round(s_cd / (i + 1), 4))
 
             dow = datetime.strptime(date_str, "%Y-%m-%d").weekday()
             result.append({
                 "date": date_str,
                 "weekday": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][dow],
                 "source": "actual",
-                # New dual cheap/peak schema (length 12 each)
-                "dk_cheap_eur_kwh": [round(v, 4) for v in dk_cheap_cons],
-                "dk_peak_eur_kwh": [round(v, 4) for v in dk_peak_cons],
-                "dk_cheap_spot_eur_mwh": [round(v, 2) for v in dk_cheap_spot],
-                "dk_peak_spot_eur_mwh": [round(v, 2) for v in dk_peak_spot],
-                # Legacy 24-element cumulative D(k) (deprecated)
-                "dk_consumer_eur_kwh": dk_consumer,
-                "dk_spot_eur_mwh": dk_spot,
+                "dk_cheap_eur_mwh": dk_cheap_mwh,
+                "dk_peak_eur_mwh":  dk_peak_mwh,
+                "dk_cheap_eur_kwh": dk_cheap_kwh,
+                "dk_peak_eur_kwh":  dk_peak_kwh,
             })
 
         _LOGGER.info("Actual D(k) computed: %d days", len(result))

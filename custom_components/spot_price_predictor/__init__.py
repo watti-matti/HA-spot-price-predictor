@@ -221,15 +221,15 @@ def _register_services(hass: HomeAssistant) -> None:
         _LOGGER.info("Manual refresh completed")
 
     async def handle_retrain_models(call: ServiceCall) -> None:
-        """v2.8.0 — refit all (or subset of) v26 model artifacts.
+        """Refit all (or a subset of) the prediction-pipeline artifacts.
 
         Runs the orchestrator from `retrain.py` in an executor so the
-        long-running CPU+IO work doesn't block the HA event loop.
-        Once complete, every active coordinator gets a fresh
-        V26Pipeline instance pointing at the refreshed artifacts.
+        long-running CPU+IO work doesn't block the HA event loop. Once
+        complete, every active coordinator gets a fresh Pipeline
+        instance pointing at the refreshed artifacts.
         """
         from . import retrain as _retrain
-        from .v26_pipeline import V26Pipeline
+        from .pipeline import Pipeline
 
         layers = call.data.get("layers")
         fingrid_key = call.data.get("fingrid_api_key")
@@ -253,7 +253,7 @@ def _register_services(hass: HomeAssistant) -> None:
             )
             return
 
-        # Reload V26Pipeline on every active coordinator so the new
+        # Reload the Pipeline on every active coordinator so the new
         # artifacts take effect immediately (without waiting for a
         # full HA restart).
         data_dir = Path(__file__).parent / "data"
@@ -263,14 +263,14 @@ def _register_services(hass: HomeAssistant) -> None:
                 continue
             try:
                 storage_dir = Path(
-                    hass.config.path(".storage", "spot_price_predictor_v26"))
-                coordinator._v26 = V26Pipeline(
+                    hass.config.path(".storage", "spot_price_predictor_pipeline"))
+                coordinator._pipeline = Pipeline(
                     data_dir=data_dir, storage_dir=storage_dir)
                 await coordinator.async_request_refresh()
                 reloaded += 1
             except Exception as e:
                 _LOGGER.warning(
-                    "Failed to reload V26Pipeline on %s: %s", entry_id, e)
+                    "Failed to reload Pipeline on %s: %s", entry_id, e)
 
         # Summary notification
         ok = result.get("ok", False)

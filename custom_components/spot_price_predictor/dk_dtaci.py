@@ -1,11 +1,10 @@
 """Per-(direction, k) DtACI bundle for D(i) order statistics.
 
-This module is the *primary* integration point for online conformal
-calibration in the Phase B layer (see `dtaci.py` for the underlying
-algorithm). It maintains 24 independent DtACI instances per zone:
+This module is the primary integration point for online conformal
+calibration. It maintains 48 independent DtACI instances per zone:
 
-    cheap[k] for k = 1..12  (mean of cheapest k hours)
-    peak[k]  for k = 1..12  (mean of priciest k hours)
+    cheap[k] for k = 1..24  (mean of cheapest k hours)
+    peak[k]  for k = 1..24  (mean of priciest k hours)
 
 Each DtACI instance tracks the residual distribution of its own order
 statistic and produces a calibrated band
@@ -54,8 +53,8 @@ from .dtaci import DEFAULT_GAMMAS, DtACI
 _LOGGER = logging.getLogger(__name__)
 
 
-CHEAP_PEAK_K_RANGE: tuple[int, ...] = tuple(range(1, 13))
-"""All 24 D(i) order statistics — k=1..12 for both cheap and peak ends."""
+CHEAP_PEAK_K_RANGE: tuple[int, ...] = tuple(range(1, 25))
+"""All 48 D(i) order statistics — k=1..24 for both cheap and peak ends."""
 
 
 def _instance_key(direction: str, k: int) -> str:
@@ -64,7 +63,7 @@ def _instance_key(direction: str, k: int) -> str:
 
 
 class DkDtACIBundle:
-    """Bundle of 24 DtACI instances, one per (direction, k) D(i) statistic.
+    """Bundle of 48 DtACI instances, one per (direction, k) D(i) statistic.
 
     Parameters
     ----------
@@ -151,15 +150,15 @@ class DkDtACIBundle:
         actual_dk_cheap: list[float],
         actual_dk_peak: list[float],
     ) -> None:
-        """Feed one day's (forecast, actual) D(i) pairs to all 24 instances.
+        """Feed one day's (forecast, actual) D(i) pairs to all 48 instances.
 
-        Each input must be a length-12 array. Missing values (NaN, None)
+        Each input must be a length-24 array. Missing values (NaN, None)
         skip the corresponding instance for that day.
         """
-        if len(forecast_dk_cheap) != 12 or len(actual_dk_cheap) != 12:
-            raise ValueError("cheap arrays must be length 12")
-        if len(forecast_dk_peak) != 12 or len(actual_dk_peak) != 12:
-            raise ValueError("peak arrays must be length 12")
+        if len(forecast_dk_cheap) != 24 or len(actual_dk_cheap) != 24:
+            raise ValueError("cheap arrays must be length 24")
+        if len(forecast_dk_peak) != 24 or len(actual_dk_peak) != 24:
+            raise ValueError("peak arrays must be length 24")
         for k in CHEAP_PEAK_K_RANGE:
             for direction, fa_pair in [
                 ("cheap", (forecast_dk_cheap[k - 1], actual_dk_cheap[k - 1])),
@@ -187,9 +186,9 @@ class DkDtACIBundle:
         Output schema:
             {
               "cheap": {
-                "lower": [12 floats],
-                "point": [12 floats],
-                "upper": [12 floats],
+                "lower": [24 floats],
+                "point": [24 floats],
+                "upper": [24 floats],
               },
               "peak": { ... same ... },
             }
