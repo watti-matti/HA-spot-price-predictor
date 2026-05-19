@@ -1,4 +1,4 @@
-# Tekninen toteutus — HA Spot Price Predictor (v2.9.0)
+# Tekninen toteutus — HA Spot Price Predictor (v2.10.0)
 
 Suomalaisen kuluttajan sähkön spot- ja kuluttajahinnan sekä D(k)-kestokäyrien ennustaminen Home Assistantiin. Tuottaa 170 tunnin spot/kuluttajahinnan pisteen ennusteen, P5/P25/P50/P75/P95-viuhkavyöt ja 7 vrk:n halpa/kallis-kestokäyrät nelitasoisesta ennustusputkesta. Tämä opas kuvaa vain sen mitä toimitettava koodi todella tekee.
 
@@ -67,7 +67,7 @@ järjestyksessä. Varatakenttänä on `RIDGE_FEATURES`-vakio
 | 4 | `Y_sigmoid_wind_rho` | `_sigmoid_turbine_rho` ([`pipeline.py:81-87`](custom_components/spot_price_predictor/pipeline.py:81)), sitten keskitetään paikallisesti | `σ((tuuli − 7,5) / 1,5) × ρ(T) / 1,225` |
 | 5 | `Y_solar_effective` | `_solar_effective` ([`pipeline.py:90-96`](custom_components/spot_price_predictor/pipeline.py:90)), sitten keskitetään paikallisesti | `GHI × (1 − 0,004 · max(0, T_cell − 25))`, `T_cell = T + 0,03 · GHI` |
 | 6 | `Y_temp` | `_deseasonalize_input("temp", …)` | Kausitasoittunut lämpötila |
-| 7 | `Y_se1` | `_deseasonalize_input("se1", …)` naapurihinta-argumentista | Kausitasoittunut SE1-spot. **v2.9.0:n lisäys** — hyväksytty v2.5.6:n hedge-portin alla. |
+| 7 | `Y_se1` | `_deseasonalize_input("se1", …)` naapurihinta-argumentista | Kausitasoittunut SE1-spot. **v2.10.0:n lisäys** — hyväksytty v2.5.6:n hedge-portin alla. |
 | 8 | `Y_se3` | `_deseasonalize_input("se3", …)` | Kausitasoittunut SE3-spot (FennoSkan-kaapeleiden Ruotsin pää). |
 | 9 | `Y_ee` | `_deseasonalize_input("ee", …)` | Kausitasoittunut EE-spot (Estlink-kaapeleiden Viron pää). |
 

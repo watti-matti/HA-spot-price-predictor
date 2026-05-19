@@ -83,7 +83,7 @@ def test_pipeline_loads_shipped_artifacts(tmp_path: Path) -> None:
     """Construction must succeed against the production artifacts and
     populate Ridge coef / AR(1) phi / L4 GPD params."""
     p = _make_pipeline(tmp_path)
-    # v2.9.0 — intercept + 8 Ridge features (5 core + Y_se1 + Y_se3 + Y_ee)
+    # v2.10.0 — intercept + 8 Ridge features (5 core + Y_se1 + Y_se3 + Y_ee)
     assert p._ridge_coef.shape == (9,)
     assert tuple(p._features) == (
         "intercept", "Y_fi_lag168", "is_workday",
@@ -121,7 +121,7 @@ def test_compute_forecast_returns_expected_shape(tmp_path: Path) -> None:
 
 
 def test_compute_forecast_accepts_neighbour_prices(tmp_path: Path) -> None:
-    """v2.9.0 — supplying SE1/SE3/EE neighbour prices shifts the mean
+    """v2.10.0 — supplying SE1/SE3/EE neighbour prices shifts the mean
     relative to the no-neighbour fallback, in line with the V_xb
     cross-border coefficients (which are positive)."""
     p = _make_pipeline(tmp_path)

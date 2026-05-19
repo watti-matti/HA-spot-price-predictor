@@ -1,4 +1,4 @@
-# v2.9.0 — Cross-border features (Y_se1, Y_se3, Y_ee) promoted to production
+# v2.10.0 — Cross-border features (Y_se1, Y_se3, Y_ee) promoted to production
 
 This release extends the L2 non-seasonal Ridge from 5 to 8 features by
 adding deseasonalised Swedish (SE1, SE3) and Estonian (EE) spot prices.
@@ -91,14 +91,14 @@ and
 | `custom_components/spot_price_predictor/pipeline.py` | `_build_features` is now feature-list-driven; `compute_forecast` takes `recent_neighbour_prices`. `RIDGE_FEATURES` expanded to 9 names. |
 | `custom_components/spot_price_predictor/coordinator.py` | `_apply_pipeline_pre_dk` accepts `neighbor` dict and aligns it via the new `_align_neighbour_prices()` helper before calling the pipeline. |
 | `custom_components/spot_price_predictor/data/spike_model_default.json` | Refit end-to-end with the 8-feature design on the 2023-2026 cached parquets. `ridge_coef` length 9; `gpd_right` re-fit on the new (smaller) post-AR residual. |
-| `custom_components/spot_price_predictor/manifest.json` | `version: 2.9.0`. |
-| `custom_components/spot_price_predictor/sensor.py` | `sw_version: 2.9.0`. |
+| `custom_components/spot_price_predictor/manifest.json` | `version: 2.10.0`. |
+| `custom_components/spot_price_predictor/sensor.py` | `sw_version: 2.10.0`. |
 | `tests/test_pipeline.py` | Updated for the 9-coef artifact + new tests for the neighbour-price path (full series, partial / NaN, missing zones). |
 
 ## Test status
 
 `python -m pytest tests/` — **409 passed, 4 warnings, 0 failed** at
-the v2.9.0 commit.
+the v2.10.0 commit.
 
 ## Acceptance criteria (v2.5.6 hedge gate)
 

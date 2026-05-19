@@ -2,7 +2,7 @@
 
 [![HACS Integration](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-2.9.0-blue.svg)](https://github.com/watti-matti/HA-spot-price-predictor/releases/tag/v2.9.0)
+[![Version](https://img.shields.io/badge/version-2.10.0-blue.svg)](https://github.com/watti-matti/HA-spot-price-predictor/releases/tag/v2.10.0)
 
 **Forecast Finnish electricity prices for the next 170 hours**, in both spot (EUR/MWh) and consumer (EUR/kWh) terms, with calibrated probabilistic bands and 7-day duration curves for cost-aware load scheduling.
 
@@ -44,7 +44,7 @@ Defined as `RIDGE_FEATURES` in [`pipeline.py:62-77`](custom_components/spot_pric
 | 4 | `Y_sigmoid_wind_rho` | sigmoid wind-power curve scaled by relative air density: `σ((wind − 7.5) / 1.5) × ρ(T) / 1.225` |
 | 5 | `Y_solar_effective` | temperature-derated GHI: `GHI × (1 − 0.004 · max(0, T_cell − 25))` with `T_cell = T + 0.03 · GHI` |
 | 6 | `Y_temp` | deseasonalized temperature |
-| 7 | `Y_se1` | deseasonalized SE1 spot — Sweden zone 1 (added in v2.9.0; passes the v2.5.6 hedge gate) |
+| 7 | `Y_se1` | deseasonalized SE1 spot — Sweden zone 1 (added in v2.10.0; passes the v2.5.6 hedge gate) |
 | 8 | `Y_se3` | deseasonalized SE3 spot — Sweden zone 3, the FennoSkan cable terminus |
 | 9 | `Y_ee` | deseasonalized EE spot — Estonia, the Estlink terminus |
 

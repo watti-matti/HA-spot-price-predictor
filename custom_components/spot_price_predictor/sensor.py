@@ -79,7 +79,7 @@ def _device_info(entry: ConfigEntry) -> dict[str, Any]:
         "name": "Spot Price Predictor",
         "manufacturer": "watti-matti",
         "model": "Spot Price Predictor",
-        "sw_version": "2.9.0",
+        "sw_version": "2.10.0",
     }
 
 

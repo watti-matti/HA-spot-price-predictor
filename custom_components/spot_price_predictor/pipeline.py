@@ -69,7 +69,7 @@ RIDGE_FEATURES = (
     "Y_sigmoid_wind_rho",
     "Y_solar_effective",
     "Y_temp",
-    # v2.9.0 — cross-border features accepted under the v2.5.6 hedge
+    # v2.10.0 — cross-border features accepted under the v2.5.6 hedge
     # gate (see studies/results/exp_extended_retrain.md). Deseasonalised
     # SE/EE prices read from the corresponding shipped L1 components.
     "Y_se1",
