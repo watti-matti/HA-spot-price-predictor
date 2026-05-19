@@ -226,14 +226,26 @@ Validation:
 - For a small historical sample, realised PV falls within the
   generated 90 % band ≥ 88 % of the time (target 90 %).
 
-### Phase B — Consumption EMA forecaster
+### Phase B — Consumption EMA forecaster (OUT OF SCOPE for this repo)
 
-`consumption_forecaster.py`. As specified above. Tested in
-isolation against the 72-day HA history (private path):
+Per the deployment-topology amendment below, the EMA forecaster
+lives in a **separate HA module / repo** (working name:
+`HA-consumption-profiler`). This integration's only job is to
+**read** the resulting profile sensor.
 
-- Profile MAE < 15 % at hour level after 30 days of training.
-- Profile RMSE < 25 % at hour level.
-- Anomaly guard correctly catches injected outliers in unit tests.
+What this repo adds in place of Phase B:
+
+- New config field `CONF_CONSUMPTION_PROFILE_ENTITY`.
+- Coordinator wiring that reads the entity's `profile_24x7x12`
+  attribute when present, falls back to the existing
+  synthetic-profile logic when absent.
+- `data_provenance` propagation onto every PV-aware CVaR
+  attribute so dashboards know which mode produced the number.
+
+Phase B's *engineering* (the EMA, the anomaly guard, the
+persistence) happens in the separate repo. Acceptance criteria
+for that work — MAE < 15 % after 30 days, anomaly guard
+unit-tested, etc. — are recorded in that repo's own plan.
 
 ### Phase C — Cost kernel
 
@@ -327,6 +339,131 @@ This plan ships when:
 - Multi-household joint CVaR (community PV). Out of scope.
 - CVaR at α other than 5 %. The kernel supports it; the published
   sensor fixes α = 0.05 for simplicity.
+
+## Deployment topology (amendment — supersedes Phase B scope)
+
+The EMA consumption estimator does **not** live inside this
+integration. It is a **separate HA module** (its own custom
+component / repo) running on the HA host, responsible only for
+observing realised consumption and publishing a smoothed profile.
+The thermal optimiser (HA-energy-needs-planner successor) runs in
+a **separate Proxmox container** outside HA entirely.
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  Home Assistant host                                         │
+│                                                              │
+│  HA recorder ──(consumption sensors)────────┐                │
+│                                              ▼               │
+│  ┌──────────────────────────┐   ┌──────────────────────┐     │
+│  │ HA-spot-price-predictor  │   │ HA-consumption-      │     │
+│  │ (this integration)       │   │ profiler (NEW)       │     │
+│  │                          │   │                      │     │
+│  │ - price scenarios        │   │ - 24×7×12 EMA profile│     │
+│  │ - PV scenarios           │   │ - anomaly guard      │     │
+│  │ - reads profile via ─────┼───┤ - publishes sensor.  │     │
+│  │   CONF_CONSUMPTION_      │   │   expected_          │     │
+│  │   PROFILE_ENTITY         │   │   consumption_profile│     │
+│  │ - calls cost_kernel      │   └──────────────────────┘     │
+│  │ - publishes CVaR         │                                │
+│  └──────────────────────────┘                                │
+│                                                              │
+│  EMHASS (HA add-on)                                          │
+│  - 15-min dispatch                                           │
+│  - reads daily kWh targets + setpoints from Proxmox          │
+└──────────────────────────────────────────────────────────────┘
+                            │
+                            │  MQTT / HA REST API
+                            ▼
+┌──────────────────────────────────────────────────────────────┐
+│  Proxmox container (separate host process)                   │
+│                                                              │
+│  Thermal optimiser (HA-energy-needs-planner v2)              │
+│  - reads price scenarios / CVaR / consumption profile        │
+│  - decides daily kWh targets and setpoint trajectories       │
+│  - calls the SAME cost_kernel with its own schedule for      │
+│    the achieved-CVaR / quality-gap metric                    │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### Implications for this integration
+
+**Phase B is dropped from this repo.** The integration does not
+own the EMA logic. Instead, it adds a single config field:
+
+```python
+CONF_CONSUMPTION_PROFILE_ENTITY = "consumption_profile_entity"
+# Default: ""  (unconfigured → synthetic fallback)
+```
+
+The coordinator's `_apply_pipeline_pre_dk` reads this entity and
+expects a sensor whose attributes contain `{"profile_24x7x12":
+[[[…], …], …], "data_provenance": "ema_warm" | "ema_blended" |
+"synthetic_cold_start", "tau_days": 21}`.
+
+If the entity is unconfigured or returns no data, the integration
+falls back to the existing synthetic profile (annual_kWh × monthly
+multiplier × hour-of-day shape) exactly as today. The PV-aware
+CVaR is still computed, but its `data_provenance` flag carries
+`synthetic_cold_start` and dashboards mark it low-confidence.
+
+### Implications for the EMA module (out of scope here)
+
+The EMA module is a separate study / repo. Recommended properties,
+recorded for future-self reference:
+
+- **Single responsibility**: observe `CONF_CONSUMPTION_ENTITY`
+  (e.g. `sensor.power_load_no_var_loads`), maintain the 24×7×12
+  EMA + per-cell σ, publish the profile sensor.
+- **Stateful** with persistence to its own JSON file (in its own
+  `_private/` if shipped with the same privacy contract).
+- **No knowledge of prices, PV, EMHASS, or the thermal optimiser**.
+  Receives observed consumption only.
+- **τ-bounded update rule** as specified earlier: τ ≥ 14 d default
+  21 d. Anomaly guard at 3σ.
+- **Cold-start logic**: synthetic profile for days 0–14, blend
+  days 15–30, pure EMA day 30+. Provenance flag exposed.
+
+### Implications for the thermal optimiser (separate container)
+
+The Proxmox-hosted optimiser reads three HA sensors via MQTT or
+the REST API:
+
+1. Raw `consumer_eur_kwh` from `sensor.price_forecast.forecast[]`
+   (canonical price — R1).
+2. PV-aware scenarios (when the predictor exposes them via the
+   future `spot_price_predictor.get_scenarios` service).
+3. Consumption profile from the EMA module's sensor.
+
+It calls the same `pv_cost_kernel.cost_distribution()` library
+(vendored / pip-installed) with its own planned schedule as the
+`consumption_kwh` argument. The result is the **achieved CVaR**.
+Subtracted from the predictor's published **reference CVaR**
+gives the quality gap. No feedback edge exists in either
+direction at this layer; both numbers are derived independently
+from the same EMA profile + scenario set.
+
+### What this changes about stability
+
+The stability argument remains identical because **the feedback
+path is unchanged in shape**:
+
+```
+optimiser decisions → EMHASS dispatch → realised consumption
+    → HA recorder → EMA module → consumption profile sensor
+    → predictor → CVaR
+```
+
+The slow-EMA in the dedicated module is still the load-bearing
+low-pass filter. Moving it from "inside the predictor" to "a
+sibling HA module" doesn't change the loop dynamics — it just
+clarifies ownership.
+
+The predictor reading the profile via a HA sensor entity instead
+of from its own in-process state does mean that the integration's
+behaviour at startup depends on whether the profile sensor is
+populated. The fallback to synthetic profile handles that case
+cleanly.
 
 ## Sequencing into the broader study
 
