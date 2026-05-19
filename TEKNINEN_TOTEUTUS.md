@@ -1,4 +1,4 @@
-# Tekninen toteutus — HA Spot Price Predictor (v2.8.1)
+# Tekninen toteutus — HA Spot Price Predictor (v2.9.0)
 
 Suomalaisen kuluttajan sähkön spot- ja kuluttajahinnan sekä D(k)-kestokäyrien ennustaminen Home Assistantiin. Tuottaa 170 tunnin spot/kuluttajahinnan pisteen ennusteen, P5/P25/P50/P75/P95-viuhkavyöt ja 7 vrk:n halpa/kallis-kestokäyrät nelitasoisesta ennustusputkesta. Tämä opas kuvaa vain sen mitä toimitettava koodi todella tekee.
 
@@ -51,20 +51,27 @@ P{5,25,50,75,95}_eur_mwh(h) ← 500 näytettä sekoituksesta (Normaalirunko + GP
 
 `Pipeline._seasonal_fi` ja `Pipeline._deseasonalize_input` ([`pipeline.py:200-216`](custom_components/spot_price_predictor/pipeline.py:200)) lukevat additiiviset tunti + päivä + viikko -komponentit tiedostosta `seasonal_components_default.json` ja vähentävät ne FI-hinnasta ja lämpötilasta tuottaen kausitasoittuneet residuaalit. Tuulta ja aurinkoa ei kausitasoiteta L1:n kautta — ne keskitetään paikallisesti (keskiarvon vähennys) ennen Ridgeen menoa.
 
-### L2 — Ei-kausi-osan Ridge-regressio (kuusi piirrettä)
+### L2 — Ei-kausi-osan Ridge-regressio (kahdeksan piirrettä)
 
-Piirrejärjestys on kiinteä vakiossa `RIDGE_FEATURES` ([`pipeline.py:62-69`](custom_components/spot_price_predictor/pipeline.py:62)):
+Toimitettava `data/spike_model_default.json` sisältää kanonisen
+piirrejärjestyksen `ridge_features`-kentässään; putki lukee sen
+rakennusvaiheessa ja muodostaa suunnittelumatriisin tässä
+järjestyksessä. Varatakenttänä on `RIDGE_FEATURES`-vakio
+([`pipeline.py:62-77`](custom_components/spot_price_predictor/pipeline.py:62)).
 
-| # | Piirre | Rakennetaan `_build_features`:ssä ([`pipeline.py:220-242`](custom_components/spot_price_predictor/pipeline.py:220)) | Määritelmä |
+| # | Piirre | Rakennetaan `_build_features`:ssä ([`pipeline.py:220-275`](custom_components/spot_price_predictor/pipeline.py:220)) | Määritelmä |
 |---|---|---|---|
 | 1 | `intercept` | `np.ones(n)` | vakio 1 |
 | 2 | `Y_fi_lag168` | välitetään kutsujalta `recent_fi_residuals["lag168"]`-avaimella | Kausitasoittunut FI-residuaali 7 päivää aiemmin. Koordinaattori välittää tällä hetkellä nollia (kylmäkäynnistys), koska liukuva ennustushistoria on alle 7 päivää syvä. |
-| 3 | `is_workday` | `Pipeline._is_workday` ([`pipeline.py:244-250`](custom_components/spot_price_predictor/pipeline.py:244)) — `weekday < 5` | binaari {0, 1} |
+| 3 | `is_workday` | `Pipeline._is_workday` — `weekday < 5` | binaari {0, 1} |
 | 4 | `Y_sigmoid_wind_rho` | `_sigmoid_turbine_rho` ([`pipeline.py:81-87`](custom_components/spot_price_predictor/pipeline.py:81)), sitten keskitetään paikallisesti | `σ((tuuli − 7,5) / 1,5) × ρ(T) / 1,225` |
 | 5 | `Y_solar_effective` | `_solar_effective` ([`pipeline.py:90-96`](custom_components/spot_price_predictor/pipeline.py:90)), sitten keskitetään paikallisesti | `GHI × (1 − 0,004 · max(0, T_cell − 25))`, `T_cell = T + 0,03 · GHI` |
 | 6 | `Y_temp` | `_deseasonalize_input("temp", …)` | Kausitasoittunut lämpötila |
+| 7 | `Y_se1` | `_deseasonalize_input("se1", …)` naapurihinta-argumentista | Kausitasoittunut SE1-spot. **v2.9.0:n lisäys** — hyväksytty v2.5.6:n hedge-portin alla. |
+| 8 | `Y_se3` | `_deseasonalize_input("se3", …)` | Kausitasoittunut SE3-spot (FennoSkan-kaapeleiden Ruotsin pää). |
+| 9 | `Y_ee` | `_deseasonalize_input("ee", …)` | Kausitasoittunut EE-spot (Estlink-kaapeleiden Viron pää). |
 
-Ridge-ennuste lasketaan kaavalla `ridge = X @ self._ridge_coef` ([`pipeline.py:361`](custom_components/spot_price_predictor/pipeline.py:361)).
+Ridge-ennuste lasketaan kaavalla `ridge = X @ self._ridge_coef`. Kutsuja toimittaa raa'at naapurihinnat parametrillä `compute_forecast(..., recent_neighbour_prices={"se1": np.ndarray(n), "se3": …, "ee": …})`; puuttuvat tai NaN-arvot palautuvat nollasarakkeeksi kyseiselle tunnille — vastaa v2.8.x:n rajat-ylittävä-tonttoman käyttäytymisen.
 
 ### L3 — AR(1)-momentum
 

@@ -1,64 +1,50 @@
 {
-  "version": "2.5.13",
-  "layer": "L4 GPD POT on FI post-AR residual",
+  "version": "experiment/extra-l2-features/V_xb",
+  "layer": "L4 GPD POT on FI post-AR residual (experimental refit)",
   "ridge_features": [
     "Y_fi_lag168",
     "is_workday",
     "Y_sigmoid_wind_rho",
     "Y_solar_effective",
-    "Y_temp"
+    "Y_temp",
+    "Y_se1",
+    "Y_se3",
+    "Y_ee"
   ],
   "ridge_coef": [
-    2.047127668413314,
-    0.06617063331453758,
-    0.21359078123618866,
-    -91.8699419623535,
-    -0.021430737755820484,
-    -2.432682773638901
+    1.0672606601103514,
+    0.02209615002501998,
+    2.394289496327108,
+    -38.17036005695758,
+    0.026336173366132497,
+    -0.4636601196724382,
+    0.16975951252533805,
+    0.4034871231261917,
+    0.5318860928915425
   ],
-  "ar1_phi": 0.9041506423926506,
+  "ar1_phi": 0.8572072318319025,
   "gpd_right": {
-    "n": 426,
-    "shape": 0.47767140924597956,
-    "scale": 20.61215631867715,
-    "p_exceed": 0.026760474904202525,
-    "threshold": 31.623178521080288
+    "n": 365,
+    "shape": 0.35702794636716895,
+    "scale": 15.75253491906334,
+    "p_exceed": 0.023024033305998864
   },
-  "hill_right_alpha": 2.088832905215177,
-  "hill_left_alpha": 2.088832905215177,
-  "train_window": [
-    "2023-01-08 00:00:00+00:00",
-    "2024-11-01 06:00:00+00:00"
-  ],
+  "hill_right_alpha": 2.919563161143317,
+  "hill_left_alpha": 2.919563161143317,
   "stats": {
-    "n_train": 15919,
-    "eta_train_mean": -0.004814656223658242,
-    "eta_train_sigma": 22.759033493353233,
-    "eta_train_skew": 4.6746562175137925,
-    "eta_train_excess_kurt": 252.71091481746666
+    "n_train": 15853,
+    "eta_train_mean": 0.0020114064659105114,
+    "eta_train_sigma": 18.626134701051203,
+    "eta_train_skew": 0.36679873999443763,
+    "eta_train_excess_kurt": 85.6945591320023
   },
-  "cvar_backtest": [
-    {
-      "alpha": 0.05,
-      "realised": 43.56290656814945,
-      "normal": 46.950164529453865,
-      "gpd": NaN,
-      "empirical_train": 48.984304170207544
-    },
-    {
-      "alpha": 0.01,
-      "realised": 84.00341020358218,
-      "normal": 60.66251436403514,
-      "gpd": 120.67808947125536,
-      "empirical_train": 116.9706124477264
-    },
-    {
-      "alpha": 0.001,
-      "realised": 145.39935179228414,
-      "normal": 76.63653049526032,
-      "gpd": 385.5933162261704,
-      "empirical_train": 361.0705294828163
-    }
+  "train_window": [
+    "2023-01-08 23:00:00+00:00",
+    "2024-11-02 05:00:00+00:00"
   ],
-  "notes": "L4 GPD POT spike model on the post-AR(1) residual of the V_sigmoid_full architecture (v2.5.12). Runtime: sample post-AR shocks via GPD inverse-CDF for the right tail. Bulk uses Normal(\u03bc, \u03c3); only exceedances above threshold u draw from GPD."
+  "test_window": [
+    "2024-11-02 06:00:00+00:00",
+    "2026-04-26 22:00:00+00:00"
+  ],
+  "notes": "Experimental refit produced by studies/exp_extended_retrain.py. Lives under output/ and is NOT loaded by the production Pipeline. Side-by-side hedge metrics in studies/results/exp_extended_retrain.md."
 }

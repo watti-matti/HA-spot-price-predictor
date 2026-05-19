@@ -58,7 +58,10 @@ from . import hourly_calibration as _hc
 
 _LOGGER = logging.getLogger(__name__)
 
-# Canonical Ridge feature ordering for the L2 layer.
+# Default Ridge feature ordering. The shipped artifact's
+# `ridge_features` field is authoritative at runtime — the pipeline
+# reads it and builds the design matrix in that exact order. This
+# constant is only the fallback when the artifact lacks the field.
 RIDGE_FEATURES = (
     "intercept",          # constant 1
     "Y_fi_lag168",
@@ -66,7 +69,17 @@ RIDGE_FEATURES = (
     "Y_sigmoid_wind_rho",
     "Y_solar_effective",
     "Y_temp",
+    # v2.9.0 — cross-border features accepted under the v2.5.6 hedge
+    # gate (see studies/results/exp_extended_retrain.md). Deseasonalised
+    # SE/EE prices read from the corresponding shipped L1 components.
+    "Y_se1",
+    "Y_se3",
+    "Y_ee",
 )
+
+# Names of neighbour-price zones consumed by Pipeline.compute_forecast
+# when the caller supplies the optional `recent_neighbour_prices` arg.
+_NEIGHBOUR_ZONES: tuple[str, ...] = ("se1", "se3", "ee")
 
 
 # ── Physics features (vectorised) ──────────────────────────────────
@@ -123,11 +136,22 @@ class Pipeline:
         self._spike_artifact = self._load_json(
             self._data_dir / "spike_model_default.json")
 
-        # Ridge β vector ordering must match RIDGE_FEATURES
+        # Ridge β vector. The artifact carries the feature names it was
+        # trained on; the pipeline builds the design matrix in that
+        # order. Falls back to RIDGE_FEATURES if the artifact omits the
+        # field (legacy artifacts).
         self._ridge_coef = np.asarray(
             self._spike_artifact.get("ridge_coef", [0.0] * len(RIDGE_FEATURES)),
             dtype=float,
         )
+        feats = self._spike_artifact.get("ridge_features")
+        if isinstance(feats, list) and len(feats) == len(self._ridge_coef) - 1:
+            # Artifact stores features WITHOUT the intercept; prepend.
+            self._features: tuple[str, ...] = ("intercept", *feats)
+        elif isinstance(feats, list) and len(feats) == len(self._ridge_coef):
+            self._features = tuple(feats)
+        else:
+            self._features = RIDGE_FEATURES[: len(self._ridge_coef)]
         # AR(1) coefficient on the deseasonalized FI residual
         self._ar1_phi = float(self._spike_artifact.get("ar1_phi", 0.0))
         # L4 GPD POT parameters for fan-chart sampling
@@ -217,29 +241,82 @@ class Pipeline:
 
     # ── L2 Ridge features + prediction ─────────────────────────────
 
-    def _build_features(self, timestamps: np.ndarray,
-                        wind: np.ndarray, solar: np.ndarray,
-                        temp: np.ndarray,
-                        Y_fi_lag168: np.ndarray) -> np.ndarray:
-        """Returns design matrix (n, 6) with columns matching RIDGE_FEATURES."""
+    def _build_features(
+        self, timestamps: np.ndarray,
+        wind: np.ndarray, solar: np.ndarray, temp: np.ndarray,
+        Y_fi_lag168: np.ndarray,
+        neighbour_prices: Mapping[str, np.ndarray] | None = None,
+    ) -> np.ndarray:
+        """Build the L2 Ridge design matrix in the order declared by
+        the artifact's `ridge_features` field (see `__init__`).
+
+        Cross-border zones (`Y_se1`, `Y_se3`, `Y_ee`) are deseasonalised
+        against the shipped per-zone L1 components when raw prices are
+        supplied via `neighbour_prices={"se1": np.ndarray(n), ...}`;
+        missing zones contribute zero (graceful fallback).
+        """
         n = len(timestamps)
         is_workday = self._is_workday(timestamps).astype(float)
-        # Physics-derived features
+        # Physics-derived features (intermediate; deseasonalised below).
         wind_rho = _sigmoid_turbine_rho(wind, temp)
         solar_eff = _solar_effective(solar, temp)
-        # Deseasonalize the physics features (matches v2.5.13 fit)
         Y_wind_rho  = wind_rho  - np.mean(wind_rho)   # local centering
         Y_solar_eff = solar_eff - np.mean(solar_eff)
         Y_temp      = self._deseasonalize_input("temp", temp, timestamps)
-        X = np.column_stack([
-            np.ones(n),
-            Y_fi_lag168,
-            is_workday,
-            Y_wind_rho,
-            Y_solar_eff,
-            Y_temp,
-        ])
-        return X
+
+        # Cross-border zones — deseasonalised raw prices using the
+        # shipped L1 components; zeros if not supplied. NaN entries
+        # (alignment gaps) are filled post-deseasonalisation so the
+        # Ridge term contributes zero for that hour.
+        Y_zone: dict[str, np.ndarray] = {}
+        np_arr = neighbour_prices or {}
+        for zone in _NEIGHBOUR_ZONES:
+            raw = np_arr.get(zone) if isinstance(np_arr, Mapping) else None
+            if raw is None:
+                Y_zone[zone] = np.zeros(n, dtype=float)
+                continue
+            raw_arr = np.asarray(raw, dtype=float)
+            if raw_arr.shape != (n,):
+                Y_zone[zone] = np.zeros(n, dtype=float)
+                continue
+            # If the entire zone is missing (all NaN), short-circuit.
+            if not np.any(np.isfinite(raw_arr)):
+                Y_zone[zone] = np.zeros(n, dtype=float)
+                continue
+            # Fill alignment gaps with the zone's local mean so the
+            # subsequent deseasonalisation step doesn't propagate NaN.
+            finite = raw_arr[np.isfinite(raw_arr)]
+            filled = np.where(np.isfinite(raw_arr), raw_arr,
+                              float(np.mean(finite)))
+            y = self._deseasonalize_input(zone, filled, timestamps)
+            # Final guard against any residual NaN.
+            y = np.where(np.isfinite(y), y, 0.0)
+            Y_zone[zone] = y
+
+        # Map feature name → column array.
+        named: dict[str, np.ndarray] = {
+            "intercept":          np.ones(n, dtype=float),
+            "Y_fi_lag168":        Y_fi_lag168,
+            "is_workday":         is_workday,
+            "Y_sigmoid_wind_rho": Y_wind_rho,
+            "Y_solar_effective":  Y_solar_eff,
+            "Y_temp":             Y_temp,
+            "Y_se1":              Y_zone["se1"],
+            "Y_se3":              Y_zone["se3"],
+            "Y_ee":               Y_zone["ee"],
+        }
+
+        cols = []
+        for f in self._features:
+            if f in named:
+                cols.append(named[f])
+            else:
+                # Unknown feature in artifact — zero-pad so the ridge
+                # coefficient applied to it contributes nothing rather
+                # than crashing the inference cycle.
+                _LOGGER.warning("pipeline:unknown feature in artifact: %s", f)
+                cols.append(np.zeros(n, dtype=float))
+        return np.column_stack(cols)
 
     @staticmethod
     def _is_workday(timestamps: np.ndarray) -> np.ndarray:
@@ -319,9 +396,10 @@ class Pipeline:
         self, timestamps: np.ndarray,
         wind: np.ndarray, solar: np.ndarray, temp: np.ndarray,
         recent_fi_residuals: dict[str, float] | None = None,
+        recent_neighbour_prices: Mapping[str, np.ndarray] | None = None,
         enable_fan_chart: bool = True,
     ) -> dict[str, np.ndarray]:
-        """Compute the v2.6.0 hourly forecast.
+        """Compute the hourly forecast.
 
         Args:
             timestamps: 1-D numpy datetime64 array for the forecast horizon.
@@ -330,6 +408,12 @@ class Pipeline:
                 providing Y_fi at t-168 for each forecast hour, AND
                 {"last_eta": float} providing the most-recent observed
                 post-AR residual (for L3 AR(1) propagation).
+            recent_neighbour_prices: optional dict mapping zone name
+                (``"se1"``, ``"se3"``, ``"ee"``) to raw EUR/MWh prices
+                aligned with ``timestamps``. The pipeline deseasonalises
+                them against the shipped per-zone L1 components before
+                applying the Ridge weights. Missing zones contribute
+                zero — equivalent to the v2.8.x behaviour.
             enable_fan_chart: if True, also compute P5/P25/P50/P75/P95.
 
         Returns:
@@ -357,7 +441,8 @@ class Pipeline:
             self._last_eta = float(recent_fi_residuals["last_eta"])
 
         # L2 Ridge
-        X = self._build_features(timestamps, wind, solar, temp, lag168)
+        X = self._build_features(timestamps, wind, solar, temp, lag168,
+                                  neighbour_prices=recent_neighbour_prices)
         ridge = X @ self._ridge_coef
 
         # L3 AR(1) propagation
