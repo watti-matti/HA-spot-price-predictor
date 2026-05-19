@@ -183,6 +183,56 @@ predictor upgrade helps the *planner's* decisions, not just the
 forecast metric. This is a meaningful end-to-end validation that
 the cross-border features delivered downstream value.
 
+## R7 — EMHASS as an additional decoupling layer (semantic clarification)
+
+The thermal optimiser controls **daily kWh budgets and setpoint
+trajectories**. EMHASS controls **when within the day** these get
+dispatched, via fresh per-day MILP optimisation using today's
+prices, weather, and constraints. The EMA observes only the
+*post-EMHASS realised* hourly consumption — never the thermal
+optimiser's plan directly.
+
+This means the coupling from the thermal optimiser into the EMA
+is doubly indirect:
+
+```
+thermal optimiser plan  →  EMHASS MILP  →  realised consumption  →  EMA
+   (daily aggregate)       (intra-day,        (varies by day,         (slow τ)
+                            price-driven)      same plan → different
+                                               hourly signature)
+```
+
+A single daily kWh budget produces materially different hour-of-day
+shapes on two days with different prices/weather, because EMHASS
+reshuffles within `allowed_hours` to chase cheap-effective hours.
+The slow-EMA already filters by τ; EMHASS's reshuffling adds a
+second decoupling stage by injecting price/weather-driven variance
+into the realised signature that the EMA averages over.
+
+The cumulative stability margin is comfortably > 80 dB — well in
+excess of any plausible loop-gain threat.
+
+### Semantic implication
+
+The published consumption profile is **"realised hourly consumption
+under whatever optimisation regime is running."**
+
+- Users running thermal optimiser + EMHASS: EMA learns the
+  post-optimised signature.
+- Users running nothing: EMA learns natural consumption.
+- Users with partial automation: EMA learns the actual hybrid.
+
+The predictor and the cost kernel consume this profile without
+needing to know which case applies. Reference CVaR computed against
+it is meaningful in all three.
+
+This is also why the EMA module's **single responsibility** is
+correct: it observes and smooths; it does not interpret the
+optimisation regime. Anyone downstream who needs a regime-aware
+breakdown (e.g. "show me what a non-optimised household would have
+paid") would do their own counterfactual computation, not interrogate
+the EMA module's internals.
+
 ## Out of scope (oscillation control)
 
 - Active damping (e.g. EMA on effective_eur_kwh between cycles).
