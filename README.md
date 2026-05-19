@@ -2,7 +2,7 @@
 
 [![HACS Integration](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-2.8.1-blue.svg)](https://github.com/watti-matti/HA-spot-price-predictor/releases/tag/v2.8.1)
+[![Version](https://img.shields.io/badge/version-2.10.0-blue.svg)](https://github.com/watti-matti/HA-spot-price-predictor/releases/tag/v2.10.0)
 
 **Forecast Finnish electricity prices for the next 170 hours**, in both spot (EUR/MWh) and consumer (EUR/kWh) terms, with calibrated probabilistic bands and 7-day duration curves for cost-aware load scheduling.
 
@@ -24,7 +24,7 @@ The point forecast is produced by a four-layer pipeline implemented in [`custom_
 
 ```
 spot_eur_mwh(h) =  L1 seasonal_fi(h)         # additive hour+day+week pattern
-                 + L2 ridge(h)                # 6-feature physics Ridge regression
+                 + L2 ridge(h)                # 8-feature physics + cross-border Ridge
                  + L3 φ^h · η(t₀−1)           # AR(1) momentum on the last residual
                  - softplus_floor(−5)         # clamps deep negatives
                  - hourly_bias_ema(h)         # DtACI bias corrector
@@ -32,9 +32,9 @@ spot_eur_mwh(h) =  L1 seasonal_fi(h)         # additive hour+day+week pattern
 
 The same point forecast is then passed through the **L4 GPD POT spike model**, which samples 500 paths from a Normal body + Generalized Pareto right/left tails to produce the per-hour `P5_eur_mwh` … `P95_eur_mwh` fan-chart bands.
 
-### L2 Ridge — the six features
+### L2 Ridge — the eight features
 
-Defined as `RIDGE_FEATURES` in [`pipeline.py:62-69`](custom_components/spot_price_predictor/pipeline.py:62):
+Defined as `RIDGE_FEATURES` in [`pipeline.py:62-77`](custom_components/spot_price_predictor/pipeline.py:62). The shipped `data/spike_model_default.json` lists the same order in its `ridge_features` field; the pipeline is feature-list-driven and always reads from the artifact.
 
 | # | Feature | Definition |
 |---|---|---|
@@ -44,6 +44,9 @@ Defined as `RIDGE_FEATURES` in [`pipeline.py:62-69`](custom_components/spot_pric
 | 4 | `Y_sigmoid_wind_rho` | sigmoid wind-power curve scaled by relative air density: `σ((wind − 7.5) / 1.5) × ρ(T) / 1.225` |
 | 5 | `Y_solar_effective` | temperature-derated GHI: `GHI × (1 − 0.004 · max(0, T_cell − 25))` with `T_cell = T + 0.03 · GHI` |
 | 6 | `Y_temp` | deseasonalized temperature |
+| 7 | `Y_se1` | deseasonalized SE1 spot — Sweden zone 1 (added in v2.10.0; passes the v2.5.6 hedge gate) |
+| 8 | `Y_se3` | deseasonalized SE3 spot — Sweden zone 3, the FennoSkan cable terminus |
+| 9 | `Y_ee` | deseasonalized EE spot — Estonia, the Estlink terminus |
 
 Coefficients live in `data/spike_model_default.json` under `ridge_coef`.
 
@@ -53,12 +56,13 @@ Coefficients live in `data/spike_model_default.json` under `ridge_coef`.
 |---|---|
 | `wind` (m/s at 120 m), `solar` (GHI W/m²), `temp` (°C) | Open-Meteo, 7 capacity-weighted Finnish sites |
 | `Y_fi_lag168` | Recent FI spot history (cold-start = zero until the rolling history is 7 days deep) |
-| Hourly seasonal components for FI spot and temperature | `data/seasonal_components_default.json` |
+| Neighbour spot prices (SE1, SE3, EE) | elprisetjustnu.se + Elering, via `fetch_neighbor_prices()` |
+| Hourly seasonal components for FI / SE1 / SE3 / EE / temperature | `data/seasonal_components_default.json` |
 | Ridge β, AR(1) φ, GPD tail params, Normal-body μ/σ | `data/spike_model_default.json` |
 
-### Inputs evaluated but not currently consumed by the spot model
+### Inputs fetched but not currently consumed by the spot model
 
-The integration also fetches Sahkotin (FI), elprisetjustnu.se (SE1/SE3), Elering (EE), Fingrid datasets #188 / #165 / #246 / #247, and Nord Pool UMM nuclear-outage schedules. These streams feed the legacy duration model and some auxiliary diagnostics, but the canonical user-facing forecast (`spot_eur_mwh`, `P5_eur_mwh` … `P95_eur_mwh`, the four D(k) arrays) is driven only by the pipeline's six L2 features above. Reintroducing nuclear deficit or cross-border transit-capacity signals is treated as experimental work and evaluated on a separate branch before any decision to merge.
+The integration also fetches Fingrid datasets #188 / #165 / #246 / #247 and Nord Pool UMM nuclear-outage schedules. These streams feed the legacy duration model and some auxiliary diagnostics, but the canonical user-facing forecast is driven by the eight L2 features above. Re-introducing nuclear-deficit-related signals is treated as experimental work; the `experiment/extra-l2-features` branch documents the test results (nuclear features, even capacity-aware and as multiplicative coupling coefficients, did not pass the hedge gate on the 2023-2026 data window).
 
 ## Sensors Created
 

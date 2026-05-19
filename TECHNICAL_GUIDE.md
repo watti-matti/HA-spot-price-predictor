@@ -1,4 +1,4 @@
-# Technical Guide — HA Spot Price Predictor (v2.8.1)
+# Technical Guide — HA Spot Price Predictor (v2.10.0)
 
 Finnish consumer-electricity price and D(k) duration cost forecasting for Home Assistant. Produces a 170-hour spot/consumer point forecast, P5/P25/P50/P75/P95 fan-chart bands, and 7-day cheap/peak duration curves driven by a four-layer prediction pipeline. This guide describes only what the shipping code actually does.
 
@@ -51,20 +51,23 @@ P{5,25,50,75,95}_eur_mwh(h) ← 500-sample mixture (Normal body + GPD tails)
 
 `Pipeline._seasonal_fi` and `Pipeline._deseasonalize_input` ([`pipeline.py:200-216`](custom_components/spot_price_predictor/pipeline.py:200)) read additive hour + day + week components from `seasonal_components_default.json` and subtract them from FI price and temperature to produce deseasonalized residuals. Wind and solar are not deseasonalized via L1 — they are locally centered (mean-subtracted) before entering the Ridge.
 
-### L2 — Non-seasonal Ridge regression (six features)
+### L2 — Non-seasonal Ridge regression (eight features)
 
-The feature ordering is fixed in `RIDGE_FEATURES` ([`pipeline.py:62-69`](custom_components/spot_price_predictor/pipeline.py:62)):
+The shipped `data/spike_model_default.json` carries the canonical feature ordering in its `ridge_features` field; the pipeline reads it at construction and builds the design matrix in that order. The fallback list is `RIDGE_FEATURES` in [`pipeline.py:62-77`](custom_components/spot_price_predictor/pipeline.py:62).
 
-| # | Feature | Built in `_build_features` ([`pipeline.py:220-242`](custom_components/spot_price_predictor/pipeline.py:220)) | Definition |
+| # | Feature | Built in `_build_features` ([`pipeline.py:220-275`](custom_components/spot_price_predictor/pipeline.py:220)) | Definition |
 |---|---|---|---|
 | 1 | `intercept` | `np.ones(n)` | constant 1 |
 | 2 | `Y_fi_lag168` | passed by caller via `recent_fi_residuals["lag168"]` | Deseasonalized FI residual 7 days prior. Coordinator currently passes zeros (cold-start prior) because the rolling forecast history is shorter than 7 days. |
-| 3 | `is_workday` | `Pipeline._is_workday` ([`pipeline.py:244-250`](custom_components/spot_price_predictor/pipeline.py:244)) — `weekday < 5` | binary {0, 1} |
+| 3 | `is_workday` | `Pipeline._is_workday` — `weekday < 5` | binary {0, 1} |
 | 4 | `Y_sigmoid_wind_rho` | `_sigmoid_turbine_rho` ([`pipeline.py:81-87`](custom_components/spot_price_predictor/pipeline.py:81)), then locally centered | `σ((wind − 7.5) / 1.5) × ρ(T) / 1.225` |
 | 5 | `Y_solar_effective` | `_solar_effective` ([`pipeline.py:90-96`](custom_components/spot_price_predictor/pipeline.py:90)), then locally centered | `GHI × (1 − 0.004 · max(0, T_cell − 25))`, `T_cell = T + 0.03 · GHI` |
 | 6 | `Y_temp` | `_deseasonalize_input("temp", …)` | Deseasonalized temperature |
+| 7 | `Y_se1` | `_deseasonalize_input("se1", …)` over neighbour-price arg | Deseasonalized SE1 spot. **v2.10.0 addition** — accepted under the v2.5.6 hedge gate. |
+| 8 | `Y_se3` | `_deseasonalize_input("se3", …)` | Deseasonalized SE3 spot (FennoSkan terminus). |
+| 9 | `Y_ee` | `_deseasonalize_input("ee", …)` | Deseasonalized EE spot (Estlink terminus). |
 
-The Ridge prediction is `ridge = X @ self._ridge_coef` ([`pipeline.py:361`](custom_components/spot_price_predictor/pipeline.py:361)).
+The Ridge prediction is `ridge = X @ self._ridge_coef`. The caller supplies the raw neighbour prices via `compute_forecast(..., recent_neighbour_prices={"se1": np.ndarray(n), "se3": …, "ee": …})`; missing or NaN entries fall back to a zero column for that hour, equivalent to the v2.8.x no-cross-border behaviour.
 
 ### L3 — AR(1) momentum
 

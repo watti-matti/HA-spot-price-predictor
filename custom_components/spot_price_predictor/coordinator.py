@@ -276,6 +276,59 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
         # Fallback: UTC+3 (Finland without DST)
         return (ts_utc.hour + 3) % 24
 
+    @staticmethod
+    def _align_neighbour_prices(
+        forecast_ts_iso: list[str],
+        neighbor: dict[str, list[dict[str, Any]]],
+    ) -> dict[str, "np.ndarray"]:
+        """Align neighbour-zone hourly prices to the forecast timestamps.
+
+        Returns a `{zone: ndarray(len(forecast_ts_iso))}` dict. Missing
+        zones, missing hours, or unparseable timestamps are filled with
+        NaN; callers (the Pipeline) treat NaN as "no signal" and
+        contribute zero to the L2 term.
+        """
+        import numpy as np
+
+        # Build lookup tables zone → {hour-ISO → price}. Keep the
+        # timestamp as a naive UTC ISO at the hour granularity so it
+        # matches whatever Sahkotin / Elpriset / Elering return.
+        lookup: dict[str, dict[str, float]] = {}
+        for zone, entries in (neighbor or {}).items():
+            if not isinstance(entries, list):
+                continue
+            zone_map: dict[str, float] = {}
+            for e in entries:
+                ts = e.get("timestamp") if isinstance(e, dict) else None
+                p  = e.get("price_eur_mwh") if isinstance(e, dict) else None
+                if ts is None or p is None:
+                    continue
+                key = str(ts).split("+")[0].split("Z")[0]
+                key = key.replace("T", " ")[:13]  # YYYY-MM-DD HH
+                try:
+                    zone_map[key] = float(p)
+                except (TypeError, ValueError):
+                    continue
+            if zone_map:
+                lookup[zone] = zone_map
+
+        # Materialise aligned arrays.
+        out: dict[str, np.ndarray] = {}
+        n = len(forecast_ts_iso)
+        for zone in ("se1", "se3", "ee"):
+            arr = np.full(n, np.nan, dtype=float)
+            zmap = lookup.get(zone)
+            if not zmap:
+                out[zone] = arr
+                continue
+            for i, ts_iso in enumerate(forecast_ts_iso):
+                key = str(ts_iso).split("+")[0].split("Z")[0]
+                key = key.replace("T", " ")[:13]
+                if key in zmap:
+                    arr[i] = zmap[key]
+            out[zone] = arr
+        return out
+
     def _local_date_str(self, ts_utc: datetime) -> str:
         """Return the local-time YYYY-MM-DD date for a UTC timestamp."""
         if self._tz:
@@ -1059,7 +1112,7 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
             if self._pipeline is not None and forecast:
                 try:
                     pipeline_diagnostics, dk_by_date = self._apply_pipeline_pre_dk(
-                        forecast)
+                        forecast, neighbor=neighbor)
                 except Exception as e:
                     _LOGGER.warning("Prediction pipeline overwrite failed: %s", e)
                     pipeline_diagnostics = {"error": str(e)}
@@ -1191,6 +1244,7 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
     def _apply_pipeline_pre_dk(
         self,
         forecast: list[dict[str, Any]],
+        neighbor: dict[str, list[dict[str, Any]]] | None = None,
     ) -> tuple[dict[str, Any], dict[str, dict]]:
         """Run the L1+L2+L3+L4+floor prediction pipeline plus fan-chart
         sampling and write the result into every row of ``forecast``.
@@ -1222,10 +1276,28 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
         # Y_fi_lag168 cold-start prior (rolling history not yet 7 days deep)
         lag168 = np.zeros(len(forecast), dtype=float)
 
+        # Build neighbour-price arrays aligned with the forecast timestamps.
+        # `neighbor` is the dict returned by api.fetch_neighbor_prices —
+        # zones are SE1, SE3, EE; each value is a list of
+        # {timestamp, price_eur_mwh} entries. Missing or short series
+        # become zero columns inside Pipeline._build_features (graceful
+        # fallback to the v2.8.x no-cross-border behaviour).
+        recent_neighbour_prices: dict[str, np.ndarray] | None = None
+        if neighbor:
+            try:
+                forecast_ts_iso = [f["timestamp"] for f in forecast]
+                recent_neighbour_prices = self._align_neighbour_prices(
+                    forecast_ts_iso, neighbor)
+            except Exception as e:
+                _LOGGER.debug(
+                    "neighbour-price alignment failed (%s); zero fallback", e,
+                )
+
         out = self._pipeline.compute_forecast(
             timestamps=timestamps,
             wind=wind, solar=solar, temp=temp,
             recent_fi_residuals={"lag168": lag168},
+            recent_neighbour_prices=recent_neighbour_prices,
             enable_fan_chart=True,
         )
         pipeline_mean = out["mean_eur_mwh"]

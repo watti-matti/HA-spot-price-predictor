@@ -83,7 +83,13 @@ def test_pipeline_loads_shipped_artifacts(tmp_path: Path) -> None:
     """Construction must succeed against the production artifacts and
     populate Ridge coef / AR(1) phi / L4 GPD params."""
     p = _make_pipeline(tmp_path)
-    assert p._ridge_coef.shape == (6,)              # 6 Ridge features
+    # v2.10.0 — intercept + 8 Ridge features (5 core + Y_se1 + Y_se3 + Y_ee)
+    assert p._ridge_coef.shape == (9,)
+    assert tuple(p._features) == (
+        "intercept", "Y_fi_lag168", "is_workday",
+        "Y_sigmoid_wind_rho", "Y_solar_effective", "Y_temp",
+        "Y_se1", "Y_se3", "Y_ee",
+    )
     assert -1.0 < p._ar1_phi < 1.0
     assert isinstance(p._gpd_right, dict)
     assert p._eta_sigma > 0
@@ -112,6 +118,58 @@ def test_compute_forecast_returns_expected_shape(tmp_path: Path) -> None:
     assert out["mean_eur_mwh"].shape == (n,)
     for k in ("P5", "P25", "P50", "P75", "P95"):
         assert out[f"{k}_eur_mwh"].shape == (n,)
+
+
+def test_compute_forecast_accepts_neighbour_prices(tmp_path: Path) -> None:
+    """v2.10.0 — supplying SE1/SE3/EE neighbour prices shifts the mean
+    relative to the no-neighbour fallback, in line with the V_xb
+    cross-border coefficients (which are positive)."""
+    p = _make_pipeline(tmp_path)
+    ts = _hourly_timestamps(48)
+    n = len(ts)
+    wind  = np.full(n, 6.0)
+    solar = np.zeros(n)
+    temp  = np.full(n, 5.0)
+    out_no = p.compute_forecast(ts, wind, solar, temp,
+                                 enable_fan_chart=False)
+    # Synthetic neighbour prices: high relative to the shipped seasonal
+    # climatology → positive Y_se deviations → predicted FI mean shifts
+    # upward.
+    neigh = {
+        "se1": np.full(n, 120.0),
+        "se3": np.full(n, 120.0),
+        "ee":  np.full(n, 120.0),
+    }
+    out_high = p.compute_forecast(
+        ts, wind, solar, temp,
+        recent_neighbour_prices=neigh,
+        enable_fan_chart=False,
+    )
+    # The mean response should change. Check at least one hour moves
+    # meaningfully (≥ 2 EUR/MWh) so a future regression that breaks the
+    # neighbour-price plumbing is caught.
+    diff = out_high["mean_eur_mwh"] - out_no["mean_eur_mwh"]
+    assert float(np.max(np.abs(diff))) >= 2.0
+
+
+def test_compute_forecast_handles_partial_neighbour_data(tmp_path: Path) -> None:
+    """Missing zones / NaN entries must not propagate NaN to the mean."""
+    p = _make_pipeline(tmp_path)
+    ts = _hourly_timestamps(24)
+    n = len(ts)
+    wind  = np.full(n, 6.0)
+    solar = np.zeros(n)
+    temp  = np.full(n, 5.0)
+    partial = {
+        "se3": np.array([50.0] * 12 + [np.nan] * 12),   # 12-hour gap
+        # se1 and ee deliberately missing
+    }
+    out = p.compute_forecast(
+        ts, wind, solar, temp,
+        recent_neighbour_prices=partial,
+        enable_fan_chart=False,
+    )
+    assert np.isfinite(out["mean_eur_mwh"]).all()
 
 
 def test_compute_forecast_respects_floor(tmp_path: Path) -> None:
