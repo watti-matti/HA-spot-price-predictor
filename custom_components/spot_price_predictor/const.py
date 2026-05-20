@@ -95,8 +95,19 @@ DEFAULT_BASELOAD_NIGHT_FACTOR  = 0.7
 CONF_ANNUAL_CONSUMPTION_KWH = "annual_consumption_kwh"
 CONF_CONSUMPTION_ENTITY     = "consumption_entity"
 
+# Optional sensor published by an external EMA module (e.g.
+# HA-consumption-profiler) carrying the household's
+# learned-from-observation consumption profile. Used by the
+# PV-aware CVaR computation. When unconfigured or unreadable, the
+# coordinator falls back to a synthetic profile calibrated to
+# CONF_ANNUAL_CONSUMPTION_KWH and flags `data_provenance:
+# "synthetic_cold_start"` on the published sensor attributes.
+# See `docs/household_profile_schema.md` for the attribute schema.
+CONF_CONSUMPTION_PROFILE_ENTITY = "consumption_profile_entity"
+
 DEFAULT_ANNUAL_CONSUMPTION_KWH = 12000   # mid-range Finnish single-family with heat pump
 DEFAULT_CONSUMPTION_ENTITY     = ""
+DEFAULT_CONSUMPTION_PROFILE_ENTITY = ""
 
 # Smoothing window for `consumption_entity` (days). 14 days is long
 # enough to wash out EMHASS's daily scheduling decisions while still

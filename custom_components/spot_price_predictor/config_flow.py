@@ -41,6 +41,7 @@ from .const import (
     CONF_BASELOAD_NIGHT_FACTOR,
     CONF_ANNUAL_CONSUMPTION_KWH,
     CONF_CONSUMPTION_ENTITY,
+    CONF_CONSUMPTION_PROFILE_ENTITY,
     DEFAULT_PV_CAPACITY_KWP,
     DEFAULT_PV_TILT_DEG,
     DEFAULT_PV_AZIMUTH_DEG,
@@ -51,6 +52,7 @@ from .const import (
     DEFAULT_BASELOAD_NIGHT_FACTOR,
     DEFAULT_ANNUAL_CONSUMPTION_KWH,
     DEFAULT_CONSUMPTION_ENTITY,
+    DEFAULT_CONSUMPTION_PROFILE_ENTITY,
     REGIONS,
     OPERATORS,
     DEFAULT_VAT_MULTIPLIER,
@@ -249,6 +251,9 @@ class SpotPricePredictorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             )
             self._data[CONF_CONSUMPTION_ENTITY] = (user_input.get(
                 CONF_CONSUMPTION_ENTITY, DEFAULT_CONSUMPTION_ENTITY) or "")
+            self._data[CONF_CONSUMPTION_PROFILE_ENTITY] = (user_input.get(
+                CONF_CONSUMPTION_PROFILE_ENTITY,
+                DEFAULT_CONSUMPTION_PROFILE_ENTITY) or "")
 
             title = f"Spot Price ({REGIONS.get(self._data.get(CONF_REGION, 'finland'), 'Finland')})"
             return self.async_create_entry(title=title, data=self._data)
@@ -295,6 +300,13 @@ class SpotPricePredictorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             vol.Optional(
                 CONF_CONSUMPTION_ENTITY,
                 default=DEFAULT_CONSUMPTION_ENTITY,
+            ): str,
+            # Optional: published by an external EMA module
+            # (HA-consumption-profiler). Feeds the PV-aware CVaR
+            # computation. Empty = synthetic fallback.
+            vol.Optional(
+                CONF_CONSUMPTION_PROFILE_ENTITY,
+                default=DEFAULT_CONSUMPTION_PROFILE_ENTITY,
             ): str,
         })
         return self.async_show_form(step_id="pv_system", data_schema=schema)
@@ -397,6 +409,10 @@ class SpotPriceOptionsFlow(config_entries.OptionsFlow):
                 new_data[CONF_CONSUMPTION_ENTITY] = (user_input.get(
                     CONF_CONSUMPTION_ENTITY,
                     DEFAULT_CONSUMPTION_ENTITY
+                ) or "")
+                new_data[CONF_CONSUMPTION_PROFILE_ENTITY] = (user_input.get(
+                    CONF_CONSUMPTION_PROFILE_ENTITY,
+                    DEFAULT_CONSUMPTION_PROFILE_ENTITY
                 ) or "")
                 # Drop legacy v2.3 baseload fields when the user re-saves
                 # via Options. The coordinator's migration logic still
@@ -518,6 +534,13 @@ class SpotPriceOptionsFlow(config_entries.OptionsFlow):
                 CONF_CONSUMPTION_ENTITY,
                 default=current.get(
                     CONF_CONSUMPTION_ENTITY, DEFAULT_CONSUMPTION_ENTITY,
+                ),
+            ): str,
+            vol.Optional(
+                CONF_CONSUMPTION_PROFILE_ENTITY,
+                default=current.get(
+                    CONF_CONSUMPTION_PROFILE_ENTITY,
+                    DEFAULT_CONSUMPTION_PROFILE_ENTITY,
                 ),
             ): str,
         })

@@ -40,3 +40,24 @@ Thumbs.db
 
 # Jupyter
 .ipynb_checkpoints/
+
+# pytest-cov artifacts
+.coverage
+.coverage.*
+htmlcov/
+
+# Private user data — never committed.
+# See docs/household_profile_schema.md for the design boundary.
+# Local-only directory for individual HA snapshots and derived profiles.
+studies/_private/*
+!studies/_private/README.md
+# Any HA recorder DB anywhere in the tree.
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+# Household profile JSONs anywhere in the tree.
+**/household_profile.json
+**/household_profile_*.json
+# Raw CSV exports (HA energy dashboard or similar).
+**/_raw/*.csv

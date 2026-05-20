@@ -59,6 +59,7 @@ async def async_setup_entry(
 
     entities = [
         PriceForecastSensor(coordinator, entry),
+        SpotPriceForecastSensor(coordinator, entry),
         DurationForecastSensor(coordinator, entry),
     ]
 
@@ -79,7 +80,7 @@ def _device_info(entry: ConfigEntry) -> dict[str, Any]:
         "name": "Spot Price Predictor",
         "manufacturer": "watti-matti",
         "model": "Spot Price Predictor",
-        "sw_version": "2.10.1",
+        "sw_version": "2.11.0",
     }
 
 
@@ -179,6 +180,173 @@ class PriceForecastSensor(CoordinatorEntity, SensorEntity):
                     attrs["week_max_effective_eur_kwh"] = round(max(eff), 4)
 
         attrs.update(_status_attributes(data))
+        return attrs
+
+    @property
+    def device_info(self) -> dict[str, Any]:
+        return _device_info(self._entry)
+
+
+class SpotPriceForecastSensor(CoordinatorEntity, SensorEntity):
+    """Spot-price-forecast time series in Nordpool-compatible format.
+
+    State: current-hour forecast spot price (EUR/kWh — converted from
+    the pipeline's EUR/MWh output). Matches the unit that the Nordpool
+    integration's `state` field uses, so EMHASS / ApexCharts / any
+    Nordpool-aware automation can swap to this sensor without changes.
+
+    Attributes mirror the Nordpool schema (`raw_today`, `raw_tomorrow`
+    as lists of `{start, end, value}` triples) plus the integration's
+    unique value-add `raw_extended` covering the full 170 h forecast
+    horizon. The L4 fan-chart bands are exposed under
+    `confidence_band` for consumers that want risk-aware decisions.
+
+    This sensor is the time-series interpretation of what the pipeline
+    already computes internally — L1 seasonal + L2 Ridge + L3 AR(1) +
+    softplus floor → spot_eur_mwh per hour. It surfaces the same
+    information in a far easier-to-consume shape than the existing
+    `forecast` attribute on `sensor.price_forecast`.
+    """
+
+    _attr_has_entity_name = True
+    _attr_name = "Spot Price Forecast FI"
+    _attr_native_unit_of_measurement = "EUR/kWh"
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:cash-multiple"
+    _attr_suggested_display_precision = 4
+
+    def __init__(self, coordinator: SpotPriceCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        # Entity id will be `sensor.spot_price_forecast_fi` if HA renders
+        # the name into a slug; explicit suggestion below.
+        self._attr_unique_id = f"{entry.entry_id}_spot_price_forecast_fi"
+        self.entity_id = "sensor.spot_price_forecast_fi"
+        self._entry = entry
+
+    @property
+    def native_value(self) -> float | None:
+        """Current-hour spot forecast in EUR/kWh."""
+        if not self.coordinator.data:
+            return None
+        spot_mwh = self.coordinator.data.get("current_spot_eur_mwh")
+        if spot_mwh is None:
+            return None
+        return round(float(spot_mwh) / 1000.0, 6)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        if not self.coordinator.data:
+            return {}
+        forecast = self.coordinator.data.get("forecast", []) or []
+        if not forecast:
+            return {}
+
+        try:
+            from zoneinfo import ZoneInfo
+            local_tz = ZoneInfo(DEFAULT_TIMEZONE)
+        except Exception:
+            local_tz = None
+
+        now_utc = datetime.utcnow().replace(tzinfo=None)
+        today_local_date = None
+        tomorrow_local_date = None
+        try:
+            if local_tz is not None:
+                local_now = datetime.now(tz=local_tz)
+                today_local_date = local_now.date()
+                from datetime import timedelta as _td
+                tomorrow_local_date = (local_now + _td(days=1)).date()
+        except Exception:
+            today_local_date = None
+            tomorrow_local_date = None
+
+        raw_today: list[dict[str, Any]] = []
+        raw_tomorrow: list[dict[str, Any]] = []
+        raw_extended: list[dict[str, Any]] = []
+        confidence_p5: list[float] = []
+        confidence_p95: list[float] = []
+        prices_today: list[float] = []
+        prices_tomorrow: list[float] = []
+
+        for f in forecast:
+            ts_iso = f.get("timestamp")
+            spot_mwh = f.get("spot_eur_mwh")
+            if ts_iso is None or spot_mwh is None:
+                continue
+            try:
+                ts = datetime.fromisoformat(ts_iso.replace("Z", "+00:00"))
+            except Exception:
+                continue
+            value_kwh = round(float(spot_mwh) / 1000.0, 6)
+            try:
+                start_local = (ts.astimezone(local_tz)
+                               if local_tz is not None else ts)
+            except Exception:
+                start_local = ts
+            end_local_iso = None
+            try:
+                from datetime import timedelta as _td
+                end_local = start_local + _td(hours=1)
+                end_local_iso = end_local.isoformat()
+            except Exception:
+                end_local_iso = None
+
+            entry_item = {
+                "start":     start_local.isoformat(),
+                "end":       end_local_iso,
+                "value":     value_kwh,
+            }
+            raw_extended.append(entry_item)
+
+            if today_local_date and start_local.date() == today_local_date:
+                raw_today.append(entry_item)
+                prices_today.append(value_kwh)
+            elif tomorrow_local_date and start_local.date() == tomorrow_local_date:
+                raw_tomorrow.append(entry_item)
+                prices_tomorrow.append(value_kwh)
+
+            # L4 fan-chart bands in EUR/kWh.
+            p5 = f.get("P5_eur_mwh")
+            p95 = f.get("P95_eur_mwh")
+            if p5 is not None and p95 is not None:
+                confidence_p5.append(round(float(p5) / 1000.0, 6))
+                confidence_p95.append(round(float(p95) / 1000.0, 6))
+
+        def _stats(arr: list[float]) -> dict[str, float | None]:
+            if not arr:
+                return {"min": None, "avg": None, "max": None}
+            return {
+                "min": round(min(arr), 6),
+                "avg": round(sum(arr) / len(arr), 6),
+                "max": round(max(arr), 6),
+            }
+
+        today_stats = _stats(prices_today)
+        tomorrow_stats = _stats(prices_tomorrow)
+
+        attrs: dict[str, Any] = {
+            "raw_today":    raw_today,
+            "raw_tomorrow": raw_tomorrow,
+            "raw_extended": raw_extended,
+            "today_min":    today_stats["min"],
+            "today_avg":    today_stats["avg"],
+            "today_max":    today_stats["max"],
+            "tomorrow_min": tomorrow_stats["min"],
+            "tomorrow_avg": tomorrow_stats["avg"],
+            "tomorrow_max": tomorrow_stats["max"],
+            "forecast_horizon_h": len(raw_extended),
+            "currency":     "EUR",
+            "unit":         "kWh",
+            "source":       "spot_price_predictor L1+L2+L3+L4",
+            "last_updated": self.coordinator.data.get("last_update"),
+        }
+        if confidence_p5 and confidence_p95:
+            attrs["confidence_band"] = {
+                "p5":  confidence_p5,
+                "p95": confidence_p95,
+            }
+        attrs.update(_status_attributes(self.coordinator.data))
         return attrs
 
     @property
