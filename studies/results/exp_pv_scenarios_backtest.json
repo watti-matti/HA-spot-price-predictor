@@ -1,0 +1,36 @@
+{
+  "coverage": {
+    "split_ts": "2025-04-29T21:00:00+00:00",
+    "n_test_days": 360,
+    "n_test_hours": 8640,
+    "coverage_90": 0.9166666666666666,
+    "coverage_50": 0.7089120370370371,
+    "target_coverage_90": 0.9,
+    "target_coverage_50": 0.5
+  },
+  "deterministic": {
+    "mean_eur_kwh_overall": 0.11876605718492972,
+    "mean_eur_kwh_median": 0.11404306752022851,
+    "mean_eur_kwh_p95": 0.2635164922401999,
+    "cvar_eur_kwh_overall": 0.11876605718492972,
+    "cvar_eur_kwh_median": 0.11404306752022851,
+    "cvar_eur_kwh_p95": 0.2635164922401999
+  },
+  "scenario": {
+    "mean_eur_kwh_overall": 0.11969456780895768,
+    "mean_eur_kwh_median": 0.11138537665849227,
+    "mean_eur_kwh_p95": 0.26530902705693393,
+    "cvar_eur_kwh_overall": 0.16282093849650203,
+    "cvar_eur_kwh_median": 0.15283714535165316,
+    "cvar_eur_kwh_p95": 0.28939255019710497
+  },
+  "n_days": 1204,
+  "pv_config": {
+    "kwp": 8.91,
+    "tilt": 45.0,
+    "azimuth": 160.0,
+    "eff": 0.85
+  },
+  "n_paths": 500,
+  "alpha": 0.05
+}
