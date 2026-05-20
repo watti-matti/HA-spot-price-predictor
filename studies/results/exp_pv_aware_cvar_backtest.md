@@ -15,8 +15,8 @@ extracted from their HA recorder DB.
   (72.3 days,
   1724 hourly observations).
 - Backtest overlap window (after intersecting cached prices + weather):
-  **49 days**
-  (2026-03-08 to 2026-04-26).
+  **1211 days**
+  (2023-01-01 to 2026-04-26).
 - Mean consumption: 2.1052 kWh/h
   (~50.5 kWh/day,
   ~18442 kWh/year extrapolated).
@@ -28,7 +28,7 @@ extracted from their HA recorder DB.
   all × 1.255 VAT.
 - Feed-in tariff: 0.040 EUR/kWh.
 - Bootstrap: 2000 weekly samples drawn with
-  replacement from the 49 daily realisations.
+  replacement from the 1211 daily realisations.
   CVaR at α = 0.05.
 
 ## Headline — weekly cost statistics by consumption strategy
@@ -39,33 +39,33 @@ daily kWh total:
 
 | Strategy | Mean EUR/kWh | Median EUR/kWh | VaR<sub>95</sub> | **CVaR<sub>95</sub>** | Weekly mean (EUR) | Weekly CVaR<sub>95</sub> (EUR) |
 |---|:---:|:---:|:---:|:---:|:---:|:---:|
-| **S0 — flat baseload** | 0.1059 | 0.1055 | 0.1235 | **0.1294** | 36.70 | 45.30 |
-| **S1 — EMA-shaped (optimised)** | 0.0932 | 0.0925 | 0.1138 | **0.1200** | 32.32 | 42.40 |
-| **S2 — anti-optimised** | 0.1236 | 0.1234 | 0.1417 | **0.1467** | 42.92 | 52.14 |
+| **S0 — flat baseload** | 0.1467 | 0.1465 | 0.1942 | **0.2231** | 54.84 | 97.56 |
+| **S1 — EMA-shaped (optimised)** | 0.1413 | 0.1414 | 0.1915 | **0.2215** | 52.90 | 96.84 |
+| **S2 — anti-optimised** | 0.1568 | 0.1564 | 0.2038 | **0.2318** | 58.60 | 101.74 |
 
 ### Read-out
 
 - **Optimisation yield (S0 → S1)**:
-  ΔCVaR = +0.0094 EUR/kWh
-  (+7.3% relative).
-  ΔMean = +0.0127 EUR/kWh.
-  Annual extrapolation: ≈ +234 EUR/year mean cost reduction from following the EMA-shaped (EMHASS-optimised) consumption versus a flat household.
+  ΔCVaR = +0.0016 EUR/kWh
+  (+0.7% relative).
+  ΔMean = +0.0054 EUR/kWh.
+  Annual extrapolation: ≈ +99 EUR/year mean cost reduction from following the EMA-shaped (EMHASS-optimised) consumption versus a flat household.
 - **Worst-case reference (S0 → S2)**:
-  ΔCVaR = +0.0173 EUR/kWh shows how much *worse* a perversely anti-optimised household would be — bounds the optimisation upside.
+  ΔCVaR = +0.0087 EUR/kWh shows how much *worse* a perversely anti-optimised household would be — bounds the optimisation upside.
 - **Tail vs mean for S1**: CVaR<sub>95</sub> exceeds the mean by
-  0.0268 EUR/kWh, i.e. worst-5%-week premium of
-  28.7%
+  0.0802 EUR/kWh, i.e. worst-5%-week premium of
+  56.7%
   relative to the mean. The PV-aware CVaR sensor surfaces this number to the user as the "downside risk this week" figure.
 
 ## Daily self-consumption fraction (S1)
 
 | | mean | min | max |
 |---|:---:|:---:|:---:|
-| SCF | 0.827 | 0.000 | 1.000 |
-| PV (kWh/day) | 27.48 | 0.00 | 54.80 |
-| Self-consumed (kWh/day) | 20.67 | 0.00 | 33.09 |
-| Exported (kWh/day) | 6.81 | 0.00 | 25.76 |
-| Import (kWh/day) | 28.82 | 2.73 | 52.94 |
+| SCF | 0.819 | 0.000 | 1.000 |
+| PV (kWh/day) | 21.06 | 0.00 | 62.32 |
+| Self-consumed (kWh/day) | 13.69 | 0.00 | 37.22 |
+| Exported (kWh/day) | 7.37 | 0.00 | 43.69 |
+| Import (kWh/day) | 38.55 | 3.03 | 93.16 |
 
 ## Caveats
 

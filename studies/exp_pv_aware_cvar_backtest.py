@@ -103,23 +103,27 @@ def hourly_consumption_kwh(
     """
     base = profile["baseload"]
     mean_kwh_h = float(base["mean_kwh_per_hour"])
-
-    if strategy == "flat":
-        return np.full(len(timestamps_local), mean_kwh_h, dtype=float)
+    monthly_factor = base.get("monthly_factor") or [1.0] * 12
+    mf = np.array([v if v is not None else 1.0 for v in monthly_factor],
+                    dtype=float)
 
     shape = np.array(base["shape_hour_weekday"], dtype=float)
-    # Cells with no observations come through as None → NaN; fill with 1.0
-    # (i.e. assume mean) to avoid creating zero-consumption hours.
     shape = np.where(np.isnan(shape), 1.0, shape)
 
     out = np.empty(len(timestamps_local), dtype=float)
     for i, ts in enumerate(timestamps_local):
-        wd = ts.weekday()
-        h = ts.hour
-        if strategy == "ema_shaped":
-            out[i] = shape[wd, h] * mean_kwh_h
+        m = ts.month - 1
+        seasonal = mf[m]
+        if strategy == "flat":
+            out[i] = mean_kwh_h * seasonal
+        elif strategy == "ema_shaped":
+            wd = ts.weekday()
+            h = ts.hour
+            out[i] = shape[wd, h] * mean_kwh_h * seasonal
         elif strategy == "anti":
-            out[i] = max(0.0, (2.0 - shape[wd, h])) * mean_kwh_h
+            wd = ts.weekday()
+            h = ts.hour
+            out[i] = max(0.0, (2.0 - shape[wd, h])) * mean_kwh_h * seasonal
         else:
             raise ValueError(strategy)
     return out
@@ -130,12 +134,14 @@ def build_day_table() -> pd.DataFrame:
     prices = pd.read_parquet(PRICES_PATH)
     weather = pd.read_parquet(WEATHER_PATH)
     profile = load_profile()
-    window = profile["extraction_metadata"]["window_iso_date_only"]
-    start_str, end_str = window.split(" to ")
-    start = pd.Timestamp(start_str, tz="UTC")
-    end = pd.Timestamp(end_str, tz="UTC") + pd.Timedelta(days=1)
+    # Use the full intersection of prices + weather, not the profile's
+    # extraction window. The profile's shape is normalised (mean=1) and
+    # its monthly_factor scales by season, so the shape applies across
+    # any time range. Using the full cached span gives the annual view.
     df = prices.join(weather, how="inner")
-    df = df.loc[(df.index >= start) & (df.index < end)].copy()
+    df = df.dropna(subset=["price_eur_mwh", "solar_irradiance_weighted"]).copy()
+    # Skip the early-2022 partial window — we want full years.
+    df = df.loc[df.index >= pd.Timestamp("2023-01-01", tz="UTC")].copy()
     # PV from irradiance.
     df["pv_kwh"] = np.array([
         estimate_pv_kwh_per_hour(
@@ -153,12 +159,6 @@ def build_day_table() -> pd.DataFrame:
         spot_eur_kwh + CONSUMER_MARKUP_EUR_KWH + GRID_FEE_EUR_KWH + TAX_EUR_KWH
     ) * VAT
     df["sell_eur_kwh"] = FEED_IN_TARIFF_EUR_KWH
-    # Drop any row with missing data so downstream kernel math is clean.
-    before = len(df)
-    df = df.dropna(subset=["price_eur_mwh", "solar_irradiance_weighted"])
-    dropped = before - len(df)
-    if dropped:
-        print(f"  (dropped {dropped} hours with missing price/weather)")
     return df, profile
 
 
