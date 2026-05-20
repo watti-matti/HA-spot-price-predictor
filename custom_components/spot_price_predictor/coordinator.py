@@ -36,6 +36,7 @@ from .const import (
     CONF_BASELOAD_NIGHT_FACTOR,
     CONF_ANNUAL_CONSUMPTION_KWH,
     CONF_CONSUMPTION_ENTITY,
+    CONF_CONSUMPTION_PROFILE_ENTITY,
     CONSUMPTION_HYSTERESIS_PCT,
     CONSUMPTION_SMOOTHING_DAYS,
     FINLAND_RESIDENTIAL_MONTHLY_FACTORS,
@@ -65,6 +66,7 @@ from .const import (
 
 from .dk_utils import compute_dk_cheap_peak
 from .features import build_forecast_features
+from .consumption_profile_loader import load_profile_from_entity_attrs
 from .holidays import build_holiday_set
 from .model import SpotPriceModel
 from .pv_aware_cvar import compute_pv_aware_cvar_for_day
@@ -185,6 +187,8 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                 )
         self.consumption_entity = (entry.data.get(
             CONF_CONSUMPTION_ENTITY, DEFAULT_CONSUMPTION_ENTITY) or "")
+        self.consumption_profile_entity = (entry.data.get(
+            CONF_CONSUMPTION_PROFILE_ENTITY, "") or "")
 
         # Smoothed-daily-kWh cache for `consumption_entity`. Resolved once
         # per day (not every coordinator cycle); persisted in
@@ -1670,18 +1674,25 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                     day_entry["dk_cheap_pv_eur_kwh"] = cheap_pv
                     day_entry["dk_peak_pv_eur_kwh"] = peak_pv
 
-                # ── PV-aware CVaR (Phase D step 3b) ────────────────────
+                # ── PV-aware CVaR (Phase D step 3b/c) ──────────────────
                 # Computed from the day's 24 hourly buy / sell / PV /
                 # consumption values via a parametric scenario sampler
                 # (pv_aware_cvar.compute_pv_aware_cvar_for_day). Adds
                 # mean / CVaR_95 / fan-chart quantiles + PV self-
                 # consumption bookkeeping. Strictly additive — does
                 # not modify existing day_entry fields.
+                #
+                # Consumption source — in priority order:
+                #   1. CONF_CONSUMPTION_PROFILE_ENTITY  (external EMA module
+                #      publishes shape + monthly factor → derive 24h)
+                #   2. forecast row's baseload_kwh field (existing
+                #      coordinator path: annual_kwh + optional smoothing)
                 try:
                     day_buys: list[float] = []
                     day_sells: list[float] = []
                     day_pvs: list[float] = []
-                    day_cons: list[float] = []
+                    day_cons_fallback: list[float] = []
+                    day_local_ts: list[datetime] = []
                     for h in day_hours:
                         idx = h["forecast_idx"]
                         if idx >= len(forecast):
@@ -1691,8 +1702,36 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                         day_buys.append(float(f_row.get("consumer_eur_kwh", 0.0)))
                         day_sells.append(float(f_row.get("sell_eur_kwh", 0.0)))
                         day_pvs.append(float(f_row.get("pv_production_kwh", 0.0)))
-                        day_cons.append(float(f_row.get("baseload_kwh", 0.0)))
-                    if len(day_buys) == 24:
+                        day_cons_fallback.append(
+                            float(f_row.get("baseload_kwh", 0.0)))
+                        day_local_ts.append(
+                            datetime.strptime(date_str, "%Y-%m-%d").replace(
+                                hour=h["local_hour"]
+                            )
+                        )
+
+                    # Try external EMA profile entity if configured.
+                    profile_attrs: dict | None = None
+                    profile_used = "coordinator_baseload"
+                    if (self.consumption_profile_entity
+                            and self.hass is not None):
+                        state = self.hass.states.get(
+                            self.consumption_profile_entity)
+                        if state is not None and state.attributes:
+                            profile_attrs = dict(state.attributes)
+
+                    if profile_attrs is not None:
+                        profile = load_profile_from_entity_attrs(
+                            profile_attrs,
+                            fallback_annual_kwh=self.annual_consumption_kwh,
+                        )
+                        day_cons = profile.consumption_for_timestamps(
+                            day_local_ts).tolist()
+                        profile_used = profile.data_provenance
+                    else:
+                        day_cons = day_cons_fallback
+
+                    if len(day_buys) == 24 and len(day_cons) == 24:
                         import numpy as _np
                         cvar = compute_pv_aware_cvar_for_day(
                             _np.array(day_buys),
@@ -1718,17 +1757,7 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                             cvar["pv_self_consumed_kwh"], 2)
                         day_entry["pv_aware_exported_kwh"] = round(
                             cvar["pv_exported_kwh"], 2)
-                        # Consumption source here is the coordinator's
-                        # existing `baseload_kwh` (annual_kwh-derived,
-                        # optionally smoothed by `CONF_CONSUMPTION_ENTITY`).
-                        # When the external EMA module
-                        # (`CONF_CONSUMPTION_PROFILE_ENTITY`) is wired in
-                        # by a follow-up commit, this provenance string
-                        # will reflect whichever source actually fed the
-                        # consumption array.
-                        day_entry["pv_aware_data_provenance"] = (
-                            "coordinator_baseload"
-                        )
+                        day_entry["pv_aware_data_provenance"] = profile_used
                 except Exception as exc:  # noqa: BLE001
                     _LOGGER.debug(
                         "PV-aware CVaR skipped for %s: %s", date_str, exc,
