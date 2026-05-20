@@ -2,7 +2,7 @@
 
 [![HACS Integration](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-2.10.0-blue.svg)](https://github.com/watti-matti/HA-spot-price-predictor/releases/tag/v2.10.0)
+[![Version](https://img.shields.io/badge/version-2.11.0-blue.svg)](https://github.com/watti-matti/HA-spot-price-predictor/releases/tag/v2.11.0)
 
 **Forecast Finnish electricity prices for the next 170 hours**, in both spot (EUR/MWh) and consumer (EUR/kWh) terms, with calibrated probabilistic bands and 7-day duration curves for cost-aware load scheduling.
 
@@ -12,9 +12,12 @@
 
 - **170-hour point forecast** in spot EUR/MWh and consumer EUR/kWh (transfer tariff, energy tax, seller margin, and VAT applied per hour).
 - **Probabilistic fan chart** — per-hour P5 / P25 / P50 / P75 / P95 bands sampled from a Normal-body + Generalized Pareto tail mixture (heavy-tail spike model).
+- **Nordpool-compatible spot-price-forecast sensor** (new in v2.11.0) — `sensor.spot_price_forecast_fi` exposes the L1+L2+L3+L4 forecast as a drop-in for the [Nordpool integration](https://github.com/custom-components/nordpool) schema (`state` in EUR/kWh, `raw_today` / `raw_tomorrow` / `raw_extended` lists of `{start, end, value}`). EMHASS, ApexCharts, and any Nordpool-aware automation consume it without code changes; the new `raw_extended` field extends the forecast horizon from today+tomorrow to the full 170 hours.
 - **D(k) cheap/peak duration curves** — 7 days × 4 arrays per day, each 24-entry and 0-indexed: `dk_cheap_eur_mwh[i]` / `dk_peak_eur_mwh[i]` (spot) and `dk_cheap_eur_kwh[i]` / `dk_peak_eur_kwh[i]` (consumer). Each `[i]` is the mean of the (i+1) cheapest / priciest hours of the day. Equivalent to CVaR at α=(i+1)/24 in both tails.
 - **Optional PV-aware effective price** — when a `pv_capacity_kwp > 0` (or an external PV-forecast entity) is configured, each forecast hour gains `effective_eur_kwh` (marginal cost of running one extra kWh given PV self-consumption) and parallel `dk_cheap_pv_eur_kwh[24]` / `dk_peak_pv_eur_kwh[24]` curves.
+- **PV-aware risk metric** (new in v2.11.0) — daily `pv_aware_cvar95_eur_kwh` reports the expected effective cost in the worst 5 % of joint price+PV scenarios for each forecast day. The headline number a risk-averse scheduler reads to decide which day this week is safest for a discretionary load. Computed via a shared `pv_cost_kernel` library that the downstream thermal optimiser can call with its own per-load schedule for an "achieved" CVaR comparison.
 - **Optional online calibration (DtACI)** — adaptive conformal prediction intervals on the D(k) curves, with per-(direction, k) bias correction. Targets 90 % marginal coverage; warms up over the first few days.
+- **External EMA-profile integration point** (new in v2.11.0) — `consumption_profile_entity` reads an external HA-consumption-profiler module's published profile sensor; when unconfigured the integration falls back to a synthetic Finnish-typical baseload calibrated to `annual_consumption_kwh`. Profile provenance (`synthetic_cold_start` / `ema_warm` / `ema_blended`) propagates to the PV-aware CVaR attributes so dashboards can flag low-confidence numbers.
 - **Refit on demand** — the `spot_price_predictor.retrain_models` Home Assistant service refits the L1 seasonal, L2/L3/L4 spike, and (optionally) solar sub-model artifacts and reloads the pipeline without a Home Assistant restart.
 - **All data sources are free.** The integration ships pre-trained artifacts and works out of the box after picking your distribution operator.
 
@@ -73,6 +76,7 @@ All sensors share the device "Spot Price Predictor" and the domain prefix `spot_
 | Sensor entity ID (suffix) | State | Unit |
 |---|---|---|
 | `sensor.spot_price_predictor_price_forecast` | Current hour consumer price | EUR/kWh |
+| `sensor.spot_price_forecast_fi` | Current hour spot forecast (Nordpool-compatible schema) | EUR/kWh |
 | `sensor.spot_price_predictor_duration_forecast` | Today's `dk_cheap_eur_kwh[3]` (mean of cheapest 4 hours) | EUR/kWh |
 
 ### Conditional
@@ -93,6 +97,30 @@ All sensors share the device "Spot Price Predictor" and the domain prefix `spot_
 | `week_min_eur_kwh` / `week_avg_eur_kwh` / `week_max_eur_kwh` | float | Statistics over the consumer prices in the forecast window. |
 | `last_update`, `data_sources_active`, `stale`, `data_age_minutes` | — | Standard status block. |
 | `pv_capacity_kwp`, `pv_source`, `baseload_kwh_per_hour`, `current_effective_eur_kwh`, `week_min/avg/max_effective_eur_kwh` | — | Present only when PV is enabled. |
+
+### Spot Price Forecast (Nordpool-compatible) — attributes
+
+`sensor.spot_price_forecast_fi` exposes the L1+L2+L3+L4 spot-price forecast in the Nordpool integration's schema, so any consumer wired to a Nordpool sensor can read this one as a drop-in. State is the current-hour spot forecast in EUR/kWh (converted from the pipeline's EUR/MWh output).
+
+| Attribute | Type | Description |
+|---|---|---|
+| `raw_today` | array of `{start, end, value}` | One entry per hour for today's local-date forecast. Same shape as Nordpool's `raw_today`. |
+| `raw_tomorrow` | array of `{start, end, value}` | Tomorrow's local-date forecast. Same shape as Nordpool's `raw_tomorrow`. |
+| `raw_extended` | array of `{start, end, value}` | **The integration's unique value-add**: up to 170 hourly entries covering the full forecast horizon (today + next 6 days). Consumers wired to Nordpool's 48-hour schema gain 5 extra forecast days for free. |
+| `today_min` / `today_avg` / `today_max` | float | Statistics over `raw_today` values in EUR/kWh. |
+| `tomorrow_min` / `tomorrow_avg` / `tomorrow_max` | float | Same, for tomorrow. |
+| `forecast_horizon_h` | int | Length of `raw_extended` (≤ 170). |
+| `currency`, `unit` | string | `"EUR"`, `"kWh"`. |
+| `source` | string | `"spot_price_predictor L1+L2+L3+L4"`. |
+| `confidence_band` | dict `{p5: [...], p95: [...]}` | L4 fan-chart bands per hour, in EUR/kWh. Risk-aware consumers can use these directly. |
+| `last_updated` | ISO timestamp | Coordinator cycle that produced this forecast. |
+
+**Empirical accuracy** (held-out 12-month back-test, see [studies/results/exp_spot_price_forecast_accuracy.md](studies/results/exp_spot_price_forecast_accuracy.md)):
+
+- **Cold-start floor** (fresh install, no calibrator history): MAE **22.5 EUR/MWh**, R² **+0.71**, 50 % band coverage **49 %** (target 50 %).
+- **Warm-state target** after ~30–60 days of operation (calibrators warmed): MAE **~10 EUR/MWh**, R² **~0.91**, 90 % band coverage **~92 %**.
+
+A sample-week illustration of forecast vs realised is in [studies/results/figures/spot_price_forecast_sample_week.png](studies/results/figures/spot_price_forecast_sample_week.png).
 
 ### Duration Forecast — attributes
 
@@ -118,7 +146,11 @@ All sensors share the device "Spot Price Predictor" and the domain prefix `spot_
 | `dk_peak_eur_mwh` | float[24] | EUR/MWh | `[i]` = mean spot price of the (i+1) priciest hours of the day, i = 0..23 (monotone non-increasing) |
 | `dk_cheap_eur_kwh` | float[24] | EUR/kWh | Same cheapest-end curve in consumer price (per-hour day/night tariff applied) |
 | `dk_peak_eur_kwh` | float[24] | EUR/kWh | Same priciest-end curve in consumer price |
-| `dk_cheap_pv_eur_kwh`, `dk_peak_pv_eur_kwh` | float[24] | EUR/kWh | PV-aware variants. Present only when PV is enabled. |
+| `dk_cheap_pv_eur_kwh`, `dk_peak_pv_eur_kwh` | float[24] | EUR/kWh | PV-aware variants (single-baseload "flexible kWh" approximation). Present only when PV is enabled. Dashboards-only — per-load optimisers should compose their own α using per-hour `forecast[h]["consumer_eur_kwh"]` and `forecast[h]["sell_eur_kwh"]`. |
+| `pv_aware_cvar95_eur_kwh` | float | EUR/kWh | **New in v2.11.0.** Tail-mean of effective cost in the worst 5 % of joint price+PV scenarios for this day. The headline risk number. Present only when PV is enabled. |
+| `pv_aware_self_consumed_kwh` | float | kWh | **New in v2.11.0.** Expected PV used on-site this day across scenarios. Present only when PV is enabled. |
+| `pv_aware_exported_kwh` | float | kWh | **New in v2.11.0.** Expected PV exported to grid this day. Surplus available for diversion to deferrable loads. Present only when PV is enabled. |
+| `pv_aware_data_provenance` | string | — | **New in v2.11.0.** `"synthetic_cold_start"` / `"ema_blended"` / `"ema_warm"` / `"coordinator_baseload"`. Confidence flag for the consumption profile underlying the CVaR computation. |
 | `dk_cheap_lower_eur_kwh`, `dk_cheap_upper_eur_kwh`, `dk_peak_lower_eur_kwh`, `dk_peak_upper_eur_kwh` | float[24] | EUR/kWh | DtACI band endpoints. Present only when DtACI is enabled and warmed up. |
 
 **Identity** — the full-day mean is direction-invariant: `dk_cheap_eur_mwh[23] == dk_peak_eur_mwh[23] == daily_average_spot` (and the same for the `_eur_kwh` arrays in consumer space).
@@ -182,6 +214,7 @@ Key options:
 | `pv_export_grid_fee` | 0 EUR/kWh | Extra fee on exported energy. |
 | `annual_consumption_kwh` | 12 000 | Typical total annual household demand from the bill. Drives the baseload via a Finnish monthly seasonal profile. |
 | `consumption_entity` | "" | Optional HA consumption sensor for adaptive baseload (14-day rolling smoothing + 5 % hysteresis). |
+| `consumption_profile_entity` | "" | Optional — entity ID of a sensor published by an external EMA module (e.g. `HA-consumption-profiler`, separate repo) carrying the household's learned consumption profile. Used by the PV-aware CVaR computation. When empty, the integration falls back to a synthetic Finnish-typical profile calibrated to `annual_consumption_kwh` and flags the resulting CVaR as `data_provenance: synthetic_cold_start`. |
 
 ## Installation
 

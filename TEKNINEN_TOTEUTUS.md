@@ -1,4 +1,4 @@
-# Tekninen toteutus — HA Spot Price Predictor (v2.10.0)
+# Tekninen toteutus — HA Spot Price Predictor (v2.11.0)
 
 Suomalaisen kuluttajan sähkön spot- ja kuluttajahinnan sekä D(k)-kestokäyrien ennustaminen Home Assistantiin. Tuottaa 170 tunnin spot/kuluttajahinnan pisteen ennusteen, P5/P25/P50/P75/P95-viuhkavyöt ja 7 vrk:n halpa/kallis-kestokäyrät nelitasoisesta ennustusputkesta. Tämä opas kuvaa vain sen mitä toimitettava koodi todella tekee.
 
@@ -67,7 +67,7 @@ järjestyksessä. Varatakenttänä on `RIDGE_FEATURES`-vakio
 | 4 | `Y_sigmoid_wind_rho` | `_sigmoid_turbine_rho` ([`pipeline.py:81-87`](custom_components/spot_price_predictor/pipeline.py:81)), sitten keskitetään paikallisesti | `σ((tuuli − 7,5) / 1,5) × ρ(T) / 1,225` |
 | 5 | `Y_solar_effective` | `_solar_effective` ([`pipeline.py:90-96`](custom_components/spot_price_predictor/pipeline.py:90)), sitten keskitetään paikallisesti | `GHI × (1 − 0,004 · max(0, T_cell − 25))`, `T_cell = T + 0,03 · GHI` |
 | 6 | `Y_temp` | `_deseasonalize_input("temp", …)` | Kausitasoittunut lämpötila |
-| 7 | `Y_se1` | `_deseasonalize_input("se1", …)` naapurihinta-argumentista | Kausitasoittunut SE1-spot. **v2.10.0:n lisäys** — hyväksytty v2.5.6:n hedge-portin alla. |
+| 7 | `Y_se1` | `_deseasonalize_input("se1", …)` naapurihinta-argumentista | Kausitasoittunut SE1-spot. **v2.10.0:n lisäys** — hyväksytty v2.5.6:n NPK-CVaR-hedge-portin alla. |
 | 8 | `Y_se3` | `_deseasonalize_input("se3", …)` | Kausitasoittunut SE3-spot (FennoSkan-kaapeleiden Ruotsin pää). |
 | 9 | `Y_ee` | `_deseasonalize_input("ee", …)` | Kausitasoittunut EE-spot (Estlink-kaapeleiden Viron pää). |
 
@@ -166,7 +166,59 @@ Tila tallennetaan tiedostoon `<config>/.storage/spot_price_predictor_dtaci_dk_fi
 
 Katso algoritmin yksityiskohdat (Gibbs & Candès JMLR 2024) ja vianmääritys tiedostosta [docs/dtaci_layer.md](docs/dtaci_layer.md).
 
+## PV-tietoinen riski (v2.11.0)
+
+Jokainen `daily_forecast[i]`-rivi kantaa — kun PV on käytössä — neljän kentän PV-tietoisen riskilohkon, jonka tuottaa päiväkohtainen CVaR-moduuli:
+
+```
+pv_aware_cvar95_eur_kwh        # efektiivisen EUR/kWh:n hännän keskiarvo
+                               #   yhteisten hinta+PV-skenaarioiden yli
+pv_aware_self_consumed_kwh     # odotettu paikalla käytetty PV (paikkojen keskiarvo)
+pv_aware_exported_kwh          # odotettu verkkoon viety PV (paikkojen keskiarvo)
+pv_aware_data_provenance       # luottamuslippu, ks. alla
+```
+
+Laskenta sijaitsee tiedostossa [`pv_aware_cvar.py`](custom_components/spot_price_predictor/pv_aware_cvar.py) ja kutsuu jaettua kustannusydintä [`pv_cost_kernel.cost_distribution()`](custom_components/spot_price_predictor/pv_cost_kernel.py). Jokaiselle ennustepäivälle:
+
+1. Päivän 24 tuntittaista `consumer_eur_kwh`-, `sell_eur_kwh`- ja `pv_production_kwh`-arvoa luetaan tuntikohtaisilta ennusteriviltä.
+2. 24 tuntittaista kulutusarvoa tulee joko ulkoisesta EMA-profiili-entiteetistä (ks. "Kulutusprofiilin lataaja" alla) tai integraation oletusperustasosta.
+3. Parametrinen skenaariotuottaja ([`pv_aware_cvar._sample_pv_paths`](custom_components/spot_price_predictor/pv_aware_cvar.py)) tuottaa `N_PATHS = 200` log-normaalia perturbattua PV-polkua (keskiarvoa säilyttäviä, `REL_STD = 0.30`), kalibroituna vastaamaan empiirisen Phase-A pilvi-bootstrapin CVaR-leveyttä.
+4. Kustannusydin laskee toteutuneen efektiivisen EUR/kWh:n per polku; pahimman 5 %:n hännän keskiarvosta tulee `pv_aware_cvar95_eur_kwh`.
+
+PV-nettoutetut `dk_cheap_pv_eur_kwh[24]` / `dk_peak_pv_eur_kwh[24]` -taulukot säilyvät päiväkortilla **diagnostisina, joustava-kWh -approksimaatioina** kojelautoja varten. Kuormakohtaiset optimoijat (lämpösäätäjä, EV-lataaja, akkulaturi) **muodostavat oman per-kuorma α:nsa** käyttäen `forecast[h]`-rivien tuntikohtaisia `consumer_eur_kwh` (osto) ja `sell_eur_kwh` (myynti) -arvoja — perusteet kohteessa [studies/results/pv_adjusted_buy_sell_duration_curves.md](studies/results/pv_adjusted_buy_sell_duration_curves.md).
+
+### Kulutusprofiilin lataaja
+
+Moduuli: [`consumption_profile_loader.py`](custom_components/spot_price_predictor/consumption_profile_loader.py). Kaksi profiilidatan lähdettä:
+
+1. **Ulkoinen EMA-moduuli** (esim. `HA-consumption-profiler`, erillinen repo): kun `CONF_CONSUMPTION_PROFILE_ENTITY` on asetettu kyseisen sensorin entiteetti-ID:hen, lataaja lukee sen attribuutit skeemasta [`docs/household_profile_schema.md`](docs/household_profile_schema.md): `mean_kwh_per_hour`, `shape_hour_weekday` (7×24), `monthly_factor` (12), `data_provenance`.
+2. **Synteettinen varatakenttä**: jos asetus puuttuu tai on lukukelvoton, käytetään yleistä optimoimatonta suomalaisen kotitalouden profiilia (bimodaalinen tunti-of-day iltahuipulla, lämmityspainotteinen kuukausikerroin), kalibroituna asetukseen `CONF_ANNUAL_CONSUMPTION_KWH`. Provenance: `"synthetic_cold_start"`.
+
+Synteettinen varatakenttä EI ole johdettu mistään yksittäisestä käyttäjän datasta — yksityisyyssopimus on dokumentoitu kohteessa [docs/household_profile_schema.md](docs/household_profile_schema.md) ja vahvistettu pre-commit-koukulla ([scripts/check_no_private_data.py](scripts/check_no_private_data.py)).
+
 ## Anturien attribuuttiviite
+
+### Spot Price Forecast -anturi (Nordpool-yhteensopiva) — v2.11.0
+
+`sensor.spot_price_forecast_fi` paljastaa putken L1+L2+L3+L4-tuotoksen Nordpool-integraatiomuodossa.
+
+| Attribuutti | Tyyppi | Kuvaus |
+|---|---|---|
+| state | float (EUR/kWh) | Nykyisen tunnin spot-ennuste |
+| `raw_today` | lista `{start, end, value}` | Tämänpäiväinen paikallispäiväkohtainen tuntittainen ennuste (EUR/kWh) |
+| `raw_tomorrow` | lista `{start, end, value}` | Huomisen paikallispäiväkohtainen tuntittainen ennuste (EUR/kWh) |
+| `raw_extended` | lista `{start, end, value}` | Koko 170-tunnin horisontti (tänään + 6 päivää). Integraation ainutlaatuinen lisäarvo. |
+| `today_min` / `today_avg` / `today_max` | float (EUR/kWh) | `raw_today`-arvojen tilastot |
+| `tomorrow_min` / `tomorrow_avg` / `tomorrow_max` | float (EUR/kWh) | Samat huomenna |
+| `forecast_horizon_h` | int | `raw_extended`-pituus |
+| `currency`, `unit`, `source` | string | `"EUR"`, `"kWh"`, `"spot_price_predictor L1+L2+L3+L4"` |
+| `confidence_band` | dict `{p5: [...], p95: [...]}` | L4-viuhkavyöt per tunti (EUR/kWh). Valinnainen. |
+| `last_updated` | ISO-aikaleima | Viimeinen koordinaattorisykli |
+
+Empiirinen tarkkuus (12 kuukauden held-out -tausta-ajo välimuistissa olevista hinnoista + säästä, ks. [studies/results/exp_spot_price_forecast_accuracy.md](studies/results/exp_spot_price_forecast_accuracy.md)):
+
+- **Kylmäkäynnistyksen alaraja** (tuore asennus, ei kalibroijan historiaa): MAE 22,5 EUR/MWh keskimääräisellä toteutuneella hinnalla 51,8 EUR/MWh; R² +0,71; 50 %:n vyökate 49 % (tavoite 50 %); 90 %:n vyökate 74 % (alimitoitettu kylmäkäynnistyksessä).
+- **Lämmin tila** noin 30–60 päivän jälkeen (kalibroijat lämmenneet): MAE ≈ 10 EUR/MWh, R² ≈ 0,91, 90 %:n vyökate ≈ 92 %. Numerot v2.10.1-julkaisun tausta-ajosta saman datan koulutus/testijaolla.
 
 ### Price Forecast -sensori — forecast-rivin avaimet
 
@@ -192,7 +244,10 @@ Jokainen rivi `daily_forecast[]`-taulukossa (enintään 7):
 | `date`, `weekday`, `source` | string | `source ∈ {"forecast", "actual"}` |
 | `dk_cheap_eur_mwh`, `dk_peak_eur_mwh` | float[24] | Spot EUR/MWh, 0-indeksoituna, monotoninen i:ssä |
 | `dk_cheap_eur_kwh`, `dk_peak_eur_kwh` | float[24] | Kuluttaja EUR/kWh, tuntikohtainen tariffi sovellettu |
-| `dk_cheap_pv_eur_kwh`, `dk_peak_pv_eur_kwh` | float[24] | PV-tietoiset versiot. Vain kun PV on käytössä. |
+| `dk_cheap_pv_eur_kwh`, `dk_peak_pv_eur_kwh` | float[24] | PV-tietoiset versiot (yhden perustason "joustava kWh" -approksimaatio). Vain kun PV on käytössä. Vain kojelaudoille; kuormakohtaiset optimoijat muodostavat oman α:nsa tuntikohtaisesta osto/myynti-datasta. |
+| `pv_aware_cvar95_eur_kwh` | float | **v2.11.0.** Pahimman 5 %:n yhdistettyjen hinta+PV-skenaarioiden efektiivisen kustannuksen hännän keskiarvo. EUR/kWh. Vain kun PV on käytössä. |
+| `pv_aware_self_consumed_kwh`, `pv_aware_exported_kwh` | float | **v2.11.0.** Odotettu PV paikallisesti käytetty / verkkoon viety tänä päivänä, skenaarioiden keskiarvo. Vain kun PV on käytössä. |
+| `pv_aware_data_provenance` | string | **v2.11.0.** `"synthetic_cold_start"` / `"ema_blended"` / `"ema_warm"` / `"coordinator_baseload"` — luottamuslippu CVaR:n taustalla olevalle kulutusprofiilille. |
 | `dk_cheap_lower_eur_kwh`, `dk_cheap_upper_eur_kwh`, `dk_peak_lower_eur_kwh`, `dk_peak_upper_eur_kwh` | float[24] | DtACI-vyöt. Vain kun DtACI on käytössä ja instanssit ovat lämmittäneet. |
 
 ### Diagnostiikka koordinaattorin tuloksessa
@@ -259,6 +314,9 @@ HA-spot-price-predictor/
 │   ├── price_floor.py              # softplus-pohjavyöhyke −5 EUR/MWh:llä
 │   ├── solar_clear_sky.py          # selkeän taivaan × pilvisyys -aurinkomalli
 │   ├── pv_estimate.py              # sisäinen PV-estimaattori + marginaalinen efektiivinen hinta
+│   ├── pv_cost_kernel.py           # jaettu yhteiskustannus + CVaR -kirjasto
+│   ├── pv_aware_cvar.py            # päiväkohtainen PV-tietoinen CVaR (parametrinen skenaario)
+│   ├── consumption_profile_loader.py  # EMA-profiililukija + synteettinen varatakenttä
 │   ├── retrain.py                  # retrain_models-orkestraattori
 │   ├── sensor.py                   # sensorientiteetit
 │   ├── api_client.py               # asynkroniset API-asiakkaat
@@ -270,5 +328,5 @@ HA-spot-price-predictor/
 │       ├── solar_submodel_default.json
 │       └── finland.yaml
 ├── studies/                        # uudelleenkoulutus-skriptit + historialliset analyysit
-└── tests/                          # pytest-paketti (402 läpäisty v2.8.1:ssä)
+└── tests/                          # pytest-paketti (471 läpäisty v2.11.0:ssa)
 ```
