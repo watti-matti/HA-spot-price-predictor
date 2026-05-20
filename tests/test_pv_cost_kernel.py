@@ -33,6 +33,74 @@ def test_inconsistent_shapes_raise() -> None:
         cost_distribution(buy, sell, pv, cons)
 
 
+def test_buy_must_be_2d_raises() -> None:
+    buy = np.ones(24)   # 1-D
+    sell = np.ones((4, 24))
+    pv = np.ones((4, 24))
+    cons = np.ones(24)
+    with pytest.raises(ValueError, match="2-D"):
+        cost_distribution(buy, sell, pv, cons)
+
+
+def test_sell_shape_mismatch_raises() -> None:
+    buy = np.ones((4, 24))
+    sell = np.ones((4, 23))  # mismatched n_hours
+    pv = np.ones((4, 24))
+    cons = np.ones(24)
+    with pytest.raises(ValueError, match="sell shape"):
+        cost_distribution(buy, sell, pv, cons)
+
+
+def test_pv_shape_mismatch_raises() -> None:
+    buy = np.ones((4, 24))
+    sell = np.ones((4, 24))
+    pv = np.ones((3, 24))  # mismatched n_paths
+    cons = np.ones(24)
+    with pytest.raises(ValueError, match="pv shape"):
+        cost_distribution(buy, sell, pv, cons)
+
+
+def test_consumption_2d_with_wrong_shape_raises() -> None:
+    buy = np.ones((4, 24))
+    sell = np.ones((4, 24))
+    pv = np.ones((4, 24))
+    cons = np.ones((4, 23))  # 2-D, wrong shape
+    with pytest.raises(ValueError, match="consumption \\(2-D\\)"):
+        cost_distribution(buy, sell, pv, cons)
+
+
+def test_consumption_1d_wrong_length_raises() -> None:
+    buy = np.ones((4, 24))
+    sell = np.ones((4, 24))
+    pv = np.ones((4, 24))
+    cons = np.ones(20)  # 1-D, wrong length
+    with pytest.raises(ValueError, match="consumption \\(1-D\\)"):
+        cost_distribution(buy, sell, pv, cons)
+
+
+def test_consumption_3d_raises() -> None:
+    buy = np.ones((4, 24))
+    sell = np.ones((4, 24))
+    pv = np.ones((4, 24))
+    cons = np.ones((4, 24, 1))  # 3-D
+    with pytest.raises(ValueError, match="1-D or 2-D"):
+        cost_distribution(buy, sell, pv, cons)
+
+
+def test_consumption_2d_accepted() -> None:
+    """The 2-D consumption path (one consumption per scenario) works."""
+    rng = np.random.default_rng(99)
+    buy = np.full((10, 24), 0.20)
+    sell = np.full((10, 24), 0.05)
+    pv = np.zeros((10, 24))
+    # 2-D consumption: different load per scenario
+    cons = rng.uniform(0.5, 2.0, size=(10, 24))
+    out = cost_distribution(buy, sell, pv, cons)
+    # Each path's cost = sum(buy * cons), distinct since cons varies
+    expected = (buy * cons).sum(axis=1)
+    assert np.allclose(out.cost_per_path_eur, expected)
+
+
 def test_consumption_1d_is_broadcast_over_paths() -> None:
     buy = np.full((10, 24), 0.20)
     sell = np.full((10, 24), 0.05)

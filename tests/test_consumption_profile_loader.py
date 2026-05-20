@@ -209,6 +209,38 @@ def test_consumption_profile_rejects_wrong_monthly_length() -> None:
         )
 
 
+def test_load_profile_fallback_when_mean_missing_only() -> None:
+    """Non-empty attrs but missing mean → synthetic fallback (line 170)."""
+    attrs = {
+        "shape_hour_weekday": [[1.0] * 24 for _ in range(7)],
+        "monthly_factor": [1.0] * 12,
+        # no mean_kwh_per_hour
+    }
+    p = load_profile_from_entity_attrs(attrs, fallback_annual_kwh=10000)
+    assert p.data_provenance == "synthetic_cold_start"
+
+
+def test_load_profile_handles_typeerror_in_parsing() -> None:
+    """Malformed values trigger the except (KeyError/ValueError/TypeError)
+    fallback path."""
+    attrs = {
+        "mean_kwh_per_hour": "not a number",  # will raise on float()
+        "shape_hour_weekday": [[1.0] * 24 for _ in range(7)],
+        "monthly_factor": [1.0] * 12,
+    }
+    p = load_profile_from_entity_attrs(attrs, fallback_annual_kwh=10000)
+    assert p.data_provenance == "synthetic_cold_start"
+
+
+def test_synthetic_profile_at_negative_annual_with_zero_allowed() -> None:
+    """Boundary: annual_kwh == 0 is allowed; negative is not."""
+    p = synthetic_profile(annual_kwh=0.0)
+    # All consumption values are zero (mean = 0) but shape stays valid.
+    ts = [datetime(2026, 3, 15, 12, 0)]
+    out = p.consumption_for_timestamps(ts)
+    assert out[0] == pytest.approx(0.0)
+
+
 def test_consumption_profile_rejects_negative_mean() -> None:
     with pytest.raises(ValueError):
         ConsumptionProfile(

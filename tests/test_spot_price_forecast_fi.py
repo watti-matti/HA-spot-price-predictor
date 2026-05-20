@@ -220,3 +220,29 @@ def test_entity_id_is_spot_price_forecast_fi(sensor_module):
     coord.data = None
     s = sensor_module.SpotPriceForecastSensor(coord, _make_entry())
     assert s.entity_id == "sensor.spot_price_forecast_fi"
+
+
+def test_device_info_returns_dict(sensor_module):
+    coord = MagicMock()
+    coord.data = None
+    s = sensor_module.SpotPriceForecastSensor(coord, _make_entry())
+    info = s.device_info
+    assert isinstance(info, dict)
+    assert "name" in info
+    assert "identifiers" in info
+
+
+def test_attributes_empty_when_forecast_missing(sensor_module):
+    coord = MagicMock()
+    coord.data = {"forecast": []}
+    s = sensor_module.SpotPriceForecastSensor(coord, _make_entry())
+    assert s.extra_state_attributes == {}
+
+
+def test_native_value_none_when_current_spot_missing(sensor_module):
+    coord = MagicMock()
+    coord.data = {"forecast": [{"timestamp": "2026-04-15T00:00:00+00:00",
+                                  "spot_eur_mwh": 50.0}]}
+    s = sensor_module.SpotPriceForecastSensor(coord, _make_entry())
+    # current_spot_eur_mwh missing → native_value is None
+    assert s.native_value is None

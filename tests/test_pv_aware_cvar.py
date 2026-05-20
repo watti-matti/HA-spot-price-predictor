@@ -143,6 +143,17 @@ def test_compute_pv_self_consumption_plus_export_equals_pv() -> None:
         pytest.approx(total_pv_mean, rel=0.05)
 
 
+def test_compute_uses_default_rng_when_omitted() -> None:
+    """Calling without rng= must work (uses default_rng() internally)."""
+    d = _dummy_inputs()
+    out = pv_aware_cvar.compute_pv_aware_cvar_for_day(
+        d["buy"], d["sell"], d["pv"], d["cons"],
+        n_paths=100,
+        # no rng= argument
+    )
+    assert "cvar95_eur_kwh" in out
+
+
 def test_compute_high_consumption_reduces_export() -> None:
     """When consumption is much higher than PV, surplus collapses."""
     d = _dummy_inputs()
