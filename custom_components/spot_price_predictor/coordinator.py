@@ -67,6 +67,7 @@ from .dk_utils import compute_dk_cheap_peak
 from .features import build_forecast_features
 from .holidays import build_holiday_set
 from .model import SpotPriceModel
+from .pv_aware_cvar import compute_pv_aware_cvar_for_day
 from .pv_estimate import (
     estimate_pv_kwh_per_hour,
     marginal_effective_eur_kwh,
@@ -1668,6 +1669,70 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                         peak_pv.append(round(s_p / (i + 1), 4))
                     day_entry["dk_cheap_pv_eur_kwh"] = cheap_pv
                     day_entry["dk_peak_pv_eur_kwh"] = peak_pv
+
+                # ── PV-aware CVaR (Phase D step 3b) ────────────────────
+                # Computed from the day's 24 hourly buy / sell / PV /
+                # consumption values via a parametric scenario sampler
+                # (pv_aware_cvar.compute_pv_aware_cvar_for_day). Adds
+                # mean / CVaR_95 / fan-chart quantiles + PV self-
+                # consumption bookkeeping. Strictly additive — does
+                # not modify existing day_entry fields.
+                try:
+                    day_buys: list[float] = []
+                    day_sells: list[float] = []
+                    day_pvs: list[float] = []
+                    day_cons: list[float] = []
+                    for h in day_hours:
+                        idx = h["forecast_idx"]
+                        if idx >= len(forecast):
+                            day_buys = []
+                            break
+                        f_row = forecast[idx]
+                        day_buys.append(float(f_row.get("consumer_eur_kwh", 0.0)))
+                        day_sells.append(float(f_row.get("sell_eur_kwh", 0.0)))
+                        day_pvs.append(float(f_row.get("pv_production_kwh", 0.0)))
+                        day_cons.append(float(f_row.get("baseload_kwh", 0.0)))
+                    if len(day_buys) == 24:
+                        import numpy as _np
+                        cvar = compute_pv_aware_cvar_for_day(
+                            _np.array(day_buys),
+                            _np.array(day_sells),
+                            _np.array(day_pvs),
+                            _np.array(day_cons),
+                        )
+                        day_entry["pv_aware_mean_eur_kwh"] = round(
+                            cvar["mean_eur_kwh"], 4)
+                        day_entry["pv_aware_cvar95_eur_kwh"] = round(
+                            cvar["cvar95_eur_kwh"], 4)
+                        day_entry["pv_aware_p5_eur_kwh"] = round(
+                            cvar["p5_eur_kwh"], 4)
+                        day_entry["pv_aware_p50_eur_kwh"] = round(
+                            cvar["p50_eur_kwh"], 4)
+                        day_entry["pv_aware_p95_eur_kwh"] = round(
+                            cvar["p95_eur_kwh"], 4)
+                        day_entry["pv_aware_mean_eur"] = round(
+                            cvar["mean_eur"], 2)
+                        day_entry["pv_aware_cvar95_eur"] = round(
+                            cvar["cvar95_eur"], 2)
+                        day_entry["pv_aware_self_consumed_kwh"] = round(
+                            cvar["pv_self_consumed_kwh"], 2)
+                        day_entry["pv_aware_exported_kwh"] = round(
+                            cvar["pv_exported_kwh"], 2)
+                        # Consumption source here is the coordinator's
+                        # existing `baseload_kwh` (annual_kwh-derived,
+                        # optionally smoothed by `CONF_CONSUMPTION_ENTITY`).
+                        # When the external EMA module
+                        # (`CONF_CONSUMPTION_PROFILE_ENTITY`) is wired in
+                        # by a follow-up commit, this provenance string
+                        # will reflect whichever source actually fed the
+                        # consumption array.
+                        day_entry["pv_aware_data_provenance"] = (
+                            "coordinator_baseload"
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    _LOGGER.debug(
+                        "PV-aware CVaR skipped for %s: %s", date_str, exc,
+                    )
 
             result.append(day_entry)
 
