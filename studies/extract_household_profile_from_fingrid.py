@@ -5,34 +5,29 @@ DB). The Datahub CSVs give multi-year hourly history at the cost of
 sensor-level granularity: we get *grid import* and *grid export*
 totals, not per-load breakdown.
 
-Strategy
---------
-1.  Load `home_consumption.csv` (grid import, full window).
-2.  Load `PV_production.csv` (grid export — really PV surplus to grid)
-    if present, and infer PV install date from its start.
-3.  For the pre-install window, total household demand equals
-    grid import. Use this period to compute the **monthly seasonal
-    factor** across all 12 months (the missing piece in a
-    spring-only HA-DB extraction).
-4.  Optionally combine with the post-install period by adding back
-    estimated self-consumed PV from cached irradiance via
-    `pv_estimate.estimate_pv_kwh_per_hour`. The post-install shape
-    is the **EMHASS-optimised** consumption signature; the
-    pre-install shape is the **natural** signature.
+Default flow — post-PV only
+---------------------------
+The PV install date is inferred from the start of `PV_production.csv`.
+The pre-install data is from a different household configuration
+(no HA, no EMHASS, possibly different tariff structure / equipment)
+so it would mix optimisation effects with equipment changes. Default
+behaviour is to **use only the post-install window** and reconstruct
+total household demand as:
 
-Outputs
--------
-The script writes a profile JSON to `studies/_private/` per the
-schema in `docs/household_profile_schema.md`. By default, two
-profiles are written:
+    total_demand = grid_import + max(0, PV_total_estimated − grid_export)
 
-  household_profile_pre_pv.json  — natural (Dec 2022 - early Sep 2023)
-  household_profile_post_pv.json — EMHASS-shaped (Sep 2023 onwards)
+with PV_total estimated from cached Open-Meteo irradiance via
+`pv_estimate.estimate_pv_kwh_per_hour`. The result is the
+EMHASS-optimised signature plus the full 12-month seasonal coverage
+the HA recorder alone (72-day window) lacks.
 
-Plus, the monthly_factor in the canonical
-`household_profile.json` is overwritten with the pre-PV data
-(since it covers all 12 months), while the shape_hour_weekday is
-kept from the (post-EMHASS) HA-DB extraction if present.
+`--include-pre-pv` opts into also writing a pre-install profile for
+historical reference; it should not feed the canonical profile.
+
+Output
+------
+A profile JSON under `studies/_private/` (gitignored) per the schema
+in `docs/household_profile_schema.md`.
 """
 from __future__ import annotations
 
@@ -142,15 +137,23 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--fingrid-dir", required=True, type=Path,
                      help="Directory containing home_consumption.csv etc.")
-    ap.add_argument("--out-pre-pv", type=Path,
-                     default=REPO / "studies" / "_private"
-                                  / "household_profile_pre_pv.json")
     ap.add_argument("--out-post-pv", type=Path,
                      default=REPO / "studies" / "_private"
                                   / "household_profile_post_pv.json")
-    ap.add_argument("--out-combined", type=Path,
+    ap.add_argument(
+        "--include-pre-pv",
+        action="store_true",
+        help=(
+            "Also write a pre-PV profile to "
+            "studies/_private/household_profile_pre_pv.json. The "
+            "pre-install window is from a different household "
+            "configuration (no HA / EMHASS / EV) so it should not "
+            "feed the canonical profile — it is historical only."
+        ),
+    )
+    ap.add_argument("--out-pre-pv", type=Path,
                      default=REPO / "studies" / "_private"
-                                  / "household_profile_combined.json")
+                                  / "household_profile_pre_pv.json")
     args = ap.parse_args()
 
     grid_import = load_hourly(args.fingrid_dir / "home_consumption.csv")
@@ -169,8 +172,8 @@ def main() -> int:
           f"{len(grid_import.timestamps)} hourly buckets, "
           f"total {grid_import.kwh.sum():.0f} kWh")
 
-    # PRE-PV PROFILE -----------------------------------------------------
-    if pv_install_date is not None:
+    # PRE-PV PROFILE (opt-in only — different household configuration) --
+    if args.include_pre_pv and pv_install_date is not None:
         mask = grid_import.timestamps < pv_install_date
         pre_ts = grid_import.timestamps[mask]
         pre_kwh = grid_import.kwh[mask]
@@ -181,15 +184,11 @@ def main() -> int:
         args.out_pre_pv.parent.mkdir(parents=True, exist_ok=True)
         args.out_pre_pv.write_text(json.dumps(pre_profile, indent=2),
                                      encoding="utf-8")
-        print(f"  pre-PV profile:  "
+        print(f"  pre-PV profile (historical only): "
               f"{pre_profile['extraction_metadata']['window_iso_date_only']}, "
-              f"mean {pre_profile['baseload']['mean_kwh_per_hour']:.3f} kWh/h, "
-              f"months observed: "
-              f"{pre_profile['extraction_metadata']['months_observed']}")
-    else:
-        pre_profile = None
+              f"mean {pre_profile['baseload']['mean_kwh_per_hour']:.3f} kWh/h")
 
-    # POST-PV PROFILE (reconstructed total demand) ----------------------
+    # POST-PV PROFILE (reconstructed total demand) — the canonical one --
     if grid_export is not None:
         post_mask = grid_import.timestamps >= pv_install_date
         post_ts = grid_import.timestamps[post_mask]
@@ -219,28 +218,6 @@ def main() -> int:
     else:
         post_profile = None
 
-    # COMBINED PROFILE: monthly_factor from pre-PV (12-month coverage), -
-    # shape_hour_weekday from post-PV (EMHASS-optimised signature).
-    if pre_profile and post_profile:
-        combined = {
-            "extraction_metadata": {
-                **post_profile["extraction_metadata"],
-                "source": "combined: pre-PV monthly_factor + post-PV shape",
-                "monthly_factor_source": pre_profile["extraction_metadata"]["source"],
-                "shape_source":          post_profile["extraction_metadata"]["source"],
-            },
-            "baseload": {
-                "mean_kwh_per_hour":   post_profile["baseload"]["mean_kwh_per_hour"],
-                "shape_hour_weekday":  post_profile["baseload"]["shape_hour_weekday"],
-                "sigma_hour_weekday_kwh": post_profile["baseload"]["sigma_hour_weekday_kwh"],
-                "monthly_factor":      pre_profile["baseload"]["monthly_factor"],
-                "monthly_obs_count":   pre_profile["baseload"]["monthly_obs_count"],
-            },
-            "derived_annual_kwh_estimate": post_profile["derived_annual_kwh_estimate"],
-        }
-        args.out_combined.write_text(json.dumps(combined, indent=2),
-                                       encoding="utf-8")
-        print(f"  combined profile -> {args.out_combined}")
     return 0
 
 
