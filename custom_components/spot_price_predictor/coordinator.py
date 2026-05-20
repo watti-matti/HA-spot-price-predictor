@@ -1308,9 +1308,10 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
         pipeline_mean = out["mean_eur_mwh"]
 
         # Overwrite each forecast row with the pipeline's spot, consumer,
-        # and fan-chart percentiles. Group consumer prices by local date
-        # so we can build the per-day D(k) arrays in one pass.
+        # and fan-chart percentiles. Group consumer + sell prices by
+        # local date so we can build the per-day D(k) arrays in one pass.
         by_date_consumer: dict[str, list[float]] = {}
+        by_date_sell:     dict[str, list[float]] = {}
         for i, f in enumerate(forecast):
             spot = float(pipeline_mean[i])
             f["spot_eur_mwh"] = round(spot, 4)
@@ -1328,6 +1329,16 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                 f[f"{q}_eur_mwh"] = float(out[f"{q}_eur_mwh"][i])
             if local_date is not None and consumer is not None:
                 by_date_consumer.setdefault(local_date, []).append(float(consumer))
+            # Sell-side rate per hour from the pipeline-refreshed spot.
+            # Available even for non-PV-enabled installs (it's just the
+            # current tariff math), so the sell D(k) becomes a generic
+            # marginal-export-price signal for downstream consumers.
+            if local_date is not None:
+                try:
+                    sell = float(self._spot_to_sell_eur_kwh(spot))
+                    by_date_sell.setdefault(local_date, []).append(sell)
+                except Exception:
+                    pass
 
         # Spot 24-level D(k) directly from the pipeline's hourly means.
         spot_curves = self._pipeline.compute_duration_curves(pipeline_mean, timestamps)
@@ -1359,6 +1370,33 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                 peak.append(round(s_p / (i + 1), 4))
             entry["dk_cheap_eur_kwh"] = cheap
             entry["dk_peak_eur_kwh"] = peak
+
+        # Sell-side 24-level D(k) — same rank-order machinery on the
+        # per-hour sell price. Lets downstream optimisers (thermal /
+        # EV / battery) compose their own per-load PV-aware effective
+        # price as (1 − α)·buy + α·sell with their own α = PV/load_kW,
+        # instead of consuming the integration's single-baseload
+        # `dk_*_pv_eur_kwh` approximation which assumes one α for
+        # the whole household. See
+        # studies/results/pv_adjusted_buy_sell_duration_curves.md for
+        # the architectural rationale.
+        for date_str, sell_prices in by_date_sell.items():
+            if len(sell_prices) != 24:
+                continue
+            entry = dk_by_date.setdefault(date_str, {})
+            asc = sorted(sell_prices)
+            desc = sorted(sell_prices, reverse=True)
+            sell_cheap: list[float] = []
+            sell_peak: list[float] = []
+            s_c = 0.0
+            s_p = 0.0
+            for i in range(24):
+                s_c += asc[i]
+                s_p += desc[i]
+                sell_cheap.append(round(s_c / (i + 1), 4))
+                sell_peak.append(round(s_p / (i + 1), 4))
+            entry["dk_cheap_sell_eur_kwh"] = sell_cheap
+            entry["dk_peak_sell_eur_kwh"] = sell_peak
 
         # Persist calibrator state every cycle
         try:
