@@ -41,6 +41,11 @@ Thumbs.db
 # Jupyter
 .ipynb_checkpoints/
 
+# pytest-cov artifacts
+.coverage
+.coverage.*
+htmlcov/
+
 # Private user data — never committed.
 # See docs/household_profile_schema.md for the design boundary.
 # Local-only directory for individual HA snapshots and derived profiles.
