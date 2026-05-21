@@ -65,52 +65,74 @@ views:
               | **Mean width** | **{{ (state_attr("sensor.spot_price_predictor_duration_forecast", "dtaci_fi_mean_width_eur_kwh") * 100) | round(2) }} c/kWh** | **Warm** | **{{ state_attr("sensor.spot_price_predictor_duration_forecast", "dtaci_fi_warm_instances") }} / {{ state_attr("sensor.spot_price_predictor_duration_forecast", "dtaci_fi_total_instances") }}** |
 
           # ── Per-k coverage bars (cheap end) ──────────────────────────
+          # Coverage is the fraction of recent days where the realised
+          # D(k) statistic fell inside the published interval. Target = 0.90.
+          # Bars stack vertically over k=1..24; y-axis scaled 70%..100%.
+          # Multiplied by 100 in the data generator so the y-axis reads
+          # as a percentage directly (avoids axis-format formatter issues).
           - type: custom:apexcharts-card
             header:
               show: true
               title: "Per-k coverage — D_cheap (target 90 %)"
             apex_config:
               chart:
-                height: 420px
+                height: 320px
                 type: bar
               plotOptions:
                 bar:
-                  horizontal: true
+                  horizontal: false
+                  columnWidth: "80%"
                   dataLabels:
-                    position: "center"
+                    position: "top"
               dataLabels:
-                enabled: true
-                formatter: |
-                  EVAL: function (val) { return (val * 100).toFixed(1) + ' %'; }
+                enabled: false
               xaxis:
-                min: 0.7
-                max: 1.0
+                type: category
+                title:
+                  text: k
               yaxis:
-                labels:
-                  show: true
+                min: 70
+                max: 100
+                decimalsInFloat: 1
+                title:
+                  text: coverage %
               tooltip:
                 y:
                   formatter: |
-                    EVAL: function (val) { return (val * 100).toFixed(2) + ' %'; }
+                    EVAL: function (val) { return val.toFixed(2) + ' %'; }
+              annotations:
+                yaxis:
+                  - y: 90
+                    borderColor: "#16a34a"
+                    strokeDashArray: 4
+                    label:
+                      text: "target 90 %"
+                      borderColor: "#16a34a"
+                      style:
+                        color: "#16a34a"
+                        background: "rgba(255,255,255,0.85)"
             series:
               - entity: sensor.spot_price_predictor_duration_forecast
                 name: coverage
                 type: column
                 color_threshold:
-                  - value: 0.0
+                  - value: 0
                     color: "#A32D2D"
-                  - value: 0.85
+                  - value: 85
                     color: "#EF9F27"
-                  - value: 0.88
+                  - value: 88
                     color: "#1D9E75"
                 data_generator: |
                   const diag = entity.attributes.dtaci_diagnostics;
                   if (!diag || !diag.zones || !diag.zones.fi) return [];
                   const cheap = diag.zones.fi.per_k.cheap;
-                  return Array.from({length: 24}, (_, i) => i + 1).map(k => ({
-                    x: 'k=' + k,
-                    y: cheap[k] ? cheap[k].coverage : null
-                  }));
+                  return Array.from({length: 24}, (_, i) => i + 1)
+                    .map(k => ({
+                      x: String(k),
+                      y: cheap && cheap[k] && cheap[k].coverage != null
+                          ? cheap[k].coverage * 100
+                          : null,
+                    }));
 
           # ── Per-k coverage bars (peak end) ───────────────────────────
           - type: custom:apexcharts-card
@@ -119,42 +141,63 @@ views:
               title: "Per-k coverage — D_peak (target 90 %)"
             apex_config:
               chart:
-                height: 420px
+                height: 320px
                 type: bar
               plotOptions:
                 bar:
-                  horizontal: true
+                  horizontal: false
+                  columnWidth: "80%"
                   dataLabels:
-                    position: "center"
+                    position: "top"
               dataLabels:
-                enabled: true
-                formatter: |
-                  EVAL: function (val) { return (val * 100).toFixed(1) + ' %'; }
+                enabled: false
               xaxis:
-                min: 0.7
-                max: 1.0
+                type: category
+                title:
+                  text: k
               yaxis:
-                labels:
-                  show: true
+                min: 70
+                max: 100
+                decimalsInFloat: 1
+                title:
+                  text: coverage %
+              tooltip:
+                y:
+                  formatter: |
+                    EVAL: function (val) { return val.toFixed(2) + ' %'; }
+              annotations:
+                yaxis:
+                  - y: 90
+                    borderColor: "#16a34a"
+                    strokeDashArray: 4
+                    label:
+                      text: "target 90 %"
+                      borderColor: "#16a34a"
+                      style:
+                        color: "#16a34a"
+                        background: "rgba(255,255,255,0.85)"
             series:
               - entity: sensor.spot_price_predictor_duration_forecast
                 name: coverage
                 type: column
                 color_threshold:
-                  - value: 0.0
+                  - value: 0
                     color: "#A32D2D"
-                  - value: 0.85
+                  - value: 85
                     color: "#EF9F27"
-                  - value: 0.88
+                  - value: 88
                     color: "#1D9E75"
                 data_generator: |
                   const diag = entity.attributes.dtaci_diagnostics;
                   if (!diag || !diag.zones || !diag.zones.fi) return [];
                   const peak = diag.zones.fi.per_k.peak;
-                  return Array.from({length: 24}, (_, i) => i + 1).map(k => ({
-                    x: 'k=' + k,
-                    y: peak[k] ? peak[k].coverage : null
-                  }));
+                  return Array.from({length: 24}, (_, i) => i + 1)
+                    .map(k => ({
+                      x: String(k),
+                      y: peak && peak[k] && peak[k].coverage != null
+                          ? peak[k].coverage * 100
+                          : null,
+                    }));
 
           # ── Per-k bias EMA (cheap + peak) ────────────────────────────
           - type: custom:apexcharts-card
