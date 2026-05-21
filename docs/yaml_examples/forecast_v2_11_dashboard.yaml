@@ -50,17 +50,22 @@ views:
         cards:
 
           # ── Status strip ───────────────────────────────────────────────
+          # HTML tables here so HA's GUI editor cannot break the layout
+          # by reformatting YAML scalars (browser ignores whitespace
+          # between tags; column widths set explicitly via <colgroup>).
           - type: markdown
             content: |
               ## Forecast status
-
-              |  |  |  |
-              |---|---|---|
-              | **Now** | **{{ (states('sensor.spot_price_predictor_price_forecast') | float * 100) | round(1) }} c/kWh** | (current hour, consumer EUR/kWh) |
-              | **Forecast (spot)** | **{{ (states('sensor.spot_price_forecast_fi') | float * 100) | round(1) }} c/kWh** | (current hour, EUR/kWh) |
-              | **Today min / avg / max** | {{ (state_attr('sensor.spot_price_forecast_fi','today_min') * 100) | round(1) }} / {{ (state_attr('sensor.spot_price_forecast_fi','today_avg') * 100) | round(1) }} / {{ (state_attr('sensor.spot_price_forecast_fi','today_max') * 100) | round(1) }} c/kWh | |
-              | **Tomorrow avg** | {{ (state_attr('sensor.spot_price_forecast_fi','tomorrow_avg') * 100) | round(1) }} c/kWh | |
-              | **Updated** | {{ state_attr('sensor.spot_price_predictor_price_forecast','last_update') | as_datetime | relative_time }} ago | {% if state_attr('sensor.spot_price_predictor_price_forecast','stale') %}⚠ **stale** ({{ state_attr('sensor.spot_price_predictor_price_forecast','data_age_minutes') }} min){% else %}fresh{% endif %} |
+              <table style="width:100%; border-collapse:collapse; margin-top:8px;">
+              <colgroup><col style="width:32%"><col style="width:30%"><col style="width:38%"></colgroup>
+              <tbody>
+              <tr><td style="padding:6px;"><b>Now</b></td><td style="padding:6px; text-align:right;"><b>{{ (states('sensor.spot_price_predictor_price_forecast') | float * 100) | round(1) }} c/kWh</b></td><td style="padding:6px;"><small>current hour, consumer EUR/kWh</small></td></tr>
+              <tr><td style="padding:6px;"><b>Forecast (spot)</b></td><td style="padding:6px; text-align:right;"><b>{{ (states('sensor.spot_price_forecast_fi') | float * 100) | round(1) }} c/kWh</b></td><td style="padding:6px;"><small>current hour, EUR/kWh</small></td></tr>
+              <tr><td style="padding:6px;"><b>Today min / avg / max</b></td><td style="padding:6px; text-align:right;">{{ (state_attr('sensor.spot_price_forecast_fi','today_min') * 100) | round(1) }} / {{ (state_attr('sensor.spot_price_forecast_fi','today_avg') * 100) | round(1) }} / {{ (state_attr('sensor.spot_price_forecast_fi','today_max') * 100) | round(1) }} c/kWh</td><td></td></tr>
+              <tr><td style="padding:6px;"><b>Tomorrow avg</b></td><td style="padding:6px; text-align:right;">{{ (state_attr('sensor.spot_price_forecast_fi','tomorrow_avg') * 100) | round(1) }} c/kWh</td><td></td></tr>
+              <tr><td style="padding:6px;"><b>Updated</b></td><td style="padding:6px; text-align:right;">{{ state_attr('sensor.spot_price_predictor_price_forecast','last_update') | as_datetime | relative_time }} ago</td><td style="padding:6px;">{% if state_attr('sensor.spot_price_predictor_price_forecast','stale') %}⚠ <b>stale</b> ({{ state_attr('sensor.spot_price_predictor_price_forecast','data_age_minutes') }} min){% else %}<span style="color:#16a34a;">fresh</span>{% endif %}</td></tr>
+              </tbody>
+              </table>
 
           # ── 1. Probabilistic fan chart (48h focus) ─────────────────────
           - type: custom:apexcharts-card
@@ -354,24 +359,29 @@ views:
               ### PV-aware risk summary
               {% set days = state_attr('sensor.spot_price_predictor_duration_forecast', 'daily_forecast') %}
               {% if days and days[0].pv_aware_cvar95_eur_kwh is defined %}
+              <table style="width:100%; border-collapse:collapse; margin-top:8px;">
+              <colgroup><col style="width:28%"><col style="width:24%"><col style="width:24%"><col style="width:24%"></colgroup>
+              <thead><tr style="background:#374151; color:#fff;">
+              <th style="padding:6px; text-align:left;">Day</th>
+              <th style="padding:6px; text-align:right;">CVaR₉₅</th>
+              <th style="padding:6px; text-align:right;">Self-consumed PV</th>
+              <th style="padding:6px; text-align:right;">Exported PV</th>
+              </tr></thead>
+              <tbody>
+              {% for d in days[:7] %}<tr><td style="padding:5px 8px;"><b>{{ d.weekday }} {{ d.date[5:] }}</b></td><td style="padding:5px 8px; text-align:right;"><b>{{ (d.pv_aware_cvar95_eur_kwh * 100) | round(1) }} c/kWh</b></td><td style="padding:5px 8px; text-align:right;">{{ d.pv_aware_self_consumed_kwh | round(1) }} kWh</td><td style="padding:5px 8px; text-align:right;">{{ d.pv_aware_exported_kwh | round(1) }} kWh</td></tr>{% endfor %}
+              </tbody>
+              </table>
 
-              | Day | CVaR₉₅ | Self-consumed PV | Exported PV |
-              |---|---:|---:|---:|
-              {% for d in days[:7] -%}
-              | {{ d.weekday }} {{ d.date[5:] }} | **{{ (d.pv_aware_cvar95_eur_kwh * 100) | round(1) }} c/kWh** | {{ d.pv_aware_self_consumed_kwh | round(1) }} kWh | {{ d.pv_aware_exported_kwh | round(1) }} kWh |
-              {% endfor %}
-
-              **Profile source:** `{{ days[0].pv_aware_data_provenance }}`
+              <b>Profile source:</b> <code>{{ days[0].pv_aware_data_provenance }}</code>
               {% if days[0].pv_aware_data_provenance == 'synthetic_cold_start' %}
-              _Using the generic Finnish-typical baseload — CVaR is a rough estimate. Configure `consumption_profile_entity` to point at an EMA module's published sensor for a household-specific value._
+              <br><small><i>Using the generic Finnish-typical baseload — CVaR is a rough estimate. Configure <code>consumption_profile_entity</code> to point at an EMA module's published sensor for a household-specific value.</i></small>
               {% elif days[0].pv_aware_data_provenance == 'ema_blended' %}
-              _EMA module is warming up (first 30 days). Numbers are improving day-by-day._
+              <br><small><i>EMA module is warming up (first 30 days). Numbers are improving day-by-day.</i></small>
               {% elif days[0].pv_aware_data_provenance == 'ema_warm' %}
-              _EMA module is warm — CVaR reflects your actual household consumption pattern._
+              <br><small><i>EMA module is warm — CVaR reflects your actual household consumption pattern.</i></small>
               {% endif %}
-
               {% else %}
-              _PV-aware CVaR appears here when `pv_capacity_kwp > 0` is configured._
+              _PV-aware CVaR appears here when <code>pv_capacity_kwp &gt; 0</code> is configured._
               {% endif %}
 
           # ── 5. Extended 7-day median forecast ──────────────────────────
