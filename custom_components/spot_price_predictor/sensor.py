@@ -574,11 +574,44 @@ def _spot_to_consumer(spot_eur_kwh: float, hour: int, tariff: dict[str, float]) 
     return (spot_eur_kwh + tariff["seller_margin"] + transfer + tariff["energy_tax"]) * tariff["vat"]
 
 
+def _normalize_ts_to_iso(ts: Any) -> str | None:
+    """Coerce any reasonable timestamp representation to canonical ISO-8601
+    with a `T` separator. Returns None when the input can't be parsed.
+
+    Handles:
+      - datetime.datetime objects (the format Nordpool's HACS integration
+        produces as of the 15-minute-resolution rollout in 2025+);
+      - int/float UNIX seconds (legacy 'data' schema);
+      - ISO strings with either 'T' or space separator, or trailing 'Z'.
+    """
+    if ts is None:
+        return None
+    if isinstance(ts, datetime):
+        return ts.isoformat()
+    if isinstance(ts, (int, float)):
+        if ts > 1e9:
+            return datetime.fromtimestamp(ts).isoformat()
+        return None
+    if isinstance(ts, str):
+        s = ts.replace(" ", "T").replace("Z", "+00:00")
+        try:
+            return datetime.fromisoformat(s).isoformat()
+        except (ValueError, TypeError):
+            return s if "T" in s else None
+    return None
+
+
 def _process_nordpool_data(hass: HomeAssistant, entity_id: str) -> list[dict[str, Any]]:
     """Process Nordpool sensor attributes into a deduplicated continuous timeline.
 
     Tries 'data' attribute first, then falls back to today/tomorrow.
-    Returns sorted, deduplicated list with one entry per hour.
+    Returns sorted, deduplicated list with one entry per source timestep
+    (24 entries when Nordpool publishes hourly; 96 when it publishes
+    quarter-hourly per the EU 15-minute-settlement rollout 2025+).
+
+    All timestamps are normalised to canonical ISO 8601 with 'T' separator
+    so downstream consumers can `datetime.fromisoformat()` them reliably
+    on any supported Python version.
     """
     state = hass.states.get(entity_id)
     if not state:
@@ -590,14 +623,13 @@ def _process_nordpool_data(hass: HomeAssistant, entity_id: str) -> list[dict[str
     data_attr = attrs.get("data")
     if data_attr and isinstance(data_attr, list):
         for d in data_attr:
-            ts = d.get("Timestamp") or d.get("timestamp")
-            price = d.get("TotalPrice") or d.get("total_price") or d.get("price")
-            if ts is not None and price is not None:
-                if isinstance(ts, (int, float)) and ts > 1e9:
-                    ts_key = datetime.fromtimestamp(ts).isoformat()
-                else:
-                    ts_key = str(ts)
-                entries[ts_key] = float(price)
+            ts = (d.get("Timestamp") or d.get("timestamp")
+                  or d.get("start"))
+            price = (d.get("TotalPrice") or d.get("total_price")
+                     or d.get("price") or d.get("value"))
+            ts_iso = _normalize_ts_to_iso(ts)
+            if ts_iso and price is not None:
+                entries[ts_iso] = float(price)
     else:
         for attr_name in ("raw_today", "raw_tomorrow", "today", "tomorrow"):
             prices = attrs.get(attr_name)
@@ -606,10 +638,10 @@ def _process_nordpool_data(hass: HomeAssistant, entity_id: str) -> list[dict[str
                     if isinstance(p, dict):
                         ts = p.get("start") or p.get("timestamp")
                         price = p.get("value") or p.get("price")
-                        if ts and price is not None:
-                            ts_key = str(ts)
-                            if ts_key not in entries:
-                                entries[ts_key] = float(price)
+                        ts_iso = _normalize_ts_to_iso(ts)
+                        if (ts_iso and price is not None
+                                and ts_iso not in entries):
+                            entries[ts_iso] = float(price)
 
     return sorted(
         [{"timestamp": k, "price_eur_kwh": v} for k, v in entries.items()],
