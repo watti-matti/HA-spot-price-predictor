@@ -1,0 +1,461 @@
+# ════════════════════════════════════════════════════════════════════════
+# Spot Price Predictor — v2.11.0 hero dashboard
+# ════════════════════════════════════════════════════════════════════════
+#
+# Showcases the four pieces of information the integration uniquely produces:
+#
+#   1. 170-hour probabilistic fan chart   — what to expect and how uncertain
+#   2. D(k) cheap/peak duration curves    — the cheapest-k-hours summary
+#   3. PV-aware daily risk (v2.11.0)      — downside cost from joint
+#                                            price + PV uncertainty
+#   4. PV-aware D(k) (when PV enabled)    — same curves, net of self-consumption
+#
+# Requires:
+#   - custom:apexcharts-card  (HACS → Frontend)
+#   - HA built-in markdown card
+#
+# Sensors consumed:
+#   - sensor.spot_price_predictor_price_forecast       (always)
+#   - sensor.spot_price_forecast_fi                    (always — Nordpool-compatible)
+#   - sensor.spot_price_predictor_duration_forecast    (always)
+#
+# Optional sensor if Nordpool is linked:
+#   - sensor.spot_price_predictor_spot_electricity_price  (realised price overlay)
+#
+# Adjust entity IDs at the bottom of this file if your install uses different
+# names. Card is responsive and works on phone-width.
+# ════════════════════════════════════════════════════════════════════════
+
+title: Spot price forecast (v2.11.0)
+type: vertical-stack
+cards:
+
+  # ── Status strip ───────────────────────────────────────────────────────
+  # Headline: current price, expected risk, model confidence.
+  - type: markdown
+    content: |
+      ## Forecast status
+
+      |  |  |  |
+      |---|---|---|
+      | **Now** | **{{ (states('sensor.spot_price_predictor_price_forecast') | float * 100) | round(1) }} c/kWh** | (current hour, consumer EUR/kWh) |
+      | **Forecast (spot)** | **{{ (states('sensor.spot_price_forecast_fi') | float * 100) | round(1) }} c/kWh** | (current hour, EUR/kWh) |
+      | **Today min / avg / max** | {{ (state_attr('sensor.spot_price_forecast_fi','today_min') * 100) | round(1) }} / {{ (state_attr('sensor.spot_price_forecast_fi','today_avg') * 100) | round(1) }} / {{ (state_attr('sensor.spot_price_forecast_fi','today_max') * 100) | round(1) }} c/kWh | |
+      | **Tomorrow avg** | {{ (state_attr('sensor.spot_price_forecast_fi','tomorrow_avg') * 100) | round(1) }} c/kWh | |
+      | **Updated** | {{ state_attr('sensor.spot_price_predictor_price_forecast','last_update') | as_datetime | relative_time }} ago | {% if state_attr('sensor.spot_price_predictor_price_forecast','stale') %}⚠ **stale** ({{ state_attr('sensor.spot_price_predictor_price_forecast','data_age_minutes') }} min){% else %}fresh{% endif %} |
+
+  # ── 1. Probabilistic fan chart (48h focus) ─────────────────────────────
+  # The integration's distinctive output: per-hour P5/P25/P50/P75/P95 bands
+  # from the L4 GPD POT spike model. The realised price (if Nordpool linked)
+  # overlays as a thick black line.
+  - type: custom:apexcharts-card
+    header:
+      show: true
+      title: "48-hour spot forecast — probabilistic fan chart"
+      show_states: false
+    graph_span: 48h
+    span:
+      start: hour
+      offset: -1h
+    now:
+      show: true
+      label: Now
+    apex_config:
+      chart:
+        height: 380px
+        zoom:
+          enabled: true
+      stroke:
+        curve: smooth
+      legend:
+        position: top
+        horizontalAlign: left
+      xaxis:
+        type: datetime
+      tooltip:
+        x:
+          format: "ddd HH:mm"
+    yaxis:
+      - id: price
+        opposite: false
+        min: ~0
+        decimals: 0
+        apex_config:
+          forceNiceScale: true
+          title:
+            text: EUR/MWh
+    series:
+      # P5-P95 outer band (light shading)
+      - entity: sensor.spot_price_predictor_price_forecast
+        name: P5-P95 (90% band)
+        yaxis_id: price
+        type: area
+        curve: smooth
+        stroke_width: 0
+        color: "#3b82f6"
+        opacity: 0.10
+        show:
+          legend_value: false
+          in_header: false
+          extremas: false
+          datalabels: false
+        data_generator: |
+          const f = entity.attributes.forecast;
+          if (!f) return [];
+          // ApexCharts areaspline between two series isn't direct;
+          // we trace P95 as the area-top with low opacity.
+          return f.map(r => [new Date(r.timestamp).getTime(), r.P95_eur_mwh]);
+      - entity: sensor.spot_price_predictor_price_forecast
+        name: P5 (lower bound)
+        yaxis_id: price
+        type: area
+        curve: smooth
+        stroke_width: 0
+        color: "white"
+        opacity: 1.0
+        show:
+          legend_value: false
+          in_header: false
+          in_legend: false
+          extremas: false
+          datalabels: false
+        data_generator: |
+          const f = entity.attributes.forecast;
+          if (!f) return [];
+          // Knocks out the bottom — leaves P5..P95 visible as filled band.
+          return f.map(r => [new Date(r.timestamp).getTime(), r.P5_eur_mwh]);
+
+      # P25-P75 inner band
+      - entity: sensor.spot_price_predictor_price_forecast
+        name: P25-P75 (50% band)
+        yaxis_id: price
+        type: area
+        curve: smooth
+        stroke_width: 0
+        color: "#3b82f6"
+        opacity: 0.22
+        show:
+          legend_value: false
+          in_header: false
+          extremas: false
+          datalabels: false
+        data_generator: |
+          const f = entity.attributes.forecast;
+          if (!f) return [];
+          return f.map(r => [new Date(r.timestamp).getTime(), r.P75_eur_mwh]);
+      - entity: sensor.spot_price_predictor_price_forecast
+        name: P25 (inner lower)
+        yaxis_id: price
+        type: area
+        curve: smooth
+        stroke_width: 0
+        color: "white"
+        opacity: 1.0
+        show:
+          legend_value: false
+          in_header: false
+          in_legend: false
+          extremas: false
+          datalabels: false
+        data_generator: |
+          const f = entity.attributes.forecast;
+          if (!f) return [];
+          return f.map(r => [new Date(r.timestamp).getTime(), r.P25_eur_mwh]);
+
+      # P50 forecast median (solid blue line)
+      - entity: sensor.spot_price_predictor_price_forecast
+        name: P50 forecast
+        yaxis_id: price
+        type: line
+        curve: smooth
+        stroke_width: 3
+        color: "#1d4ed8"
+        show:
+          legend_value: false
+          in_header: false
+          extremas: false
+          datalabels: false
+        data_generator: |
+          const f = entity.attributes.forecast;
+          if (!f) return [];
+          return f.map(r => [new Date(r.timestamp).getTime(), r.P50_eur_mwh]);
+
+      # Realised (only if Nordpool integration linked)
+      - entity: sensor.spot_price_predictor_spot_electricity_price
+        name: Realised
+        yaxis_id: price
+        type: line
+        curve: stepline
+        stroke_width: 2
+        color: "#111827"
+        opacity: 1
+        show:
+          legend_value: false
+          in_header: false
+          extremas: false
+          datalabels: false
+        data_generator: |
+          // Realised consumer EUR/kWh × 1000 → EUR/MWh; aggregates 15-min to hourly
+          const tl = entity.attributes.timeline;
+          if (!tl) return [];
+          const hourly = {};
+          tl.forEach(t => {
+            const d = new Date(t.timestamp);
+            const hk = new Date(d.getFullYear(), d.getMonth(), d.getDate(), d.getHours()).getTime();
+            if (!hourly[hk]) hourly[hk] = [];
+            hourly[hk].push(t.price_eur_kwh * 1000);
+          });
+          return Object.entries(hourly)
+            .map(([k, v]) => [parseInt(k), v.reduce((a,b)=>a+b,0)/v.length])
+            .sort((a,b) => a[0]-b[0]);
+
+  # ── 2. D(k) cheapest-k-hours curve (today) ─────────────────────────────
+  # For each k ∈ 1..24, the average cheapest-k-hours price for today.
+  # k=4 is "if I run my dishwasher for 4 hours today, lowest possible bill";
+  # k=1 is "the single cheapest hour today";
+  # k=24 is "today's daily average".
+  - type: custom:apexcharts-card
+    header:
+      show: true
+      title: "Today's cheapest-k-hours mean price"
+    graph_span: 24h
+    apex_config:
+      chart:
+        height: 240px
+        type: line
+      stroke:
+        curve: smooth
+        width: 3
+      xaxis:
+        type: numeric
+        title:
+          text: k (number of hours)
+      tooltip:
+        shared: true
+    yaxis:
+      - id: price
+        opposite: false
+        decimals: 1
+        apex_config:
+          title:
+            text: c/kWh
+    series:
+      # Grid-side (PV-unaware) cheap
+      - entity: sensor.spot_price_predictor_duration_forecast
+        name: cheap k-h (grid)
+        yaxis_id: price
+        type: line
+        color: "#1d4ed8"
+        show:
+          legend_value: false
+          extremas: false
+        data_generator: |
+          const days = entity.attributes.daily_forecast;
+          if (!days || days.length === 0) return [];
+          const today = days[0];
+          if (!today.dk_cheap_eur_kwh) return [];
+          return today.dk_cheap_eur_kwh.map((v, i) => [i + 1, v * 100]);
+      # PV-aware cheap (only published when PV enabled — same curve when not)
+      - entity: sensor.spot_price_predictor_duration_forecast
+        name: cheap k-h (PV-aware)
+        yaxis_id: price
+        type: line
+        color: "#16a34a"
+        stroke_dash: 6
+        show:
+          legend_value: false
+          extremas: false
+        data_generator: |
+          const days = entity.attributes.daily_forecast;
+          if (!days || days.length === 0) return [];
+          const today = days[0];
+          if (!today.dk_cheap_pv_eur_kwh) return [];
+          return today.dk_cheap_pv_eur_kwh.map((v, i) => [i + 1, v * 100]);
+      # Peak curve for context
+      - entity: sensor.spot_price_predictor_duration_forecast
+        name: peak k-h (grid)
+        yaxis_id: price
+        type: line
+        color: "#dc2626"
+        opacity: 0.6
+        show:
+          legend_value: false
+          extremas: false
+        data_generator: |
+          const days = entity.attributes.daily_forecast;
+          if (!days || days.length === 0) return [];
+          const today = days[0];
+          if (!today.dk_peak_eur_kwh) return [];
+          return today.dk_peak_eur_kwh.map((v, i) => [i + 1, v * 100]);
+
+  # ── 3. PV-aware daily CVaR strip (v2.11.0) ─────────────────────────────
+  # Shows per-day downside risk for the next 7 days. CVaR₉₅ is the tail-mean
+  # of the worst 5% of joint price+PV scenarios — the number a risk-averse
+  # scheduler reads to pick "which day is safest for a discretionary load".
+  #
+  # The bar is omitted on non-PV installs (attributes absent). Provenance
+  # flag (synthetic_cold_start / ema_blended / ema_warm) appears in the
+  # markdown summary below.
+  - type: custom:apexcharts-card
+    header:
+      show: true
+      title: "7-day PV-aware risk forecast (CVaR₉₅)"
+    graph_span: 7d
+    span:
+      start: day
+    apex_config:
+      chart:
+        height: 240px
+        type: bar
+      plotOptions:
+        bar:
+          horizontal: false
+          dataLabels:
+            position: "top"
+      dataLabels:
+        enabled: true
+        formatter: |
+          EVAL: function (val) { return val.toFixed(1) + ' c/kWh'; }
+        offsetY: -20
+        style:
+          fontSize: 11px
+          colors: ["#374151"]
+      xaxis:
+        type: category
+      tooltip:
+        y:
+          formatter: |
+            EVAL: function (val) { return val.toFixed(2) + ' c/kWh'; }
+    yaxis:
+      - id: cvar
+        decimals: 1
+        apex_config:
+          title:
+            text: CVaR₉₅ c/kWh
+    series:
+      - entity: sensor.spot_price_predictor_duration_forecast
+        name: CVaR₉₅ (worst-5% expected cost)
+        yaxis_id: cvar
+        type: column
+        color_threshold:
+          - value: 0
+            color: "#16a34a"   # green: low risk
+          - value: 15
+            color: "#eab308"   # yellow: moderate
+          - value: 22
+            color: "#f97316"   # orange: high
+          - value: 30
+            color: "#dc2626"   # red: severe
+        show:
+          legend_value: false
+        data_generator: |
+          const days = entity.attributes.daily_forecast;
+          if (!days) return [];
+          return days
+            .filter(d => d.pv_aware_cvar95_eur_kwh != null)
+            .map(d => ({
+              x: d.weekday + ' ' + d.date.slice(5),
+              y: d.pv_aware_cvar95_eur_kwh * 100
+            }));
+
+  # ── 4. PV-aware diagnostics summary ────────────────────────────────────
+  - type: markdown
+    content: |
+      ### PV-aware risk summary
+      {% set days = state_attr('sensor.spot_price_predictor_duration_forecast', 'daily_forecast') %}
+      {% if days and days[0].pv_aware_cvar95_eur_kwh is defined %}
+
+      | Day | CVaR₉₅ | Self-consumed PV | Exported PV |
+      |---|---:|---:|---:|
+      {% for d in days[:7] -%}
+      | {{ d.weekday }} {{ d.date.slice(5) if d.date.slice is defined else d.date[5:] }} | **{{ (d.pv_aware_cvar95_eur_kwh * 100) | round(1) }} c/kWh** | {{ d.pv_aware_self_consumed_kwh | round(1) }} kWh | {{ d.pv_aware_exported_kwh | round(1) }} kWh |
+      {% endfor %}
+
+      **Profile source:** `{{ days[0].pv_aware_data_provenance }}`
+      {% if days[0].pv_aware_data_provenance == 'synthetic_cold_start' %}
+      _Using the generic Finnish-typical baseload — CVaR is a rough estimate. Configure `consumption_profile_entity` to point at an EMA module's published sensor for a household-specific value._
+      {% elif days[0].pv_aware_data_provenance == 'ema_blended' %}
+      _EMA module is warming up (first 30 days). Numbers are improving day-by-day._
+      {% elif days[0].pv_aware_data_provenance == 'ema_warm' %}
+      _EMA module is warm — CVaR reflects your actual household consumption pattern._
+      {% endif %}
+
+      {% else %}
+      _PV-aware CVaR appears here when `pv_capacity_kwp > 0` is configured._
+      {% endif %}
+
+  # ── 5. Extended 7-day median forecast ──────────────────────────────────
+  # The long-horizon view: where does the median price go for the rest of
+  # the week? Helps with scheduling discretionary loads multiple days out.
+  - type: custom:apexcharts-card
+    header:
+      show: true
+      title: "7-day spot forecast (median + 50% band)"
+    graph_span: 7d
+    span:
+      start: day
+    now:
+      show: true
+      label: Now
+    apex_config:
+      chart:
+        height: 280px
+      stroke:
+        curve: smooth
+      xaxis:
+        type: datetime
+      legend:
+        position: top
+        horizontalAlign: left
+    yaxis:
+      - id: price
+        opposite: false
+        decimals: 0
+        apex_config:
+          title:
+            text: EUR/MWh
+    series:
+      - entity: sensor.spot_price_predictor_price_forecast
+        name: P75
+        yaxis_id: price
+        type: area
+        stroke_width: 0
+        color: "#3b82f6"
+        opacity: 0.18
+        show:
+          legend_value: false
+          in_header: false
+          in_legend: false
+        data_generator: |
+          const f = entity.attributes.forecast;
+          if (!f) return [];
+          return f.map(r => [new Date(r.timestamp).getTime(), r.P75_eur_mwh]);
+      - entity: sensor.spot_price_predictor_price_forecast
+        name: P25
+        yaxis_id: price
+        type: area
+        stroke_width: 0
+        color: "white"
+        opacity: 1.0
+        show:
+          legend_value: false
+          in_header: false
+          in_legend: false
+        data_generator: |
+          const f = entity.attributes.forecast;
+          if (!f) return [];
+          return f.map(r => [new Date(r.timestamp).getTime(), r.P25_eur_mwh]);
+      - entity: sensor.spot_price_predictor_price_forecast
+        name: P50 forecast
+        yaxis_id: price
+        type: line
+        stroke_width: 3
+        color: "#1d4ed8"
+        show:
+          legend_value: false
+          in_header: false
+          extremas: false
+        data_generator: |
+          const f = entity.attributes.forecast;
+          if (!f) return [];
+          return f.map(r => [new Date(r.timestamp).getTime(), r.P50_eur_mwh]);

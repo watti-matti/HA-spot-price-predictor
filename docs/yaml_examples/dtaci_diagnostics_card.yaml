@@ -16,14 +16,14 @@
 #
 #   dtaci_diagnostics          full per-zone dict, indexed [zones][<zone>]
 #   dtaci_target_coverage      0.9
-#   dtaci_fi_mean_coverage     mean over 24 instances on the FI bundle
+#   dtaci_fi_mean_coverage     mean over 48 instances on the FI bundle
 #   dtaci_fi_mean_width_eur_kwh
 #   dtaci_fi_warm_instances    n_updates >= min_warmup
-#   dtaci_fi_total_instances   24
+#   dtaci_fi_total_instances   48   (24 cheap + 24 peak — schema since v2.5.1)
 #
 # Per-zone breakdown lives at
 #   dtaci_diagnostics.zones.<zone>.per_k.<direction>.<k>.<param>
-# where direction ∈ {cheap, peak}, k ∈ 1..12, param ∈
+# where direction ∈ {cheap, peak}, k ∈ 1..24, param ∈
 #   coverage, alpha_agg, bias_ema, dominant_gamma,
 #   weight_entropy_bits, half_width, n_updates, bias_warm
 # ============================================================
@@ -50,7 +50,7 @@ cards:
       title: "Per-k coverage — D_cheap (target 90 %)"
     apex_config:
       chart:
-        height: 240px
+        height: 420px
         type: bar
       plotOptions:
         bar:
@@ -86,7 +86,7 @@ cards:
           const diag = entity.attributes.dtaci_diagnostics;
           if (!diag || !diag.zones || !diag.zones.fi) return [];
           const cheap = diag.zones.fi.per_k.cheap;
-          return [1,2,3,4,5,6,7,8,9,10,11,12].map(k => ({
+          return Array.from({length: 24}, (_, i) => i + 1).map(k => ({
             x: 'k=' + k,
             y: cheap[k] ? cheap[k].coverage : null
           }));
@@ -98,7 +98,7 @@ cards:
       title: "Per-k coverage — D_peak (target 90 %)"
     apex_config:
       chart:
-        height: 240px
+        height: 420px
         type: bar
       plotOptions:
         bar:
@@ -130,7 +130,7 @@ cards:
           const diag = entity.attributes.dtaci_diagnostics;
           if (!diag || !diag.zones || !diag.zones.fi) return [];
           const peak = diag.zones.fi.per_k.peak;
-          return [1,2,3,4,5,6,7,8,9,10,11,12].map(k => ({
+          return Array.from({length: 24}, (_, i) => i + 1).map(k => ({
             x: 'k=' + k,
             y: peak[k] ? peak[k].coverage : null
           }));
@@ -142,7 +142,7 @@ cards:
       title: "Per-k bias EMA  (consumer c/kWh)"
     apex_config:
       chart:
-        height: 240px
+        height: 420px
         type: bar
       plotOptions:
         bar:
@@ -166,7 +166,7 @@ cards:
           const diag = entity.attributes.dtaci_diagnostics;
           if (!diag || !diag.zones || !diag.zones.fi) return [];
           const cheap = diag.zones.fi.per_k.cheap;
-          return [1,2,3,4,5,6,7,8,9,10,11,12].map(k => ({
+          return Array.from({length: 24}, (_, i) => i + 1).map(k => ({
             x: 'k=' + k,
             y: cheap[k] ? cheap[k].bias_ema * 100 : null    // EUR/kWh -> c/kWh
           }));
@@ -178,7 +178,7 @@ cards:
           const diag = entity.attributes.dtaci_diagnostics;
           if (!diag || !diag.zones || !diag.zones.fi) return [];
           const peak = diag.zones.fi.per_k.peak;
-          return [1,2,3,4,5,6,7,8,9,10,11,12].map(k => ({
+          return Array.from({length: 24}, (_, i) => i + 1).map(k => ({
             x: 'k=' + k,
             y: peak[k] ? peak[k].bias_ema * 100 : null
           }));

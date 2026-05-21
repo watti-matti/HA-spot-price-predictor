@@ -3,11 +3,16 @@
 # Requires: custom:apexcharts-card (install via HACS Frontend)
 #
 # Shows:
-#   - Actual consumer price from Nordpool (ground truth)
-#   - Forecast consumer price (prediction)
+#   - L4 GPD POT fan-chart bands  (P5-P95 outer, P25-P75 inner — v2.5+)
+#   - Forecast consumer price (P50)
+#   - Actual consumer price from Nordpool (ground truth, when linked)
 #   - PV selling price (for solar panel owners, optional)
 #   - Weekly average reference line
 #   - Weighted wind speed (key price driver)
+#
+# For a richer, v2.11.0-aware dashboard that includes the D(k) duration
+# curves and PV-aware risk summary, see `forecast_v2_11_dashboard.yaml`
+# in this same directory.
 #
 # Configure your Nordpool entity in the integration settings.
 # Adjust entity names if your installation uses different names.
@@ -78,6 +83,85 @@ now:
   show: true
   label: Now
 series:
+  # ── L4 GPD POT fan-chart bands (v2.5+) ───────────────────────────
+  # Renders as two stacked area-fills creating the visible P5-P95 (outer)
+  # and P25-P75 (inner) bands behind the median forecast. White "knock-out"
+  # areas mask the lower edges so only the band ribbons remain visible.
+  - entity: sensor.spot_price_predictor_price_forecast
+    yaxis_id: price
+    name: P5-P95
+    type: area
+    curve: smooth
+    stroke_width: 0
+    color: "#3b82f6"
+    opacity: 0.10
+    show:
+      legend_value: false
+      in_header: false
+      in_chart: true
+      extremas: false
+      datalabels: false
+    data_generator: |
+      const f = entity.attributes.forecast;
+      if (!f) return [];
+      return f.map(r => [new Date(r.timestamp).getTime(), (r.P95_eur_mwh / 1000) * 100]);
+  - entity: sensor.spot_price_predictor_price_forecast
+    yaxis_id: price
+    name: _p5_floor
+    type: area
+    curve: smooth
+    stroke_width: 0
+    color: "white"
+    opacity: 1.0
+    show:
+      legend_value: false
+      in_header: false
+      in_chart: true
+      in_legend: false
+      extremas: false
+      datalabels: false
+    data_generator: |
+      const f = entity.attributes.forecast;
+      if (!f) return [];
+      return f.map(r => [new Date(r.timestamp).getTime(), (r.P5_eur_mwh / 1000) * 100]);
+  - entity: sensor.spot_price_predictor_price_forecast
+    yaxis_id: price
+    name: P25-P75
+    type: area
+    curve: smooth
+    stroke_width: 0
+    color: "#3b82f6"
+    opacity: 0.22
+    show:
+      legend_value: false
+      in_header: false
+      in_chart: true
+      extremas: false
+      datalabels: false
+    data_generator: |
+      const f = entity.attributes.forecast;
+      if (!f) return [];
+      return f.map(r => [new Date(r.timestamp).getTime(), (r.P75_eur_mwh / 1000) * 100]);
+  - entity: sensor.spot_price_predictor_price_forecast
+    yaxis_id: price
+    name: _p25_floor
+    type: area
+    curve: smooth
+    stroke_width: 0
+    color: "white"
+    opacity: 1.0
+    show:
+      legend_value: false
+      in_header: false
+      in_chart: true
+      in_legend: false
+      extremas: false
+      datalabels: false
+    data_generator: |
+      const f = entity.attributes.forecast;
+      if (!f) return [];
+      return f.map(r => [new Date(r.timestamp).getTime(), (r.P25_eur_mwh / 1000) * 100]);
+
   # ── Actual Consumer Price (ground truth, includes all overhead) ──
   # Source data may be 15-min resolution; resample to hourly for chart
   - entity: sensor.spot_price_predictor_spot_electricity_price
