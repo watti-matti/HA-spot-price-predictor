@@ -219,11 +219,17 @@ views:
                     .sort((a,b) => a[0]-b[0]);
 
           # ── 2. D(k) cheapest-k-hours curve (today) ─────────────────────
+          # Per-k chart, NOT a time-series. apexcharts-card defaults to a
+          # time x-axis when `graph_span` is set; we must NOT set it here
+          # or the integer k values 1..24 get interpreted as UNIX
+          # timestamps (1970-01-01 + N seconds).
+          # x-axis uses `type: category` with data points {x: "1", y: …}
+          # so k displays as plain integer labels.
           - type: custom:apexcharts-card
             header:
               show: true
               title: "Today's cheapest-k-hours mean price"
-            graph_span: 24h
+            chart_type: line
             apex_config:
               chart:
                 height: 240px
@@ -232,11 +238,17 @@ views:
                 curve: smooth
                 width: 3
               xaxis:
-                type: numeric
+                type: category
                 title:
                   text: k (number of hours)
+                labels:
+                  rotate: 0
+                  hideOverlappingLabels: false
               tooltip:
                 shared: true
+                x:
+                  formatter: |
+                    EVAL: function (val) { return 'k = ' + val; }
             yaxis:
               - id: price
                 opposite: false
@@ -258,7 +270,10 @@ views:
                   if (!days || days.length === 0) return [];
                   const today = days[0];
                   if (!today.dk_cheap_eur_kwh) return [];
-                  return today.dk_cheap_eur_kwh.map((v, i) => [i + 1, v * 100]);
+                  return today.dk_cheap_eur_kwh.map((v, i) => ({
+                    x: String(i + 1),
+                    y: v * 100,
+                  }));
               - entity: sensor.spot_price_predictor_duration_forecast
                 name: cheap k-h (PV-aware)
                 yaxis_id: price
@@ -273,7 +288,10 @@ views:
                   if (!days || days.length === 0) return [];
                   const today = days[0];
                   if (!today.dk_cheap_pv_eur_kwh) return [];
-                  return today.dk_cheap_pv_eur_kwh.map((v, i) => [i + 1, v * 100]);
+                  return today.dk_cheap_pv_eur_kwh.map((v, i) => ({
+                    x: String(i + 1),
+                    y: v * 100,
+                  }));
               - entity: sensor.spot_price_predictor_duration_forecast
                 name: peak k-h (grid)
                 yaxis_id: price
@@ -288,7 +306,10 @@ views:
                   if (!days || days.length === 0) return [];
                   const today = days[0];
                   if (!today.dk_peak_eur_kwh) return [];
-                  return today.dk_peak_eur_kwh.map((v, i) => [i + 1, v * 100]);
+                  return today.dk_peak_eur_kwh.map((v, i) => ({
+                    x: String(i + 1),
+                    y: v * 100,
+                  }));
 
           # ── 3. PV-aware daily CVaR strip (v2.11.0) ─────────────────────
           - type: custom:apexcharts-card
