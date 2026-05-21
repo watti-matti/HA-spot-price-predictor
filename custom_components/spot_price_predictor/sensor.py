@@ -80,7 +80,7 @@ def _device_info(entry: ConfigEntry) -> dict[str, Any]:
         "name": "Spot Price Predictor",
         "manufacturer": "watti-matti",
         "model": "Spot Price Predictor",
-        "sw_version": "2.11.1",
+        "sw_version": "2.11.2",
     }
 
 
@@ -550,6 +550,21 @@ class DurationForecastSensor(CoordinatorEntity, SensorEntity):
 # ── Nordpool sensors (optional, for actual price comparison) ────────
 
 
+def _normalize_entity_id(entity_id: str) -> str:
+    """Return a valid HA entity ID, auto-prepending `sensor.` if the
+    domain prefix is missing.
+
+    Users sometimes paste the bare object ID (`nordpool_kwh_fi_eur_3_10_0`)
+    into the Nordpool-entity config field instead of the full entity ID
+    (`sensor.nordpool_kwh_fi_eur_3_10_0`). HA's state lookup fails
+    silently in that case; this helper makes the integration forgive
+    that.
+    """
+    if not entity_id or "." in entity_id:
+        return entity_id
+    return f"sensor.{entity_id}"
+
+
 def _get_tariff_config(entry: ConfigEntry) -> dict[str, float]:
     """Extract tariff parameters from config entry.
 
@@ -672,7 +687,8 @@ class SpotElectricityPriceSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self) -> float | None:
-        entity_id = self._entry.data.get(CONF_NORDPOOL_ENTITY, "")
+        entity_id = _normalize_entity_id(
+            self._entry.data.get(CONF_NORDPOOL_ENTITY, ""))
         if not entity_id:
             return None
         state = self._hass.states.get(entity_id)
@@ -688,7 +704,8 @@ class SpotElectricityPriceSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        entity_id = self._entry.data.get(CONF_NORDPOOL_ENTITY, "")
+        entity_id = _normalize_entity_id(
+            self._entry.data.get(CONF_NORDPOOL_ENTITY, ""))
         if not entity_id:
             return {}
         tariff = _get_tariff_config(self._entry)
@@ -740,7 +757,8 @@ class SpotElectricitySellingPriceSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self) -> float | None:
-        entity_id = self._entry.data.get(CONF_NORDPOOL_ENTITY, "")
+        entity_id = _normalize_entity_id(
+            self._entry.data.get(CONF_NORDPOOL_ENTITY, ""))
         commission = self._entry.data.get(CONF_PV_SELL_COMMISSION, DEFAULT_PV_SELL_COMMISSION)
         if not entity_id:
             return None
@@ -754,7 +772,8 @@ class SpotElectricitySellingPriceSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        entity_id = self._entry.data.get(CONF_NORDPOOL_ENTITY, "")
+        entity_id = _normalize_entity_id(
+            self._entry.data.get(CONF_NORDPOOL_ENTITY, ""))
         commission = self._entry.data.get(CONF_PV_SELL_COMMISSION, DEFAULT_PV_SELL_COMMISSION)
         if not entity_id:
             return {}
