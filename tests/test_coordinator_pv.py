@@ -81,6 +81,156 @@ def test_resolve_baseload_does_not_read_ha_entities() -> None:
         )
 
 
+def test_pipeline_overwrite_recomputes_pv_aware_fields() -> None:
+    """`_apply_pipeline_pre_dk` overwrites `spot_eur_mwh`/`consumer_eur_kwh`
+    with the pipeline-corrected price. The PV-aware fields
+    (`effective_eur_kwh`, `net_household_cost_eur`, `sell_eur_kwh`) are
+    derived from price and MUST be recomputed in the same pass — otherwise
+    they stay frozen at their pre-pipeline (raw-model) values and become
+    internally inconsistent (e.g. at night, pv=0, `effective_eur_kwh`
+    would no longer equal `consumer_eur_kwh`).
+
+    Guards against the regression where Pass 1 computed these fields from
+    the raw model spot and the pipeline silently invalidated them.
+    """
+    src = COORD_PATH.read_text(encoding="utf-8")
+    m = re.search(
+        r"def _apply_pipeline_pre_dk\b.*?\n(.*?)(?=\n    def |\Z)",
+        src, re.DOTALL,
+    )
+    assert m, "Could not locate _apply_pipeline_pre_dk in coordinator source"
+    body = m.group(1)
+
+    # The method must overwrite consumer (the trigger for staleness)...
+    assert 'f["consumer_eur_kwh"] =' in body, (
+        "expected _apply_pipeline_pre_dk to overwrite consumer_eur_kwh"
+    )
+    # ...and recompute every price-derived PV-aware field alongside it.
+    for field in (
+        '"effective_eur_kwh"',
+        '"net_household_cost_eur"',
+        '"sell_eur_kwh"',
+    ):
+        assert f"f[{field}] =" in body, (
+            f"_apply_pipeline_pre_dk overwrites consumer_eur_kwh but does "
+            f"not recompute f[{field}] — it will stay stale against the "
+            f"pre-pipeline price. See the night-time invariant "
+            f"effective_eur_kwh == consumer_eur_kwh when pv == 0."
+        )
+
+
+def test_night_effective_equals_consumer_when_no_pv() -> None:
+    """Core invariant the production bug violated: with no PV production
+    (night, sun down), the marginal effective price equals the consumer
+    buy price for any baseload. This holds regardless of which price
+    (pre- or post-pipeline) is fed in — so once the coordinator feeds the
+    *corrected* consumer, `effective_eur_kwh` tracks `consumer_eur_kwh`."""
+    for buy in (0.0727, 0.141, 0.2217, 0.05):
+        for baseload in (0.05, 1.0, 1.455, 3.0):
+            eff = pv_estimate.marginal_effective_eur_kwh(
+                buy_eur_kwh=buy, sell_eur_kwh=0.007,
+                pv_kwh=0.0, baseload_kwh=baseload,
+            )
+            assert eff == pytest.approx(buy, rel=1e-12), (
+                f"pv=0 must give effective==buy; got {eff} != {buy}")
+
+
+def test_pv_dk_horizon_reconstructed_from_history_for_today() -> None:
+    """PV-aware D(k) must not start a day later than the grid D(k).
+
+    The fresh forecast starts at `now`, so today is partial and dropped by
+    the 24-hour gate; grid D(k) back-fills today from actuals but the PV
+    path historically did not. The coordinator now reconstructs today's
+    PV-aware D(k) from the rolling forecast history (`_pv_dk_by_local_date`)
+    and injects it onto the merged duration_forecast. Guard both halves.
+    """
+    src = COORD_PATH.read_text(encoding="utf-8")
+    assert "def _pv_dk_by_local_date(" in src, (
+        "expected reconstruction helper _pv_dk_by_local_date in coordinator"
+    )
+    # The merge step must call the helper and inject the PV arrays.
+    assert "self._pv_dk_by_local_date(forecast)" in src, (
+        "duration_forecast merge must call _pv_dk_by_local_date(forecast)"
+    )
+    m = re.search(
+        r"pv_dk = self\._pv_dk_by_local_date\(forecast\)(.*?)(?=\n            # )",
+        src, re.DOTALL,
+    )
+    assert m, "could not locate PV D(k) injection block"
+    block = m.group(1)
+    assert '"dk_cheap_pv_eur_kwh"' in block and '"dk_peak_pv_eur_kwh"' in block, (
+        "injection block must set both dk_cheap_pv_eur_kwh and "
+        "dk_peak_pv_eur_kwh on duration_forecast entries"
+    )
+
+
+def _reconstruct_pv_dk(rows: dict[str, dict]) -> dict[str, dict]:
+    """Faithful mock of coordinator._pv_dk_by_local_date core math.
+
+    `rows` maps timestamp -> {"effective_eur_kwh": float, "date": str}.
+    Returns {date: {dk_cheap_pv_eur_kwh, dk_peak_pv_eur_kwh}} for dates
+    with exactly 24 effective values present.
+    """
+    by_date: dict[str, list[float]] = {}
+    for r in rows.values():
+        m = r.get("effective_eur_kwh")
+        if m is None:
+            continue
+        by_date.setdefault(r["date"], []).append(float(m))
+    out: dict[str, dict] = {}
+    for date_str, effs in by_date.items():
+        if len(effs) != 24:
+            continue
+        asc = sorted(effs)
+        desc = sorted(effs, reverse=True)
+        cheap, peak, s_c, s_p = [], [], 0.0, 0.0
+        for i in range(24):
+            s_c += asc[i]
+            s_p += desc[i]
+            cheap.append(round(s_c / (i + 1), 4))
+            peak.append(round(s_p / (i + 1), 4))
+        out[date_str] = {"dk_cheap_pv_eur_kwh": cheap,
+                         "dk_peak_pv_eur_kwh": peak}
+    return out
+
+
+def test_pv_dk_reconstruction_today_full_day_partial_dropped() -> None:
+    """A date with 24 hours (history morning + forecast afternoon) yields a
+    PV D(k); a partial date (<24h) is omitted. dk_cheap[0] is the single
+    cheapest hour, dk_peak[0] the single priciest, and both [23] equal the
+    full-day mean."""
+    import random
+    random.seed(11)
+
+    rows: dict[str, dict] = {}
+    today_effs = [round(random.uniform(-0.02, 0.25), 4) for _ in range(24)]
+    # 12 "history" hours + 12 "forecast" hours all on the same local date
+    for h in range(24):
+        rows[f"2026-06-01T{h:02d}:00:00+00:00"] = {
+            "effective_eur_kwh": today_effs[h], "date": "2026-06-01"}
+    # Tomorrow only partially present (10 hours) -> must be dropped
+    for h in range(10):
+        rows[f"2026-06-02T{h:02d}:00:00+00:00"] = {
+            "effective_eur_kwh": 0.10, "date": "2026-06-02"}
+
+    out = _reconstruct_pv_dk(rows)
+    assert "2026-06-01" in out, "full 24h today must produce PV D(k)"
+    assert "2026-06-02" not in out, "partial day must be dropped"
+
+    cheap = out["2026-06-01"]["dk_cheap_pv_eur_kwh"]
+    peak = out["2026-06-01"]["dk_peak_pv_eur_kwh"]
+    assert len(cheap) == 24 and len(peak) == 24
+    assert cheap[0] == pytest.approx(min(today_effs), abs=1e-4)
+    assert peak[0] == pytest.approx(max(today_effs), abs=1e-4)
+    full_mean = round(sum(today_effs) / 24, 4)
+    assert cheap[23] == pytest.approx(full_mean, abs=1e-4)
+    assert peak[23] == pytest.approx(cheap[23], abs=1e-4)
+    # Monotonicity
+    for k in range(1, 24):
+        assert cheap[k] >= cheap[k - 1] - 1e-9
+        assert peak[k] <= peak[k - 1] + 1e-9
+
+
 # ── 2. External PV reader format support ────────────────────────────
 #
 # We mirror the production reader logic in a minimal mock, so this test

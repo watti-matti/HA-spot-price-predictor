@@ -742,6 +742,74 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
             ))
         return out
 
+    def _pv_dk_by_local_date(
+        self, forecast: list[dict[str, Any]],
+    ) -> dict[str, dict[str, list[float]]]:
+        """Reconstruct PV-aware D(k) per local date from rolling history.
+
+        The fresh forecast window starts at ``now``, so the current local
+        day is only partially present and is dropped by the 24-hour gate
+        in ``_compute_duration_forecast`` — leaving PV-aware D(k) starting
+        a day later than the grid D(k) (which back-fills today from actual
+        spot). Here we union the rolling ``_forecast_history`` (which holds
+        today's already-elapsed hours, each carrying ``effective_eur_kwh``
+        and PV) with the current ``forecast`` so any local date with a
+        complete 24-hour ``effective_eur_kwh`` series gets a PV-aware
+        D(k). The caller injects these onto whichever entry (forecast or
+        actual) represents that date.
+
+        Returns ``{date_str: {"dk_cheap_pv_eur_kwh": [...24...],
+        "dk_peak_pv_eur_kwh": [...24...]}}``. Empty when PV is disabled.
+        """
+        if not self._pv_enabled:
+            return {}
+
+        # Union history + current forecast, deduped by timestamp (current
+        # forecast wins — it carries the freshest pipeline-corrected price).
+        rows: dict[str, dict[str, Any]] = {}
+        for r in self._forecast_history.values():
+            ts = r.get("timestamp")
+            if ts:
+                rows[ts] = r
+        for r in forecast:
+            ts = r.get("timestamp")
+            if ts:
+                rows[ts] = r
+
+        by_date: dict[str, list[float]] = {}
+        for r in rows.values():
+            m = r.get("effective_eur_kwh")
+            if m is None:
+                continue
+            try:
+                ts_utc = _iso_to_naive_ts(r["timestamp"]).replace(
+                    tzinfo=timezone.utc)
+                date_str = self._local_date_str(ts_utc)
+            except Exception:
+                continue
+            by_date.setdefault(date_str, []).append(float(m))
+
+        out: dict[str, dict[str, list[float]]] = {}
+        for date_str, effs in by_date.items():
+            if len(effs) != 24:
+                continue
+            asc = sorted(effs)
+            desc = sorted(effs, reverse=True)
+            cheap: list[float] = []
+            peak: list[float] = []
+            s_c = 0.0
+            s_p = 0.0
+            for i in range(24):
+                s_c += asc[i]
+                s_p += desc[i]
+                cheap.append(round(s_c / (i + 1), 4))
+                peak.append(round(s_p / (i + 1), 4))
+            out[date_str] = {
+                "dk_cheap_pv_eur_kwh": cheap,
+                "dk_peak_pv_eur_kwh": peak,
+            }
+        return out
+
     # ── DtACI per-D(i) calibration layer ──────────────────────────
 
     def _dtaci_init_bundles(self) -> None:
@@ -1163,6 +1231,20 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                     [d["date"] for d in actual_dk],
                 )
 
+            # PV-aware D(k) horizon fix: the fresh forecast starts at `now`
+            # so the current day is partial and was dropped by the 24-hour
+            # gate, leaving PV D(k) one day behind the grid D(k) (which
+            # back-fills today from actuals). Reconstruct today's full-day
+            # PV-aware D(k) from the rolling forecast history and inject it
+            # onto any entry (incl. the actual `today`) that lacks it.
+            if self._pv_enabled:
+                pv_dk = self._pv_dk_by_local_date(forecast)
+                for d in duration_forecast:
+                    extra = pv_dk.get(d.get("date"))
+                    if extra and "dk_cheap_pv_eur_kwh" not in d:
+                        d["dk_cheap_pv_eur_kwh"] = extra["dk_cheap_pv_eur_kwh"]
+                        d["dk_peak_pv_eur_kwh"] = extra["dk_peak_pv_eur_kwh"]
+
             # ── DtACI per-D(i) calibration layer ────────────────────
             # When enabled, run the four-zone bundle: capture today's
             # forecast, reconcile newly-actual days, attach calibrated
@@ -1322,6 +1404,36 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                 consumer = self._spot_to_consumer_eur_kwh(spot, is_night)
                 f["consumer_eur_kwh"] = round(consumer, 4)
                 local_date = self._local_date_str(ts)
+                # Recompute PV-aware fields against the pipeline-corrected
+                # price. Pass 1 (pre-pipeline) computed these from the raw
+                # model spot; now that `spot`/`consumer` are overwritten the
+                # stale values would be internally inconsistent — e.g. at
+                # night (pv=0) `effective_eur_kwh` must equal
+                # `consumer_eur_kwh`, which only holds after this recompute.
+                if self._pv_enabled and "effective_eur_kwh" in f:
+                    p_h = float(f.get("pv_production_kwh", 0.0))
+                    c_h = float(f.get("baseload_kwh", 0.0))
+                    s_h = self._spot_to_sell_eur_kwh(spot)
+                    f["sell_eur_kwh"] = round(s_h, 4)
+                    f["effective_eur_kwh"] = round(
+                        marginal_effective_eur_kwh(
+                            buy_eur_kwh=consumer,
+                            sell_eur_kwh=s_h,
+                            pv_kwh=p_h,
+                            baseload_kwh=c_h,
+                        ),
+                        4,
+                    )
+                    f["net_household_cost_eur"] = round(
+                        net_household_cost_eur(
+                            buy_eur_kwh=consumer,
+                            sell_eur_kwh=s_h,
+                            pv_kwh=p_h,
+                            consumption_kwh=c_h,
+                        ),
+                        4,
+                    )
+                    f["is_export_hour"] = bool(p_h > c_h)
             except Exception:
                 local_date = None
             for q in ("P5", "P25", "P50", "P75", "P95"):
