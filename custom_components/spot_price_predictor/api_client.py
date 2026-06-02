@@ -72,6 +72,7 @@ class SpotPriceApiClient:
                         "wind": hourly.get("wind_speed_120m", []),
                         "solar": hourly.get("global_tilted_irradiance_instant", []),
                         "temp": hourly.get("temperature_2m", []),
+                        "time": hourly.get("time", []),
                         "loc": loc,
                     })
             except Exception as err:
@@ -100,6 +101,14 @@ class SpotPriceApiClient:
         )
         n_hours = min(n_hours, FORECAST_HOURS + 24)  # cap
 
+        # Open-Meteo returns the hourly grid starting at 00:00 UTC of the
+        # current day (timezone=UTC, no start_hour), NOT at the current
+        # hour. Carry the per-hour timestamp so downstream code can align
+        # the series to the forecast clock by time instead of by position
+        # (avoids the now.hour-sized shift fixed in v2.11.5).
+        ref_times = next(
+            (ld["time"] for ld in location_data if ld.get("time")), [])
+
         result: list[dict[str, float]] = []
         for i in range(n_hours):
             wind_w = 0.0
@@ -123,11 +132,17 @@ class SpotPriceApiClient:
 
             # Normalize: divide by available weight sum so result is a
             # proper weighted average regardless of how many locations succeeded
-            result.append({
+            row: dict[str, Any] = {
                 "wind_weighted": wind_w / wind_weight_sum if wind_weight_sum > 0 else 0.0,
                 "solar_weighted": solar_w / solar_weight_sum if solar_weight_sum > 0 else 0.0,
                 "temp_weighted": temp_w / temp_weight_sum if temp_weight_sum > 0 else 0.0,
-            })
+            }
+            if i < len(ref_times) and ref_times[i]:
+                # Open-Meteo UTC string e.g. "2026-06-01T00:00"; normalise.
+                ts = str(ref_times[i])
+                row["timestamp"] = ts if ("+" in ts or ts.endswith("Z")) \
+                    else ts + "+00:00"
+            result.append(row)
 
         _LOGGER.info("Weather data: %d hours from %d/%d locations",
                       len(result), len(location_data), len(FINLAND_LOCATIONS))

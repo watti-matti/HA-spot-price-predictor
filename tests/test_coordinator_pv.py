@@ -26,6 +26,7 @@ from __future__ import annotations
 import importlib.util
 import re
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -470,3 +471,111 @@ def test_end_to_end_synthetic_finnish_day() -> None:
     for k in range(1, 12):
         assert cheap[k] >= cheap[k - 1] - 1e-9
         assert peak[k] <= peak[k - 1] + 1e-9
+
+
+# ── 5. Weather / external-PV time alignment (v2.11.5) ────────────────
+#
+# Open-Meteo returns the hourly grid from 00:00 UTC of the current day, so
+# positional indexing against a `now`-anchored clock shifts solar/PV later
+# by now.hour hours. These mirror the production aligners and assert the
+# shift is removed; source guards keep production wired to them.
+
+
+def _align_weather(weather: list[dict], now: datetime) -> list[dict]:
+    """Faithful mirror of coordinator._align_weather_to_now."""
+    if not weather:
+        return weather
+    if all("timestamp" in w for w in weather):
+        dated = []
+        for w in weather:
+            try:
+                ts = datetime.fromisoformat(
+                    w["timestamp"].replace("Z", "+00:00"))
+            except Exception:
+                continue
+            dated.append((ts, w))
+        if dated:
+            dated.sort(key=lambda t: t[0])
+            aligned = [w for ts, w in dated if ts >= now]
+            if aligned:
+                return aligned
+    offset = now.hour
+    return weather[offset:] if 0 < offset < len(weather) else weather
+
+
+def _build_day_weather(start_iso: str, hours: int = 48) -> list[dict]:
+    """Hourly weather from 00:00 UTC with a solar bell peaking at 10:00Z."""
+    start = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
+    out = []
+    for i in range(hours):
+        ts = start + timedelta(hours=i)
+        h = ts.hour
+        solar = max(0.0, 1000.0 - abs(h - 10) * 120.0)  # peak at 10:00 UTC
+        out.append({
+            "timestamp": ts.strftime("%Y-%m-%dT%H:%M:%S+00:00"),
+            "solar_weighted": solar, "wind_weighted": 3.0, "temp_weighted": 10.0,
+        })
+    return out
+
+
+def test_weather_alignment_drops_elapsed_hours_to_now() -> None:
+    weather = _build_day_weather("2026-06-01T00:00:00Z", hours=48)
+    now = datetime(2026, 6, 1, 6, 0, tzinfo=timezone.utc)
+    aligned = _align_weather(weather, now)
+    # First remaining row is the current hour, elapsed hours dropped.
+    assert aligned[0]["timestamp"].startswith("2026-06-01T06:00")
+    assert len(aligned) == 42
+    # Solar peak (10:00Z) now sits at forecast index 4 (now+4h), not +10.
+    peak_idx = max(range(len(aligned)), key=lambda i: aligned[i]["solar_weighted"])
+    assert peak_idx == 4, f"solar peak at index {peak_idx}, expected 4 (10:00Z)"
+
+
+def test_weather_alignment_positional_fallback_without_timestamps() -> None:
+    weather = [{"solar_weighted": float(i)} for i in range(48)]  # no timestamps
+    now = datetime(2026, 6, 1, 6, 0, tzinfo=timezone.utc)
+    aligned = _align_weather(weather, now)
+    assert aligned[0]["solar_weighted"] == 6.0  # dropped first now.hour rows
+    assert len(aligned) == 42
+
+
+def _compute_pv_external(external, n_hours: int, start_utc: datetime):
+    """Mirror of the external branch of coordinator._compute_pv_forecast."""
+    if isinstance(external, dict):
+        return [float(external.get(start_utc + timedelta(hours=i), 0.0))
+                for i in range(n_hours)]
+    out = list(external[:n_hours])
+    while len(out) < n_hours:
+        out.append(0.0)
+    return out
+
+
+def test_external_pv_dict_aligned_by_timestamp() -> None:
+    """A timestamped external PV forecast is looked up per forecast hour,
+    not consumed positionally — so a series starting at 00:00 is not shifted."""
+    base = datetime(2026, 6, 1, 0, 0, tzinfo=timezone.utc)
+    external = {base + timedelta(hours=h): float(h) for h in range(24)}
+    now = datetime(2026, 6, 1, 6, 0, tzinfo=timezone.utc)
+    out = _compute_pv_external(external, n_hours=6, start_utc=now)
+    assert out == [6.0, 7.0, 8.0, 9.0, 10.0, 11.0]  # value at now+i, no shift
+
+
+def test_external_pv_dict_missing_hours_zero_filled() -> None:
+    base = datetime(2026, 6, 1, 0, 0, tzinfo=timezone.utc)
+    external = {base + timedelta(hours=h): 5.0 for h in (0, 1, 2)}
+    now = datetime(2026, 6, 1, 1, 0, tzinfo=timezone.utc)
+    out = _compute_pv_external(external, n_hours=4, start_utc=now)
+    assert out == [5.0, 5.0, 0.0, 0.0]  # hours 1,2 present; 3,4 absent → 0
+
+
+def test_source_guards_time_alignment_wired() -> None:
+    coord = COORD_PATH.read_text(encoding="utf-8")
+    api = (REPO / "custom_components" / "spot_price_predictor"
+           / "api_client.py").read_text(encoding="utf-8")
+    assert "def _align_weather_to_now(" in coord
+    assert "self._align_weather_to_now(weather, now)" in coord, (
+        "coordinator must re-base weather to `now` before use")
+    assert "self._compute_pv_forecast(weather, len(predictions), now)" in coord, (
+        "PV forecast must receive `now` for timestamp alignment")
+    assert '"time": hourly.get("time", [])' in api, (
+        "fetch_weather must capture Open-Meteo hourly.time")
+    assert '"timestamp"' in api, "weather rows must carry a timestamp"

@@ -603,25 +603,74 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
             avg_power = avg_power / 1000.0
         return float(avg_power) * 24.0
 
-    def _read_external_pv_forecast(self) -> list[float] | None:
+    def _align_weather_to_now(
+        self, weather: list[dict[str, Any]], now: datetime,
+    ) -> list[dict[str, Any]]:
+        """Re-base the Open-Meteo weather list so index 0 == ``now``.
+
+        Open-Meteo returns the hourly grid starting at 00:00 UTC of the
+        current day, so positional indexing against a ``now``-anchored
+        forecast clock shifts every weather/solar value later by
+        ``now.hour`` hours. Each row now carries a ``timestamp`` (added in
+        api_client v2.11.5); we drop the already-elapsed rows so the first
+        remaining row is the current hour.
+
+        Falls back to a positional ``now.hour`` slice if timestamps are
+        absent (older api_client), and to the input unchanged if neither
+        is possible.
+        """
+        if not weather:
+            return weather
+
+        if all("timestamp" in w for w in weather):
+            dated: list[tuple[datetime, dict[str, Any]]] = []
+            for w in weather:
+                try:
+                    ts = _iso_to_naive_ts(w["timestamp"]).replace(
+                        tzinfo=timezone.utc)
+                except Exception:
+                    continue
+                dated.append((ts, w))
+            if dated:
+                dated.sort(key=lambda t: t[0])
+                aligned = [w for ts, w in dated if ts >= now]
+                if aligned:
+                    return aligned
+
+        # Positional fallback: assume the array starts at 00:00 UTC today.
+        offset = now.hour
+        return weather[offset:] if 0 < offset < len(weather) else weather
+
+    def _read_external_pv_forecast(self) -> dict[datetime, float] | list[float] | None:
         """Read up to 168 h of PV forecast from a configured HA entity.
 
         Source-agnostic: auto-detects four common attribute conventions
-        published by HA PV-forecast integrations and templates. Returns a
-        list of hourly kWh values, or None if no convention matches —
-        coordinator silently falls back to the internal estimator.
+        published by HA PV-forecast integrations and templates. Returns
+        either a ``{utc_hour -> kWh}`` dict (when the source carries
+        timestamps — preferred, lets the caller align by time) or a
+        positional ``list`` of hourly kWh (when it does not), or None if no
+        convention matches — coordinator falls back to the internal estimator.
+
+        Timestamp alignment (v2.11.5): per-entry timestamps / dict keys are
+        now honoured instead of being discarded. Naive timestamps (e.g.
+        Forecast.Solar publishes local time without an offset) are
+        interpreted in the configured local timezone when available, else
+        UTC, then floored to the hour. This prevents the forecast from
+        being shifted when the source series starts at 00:00 rather than
+        the current hour.
 
         Supported attribute conventions (checked in order):
 
-        1. ``forecast`` — list[dict] with hourly entries; keys searched:
-           ``pv_kwh``, ``kwh``, ``energy``, ``value``. Unit kWh.
-        2. ``wh_hours`` — dict {ISO timestamp -> Wh}. Sorted by timestamp,
-           divided by 1000 to convert to kWh.
-        3. ``watts`` — dict {ISO timestamp -> W}. Sorted by timestamp; at
-           1-hour granularity 1 W ≈ 0.001 kWh.
-        4. ``irradiance`` — list[number] of pre-multiplied PV power.
-           Unit auto-detected by magnitude: any value > 50 → assume W
-           (divide by 1000); otherwise treat as kWh.
+        1. ``forecast`` — list[dict] with hourly entries; value keys:
+           ``pv_kwh``, ``kwh``, ``energy``, ``value``; timestamp keys:
+           ``period_start``, ``datetime``, ``timestamp``, ``time``,
+           ``start``, … Unit kWh.
+        2. ``wh_hours`` — dict {ISO timestamp -> Wh}, /1000 → kWh.
+        3. ``watts`` — dict {ISO timestamp -> W}; at 1-hour granularity
+           1 W ≈ 0.001 kWh.
+        4. ``irradiance`` — list[number] of pre-multiplied PV power
+           (positional, no timestamps). Unit auto-detected by magnitude:
+           any value > 50 → assume W (divide by 1000); otherwise kWh.
 
         Each value is clamped to ``[0, capacity_kwp · efficiency]`` so a
         broken template can't propagate unrealistic spikes downstream.
@@ -651,32 +700,82 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                     return 0.0
                 return max(0.0, min(f, ceiling))
 
-            # 1) forecast = list of dicts in kWh
+            def _parse_ts(s: Any) -> datetime | None:
+                """Parse an external timestamp to a UTC hour. Naive strings
+                are interpreted in the configured local tz when available
+                (Forecast.Solar etc. publish local time), else UTC."""
+                try:
+                    dt = datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+                except Exception:
+                    return None
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=self._tz or timezone.utc)
+                return dt.astimezone(timezone.utc).replace(
+                    minute=0, second=0, microsecond=0)
+
+            def _scaled(v: Any, divisor: float) -> float | None:
+                try:
+                    return _clamp(float(v) / divisor)
+                except (TypeError, ValueError):
+                    return None
+
+            # 1) forecast = list of dicts in kWh (honour per-entry timestamp)
             forecast_attr = attrs.get("forecast")
             if isinstance(forecast_attr, list) and forecast_attr:
+                ts_keys = ("period_start", "datetime", "date_time",
+                           "timestamp", "time", "start", "from", "hour")
                 values: list[float] = []
+                dated: dict[datetime, float] = {}
                 for entry in forecast_attr:
+                    ts = None
                     if isinstance(entry, dict):
                         v = (entry.get("pv_kwh")
                              or entry.get("kwh")
                              or entry.get("energy")
                              or entry.get("value")
                              or 0.0)
+                        for k in ts_keys:
+                            if k in entry:
+                                ts = _parse_ts(entry[k])
+                                if ts is not None:
+                                    break
                     else:
                         v = entry
-                    values.append(_clamp(v))
+                    cv = _clamp(v)
+                    values.append(cv)
+                    if ts is not None:
+                        dated[ts] = cv
+                # Prefer timestamp alignment when most entries carry a time.
+                if len(dated) >= max(1, len(values) // 2):
+                    return dated
                 if values:
                     return values
 
             # 2) wh_hours = dict {ISO ts: Wh}
             wh_hours = attrs.get("wh_hours")
             if isinstance(wh_hours, dict) and wh_hours:
+                dated = {}
+                for k, v in wh_hours.items():
+                    ts = _parse_ts(k)
+                    sv = _scaled(v, 1000.0)
+                    if ts is not None and sv is not None:
+                        dated[ts] = sv
+                if dated:
+                    return dated
                 items = sorted(wh_hours.items(), key=lambda kv: kv[0])
                 return [_clamp(float(v) / 1000.0) for _, v in items]
 
             # 3) watts = dict {ISO ts: W}; at 1-hour granularity 1 W ≈ 1 Wh
             watts = attrs.get("watts")
             if isinstance(watts, dict) and watts:
+                dated = {}
+                for k, v in watts.items():
+                    ts = _parse_ts(k)
+                    sv = _scaled(v, 1000.0)
+                    if ts is not None and sv is not None:
+                        dated[ts] = sv
+                if dated:
+                    return dated
                 items = sorted(watts.items(), key=lambda kv: kv[0])
                 return [_clamp(float(v) / 1000.0) for _, v in items]
 
@@ -709,20 +808,32 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
         self,
         weather: list[dict[str, Any]],
         n_hours: int,
+        start_utc: datetime | None = None,
     ) -> list[float]:
         """Build per-hour PV production forecast (kWh).
 
-        Returns a list of length `n_hours`. External-entity output is
-        truncated/extended with zeros to match `n_hours`. When PV is
-        disabled (capacity_kwp = 0 and no external entity), returns all
-        zeros (caller should treat this as PV-aware path being inactive).
+        Returns a list of length `n_hours`, where index ``i`` corresponds
+        to ``start_utc + i`` hours. External-entity output is aligned by
+        timestamp when available (dict form) — index ``i`` is looked up at
+        ``start_utc + i`` — otherwise truncated/extended positionally. When
+        PV is disabled, returns all zeros.
         """
         if not self._pv_enabled:
             return [0.0] * n_hours
 
+        if start_utc is None:
+            start_utc = datetime.now(timezone.utc).replace(
+                minute=0, second=0, microsecond=0)
+
         # Try external entity first
         external = self._read_external_pv_forecast()
         if external:
+            if isinstance(external, dict):
+                # Timestamp-aligned: pick the value for each forecast hour.
+                return [
+                    float(external.get(start_utc + timedelta(hours=i), 0.0))
+                    for i in range(n_hours)
+                ]
             out = list(external[:n_hours])
             while len(out) < n_hours:
                 out.append(0.0)
@@ -1116,6 +1227,10 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
 
             # Build features for forecast window
             now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+            # Open-Meteo returns the hourly grid from 00:00 UTC today, not
+            # from `now`. Re-base it so index 0 == `now` before any
+            # positional consumer (features, PV, duration) reads it.
+            weather = self._align_weather_to_now(weather, now)
             feature_rows = build_forecast_features(
                 start_utc=now,
                 hours=min(FORECAST_HOURS, len(weather)),
@@ -1133,7 +1248,7 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
             predictions = self.model.predict_batch(feature_rows)
 
             # Build PV forecast (length = number of predictions; all zeros when PV disabled)
-            pv_kwh = self._compute_pv_forecast(weather, len(predictions))
+            pv_kwh = self._compute_pv_forecast(weather, len(predictions), now)
 
             # Build unified forecast: spot + consumer + weather (+ PV-aware) per hour
             forecast = []
