@@ -134,30 +134,47 @@ def test_marginal_pv_exactly_meets_baseload_returns_buy_price() -> None:
     assert m == pytest.approx(0.16, rel=0.001)
 
 
-def test_marginal_pv_covers_full_extra_load_returns_sell_price() -> None:
-    """PV surplus ≥ 1 kWh → marginal cost = sell price (opportunity cost)."""
+def test_marginal_pv_covers_full_extra_load_is_free() -> None:
+    """PV surplus ≥ 1 kWh with positive sell → self-consumed PV is FREE (0).
+
+    v2.11.4 convention: on-site PV carries no spot/transmission/tax, so the
+    PV-served kWh costs 0 rather than the (positive) export opportunity cost.
+    """
     m = marginal_effective_eur_kwh(
         buy_eur_kwh=0.16, sell_eur_kwh=0.04, pv_kwh=3.5, baseload_kwh=1.0)
-    assert m == pytest.approx(0.04, rel=0.001)
+    assert m == pytest.approx(0.0, abs=1e-9)
 
 
-def test_marginal_partial_pv_cover_interpolates() -> None:
-    """PV surplus 0.5 kWh → 50/50 mix of sell & buy prices."""
+def test_marginal_partial_pv_cover_interpolates_against_free_pv() -> None:
+    """PV surplus 0.5 kWh → 0.5·(free PV) + 0.5·buy = 0.5·0 + 0.5·0.16."""
     m = marginal_effective_eur_kwh(
         buy_eur_kwh=0.16, sell_eur_kwh=0.04, pv_kwh=1.5, baseload_kwh=1.0)
-    expected = 0.5 * 0.04 + 0.5 * 0.16
+    expected = 0.5 * 0.0 + 0.5 * 0.16
     assert m == pytest.approx(expected, rel=0.001)
 
 
 def test_marginal_negative_sell_price_propagates() -> None:
-    """When s_h < 0 (deep oversupply) marginal cost can be slightly negative."""
+    """When s_h < 0 (deep oversupply) self-consuming avoids the export
+    penalty, so marginal cost goes negative = sell price."""
     m = marginal_effective_eur_kwh(
         buy_eur_kwh=0.16, sell_eur_kwh=-0.05, pv_kwh=3.5, baseload_kwh=1.0)
     assert m == pytest.approx(-0.05, rel=0.001)
 
 
-def test_marginal_bounded_by_sell_and_buy() -> None:
-    """For ANY (b, s, p, c) with b ≥ s, m_h ∈ [s, b]."""
+def test_marginal_positive_sell_does_not_raise_cost_above_free() -> None:
+    """A high (positive) export price must NOT push the PV-served kWh cost
+    up — self-consumption stays free regardless of how valuable export is."""
+    cheap_sell = marginal_effective_eur_kwh(0.16, 0.01, pv_kwh=5.0, baseload_kwh=1.0)
+    rich_sell = marginal_effective_eur_kwh(0.16, 0.30, pv_kwh=5.0, baseload_kwh=1.0)
+    assert cheap_sell == pytest.approx(0.0, abs=1e-9)
+    assert rich_sell == pytest.approx(0.0, abs=1e-9)
+
+
+def test_marginal_bounded_by_free_pv_and_buy() -> None:
+    """For ANY (b, s, p, c) with b ≥ 0, m_h ∈ [min(0, s), b].
+
+    Self-consumed PV is free, so the lower bound is 0 (or the negative
+    export price when sell < 0), never the positive sell price."""
     cases = [
         (0.16, 0.04, 0.0, 1.0),
         (0.16, 0.04, 0.5, 1.0),
@@ -165,10 +182,11 @@ def test_marginal_bounded_by_sell_and_buy() -> None:
         (0.16, 0.04, 2.5, 1.0),
         (0.16, 0.04, 10.0, 1.0),
         (0.10, -0.05, 5.0, 1.0),
+        (0.20, 0.30, 5.0, 1.0),   # rich export must not lift cost above 0
     ]
     for b, s, p, c in cases:
         m = marginal_effective_eur_kwh(b, s, p, c)
-        lo, hi = (s, b) if s <= b else (b, s)
+        lo, hi = min(0.0, s), b
         assert lo - 1e-9 <= m <= hi + 1e-9, f"{m} not in [{lo},{hi}] for {(b,s,p,c)}"
 
 

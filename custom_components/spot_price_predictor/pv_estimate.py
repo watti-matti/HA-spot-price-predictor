@@ -104,8 +104,20 @@ def marginal_effective_eur_kwh(
 ) -> float:
     """Marginal cost of running 1 additional kWh of flexible load at this hour.
 
-    Bounded by [sell_eur_kwh, buy_eur_kwh]. This is the PV-aware effective
-    price metric used as input to D(k) cheap/peak order statistics.
+    Bounded by [min(0, sell_eur_kwh), buy_eur_kwh]. This is the PV-aware
+    effective price metric used as input to D(k) cheap/peak order statistics.
+
+    PV-value convention (v2.11.4+): **self-consumed PV is free.** On-site
+    solar carries no spot price, no transmission tariff, and no energy tax,
+    so the share of the marginal kWh served from surplus PV costs 0 — it is
+    NOT charged the export ("sell") opportunity cost. The grid-served share
+    still costs the full consumer buy price. The result therefore floors at
+    0 (you cannot do better than free) except during a **negative export
+    price**: when ``sell_eur_kwh < 0`` (deep oversupply, you would pay to
+    export), self-consuming that kWh avoids the export penalty — a real
+    saving worth ``sell_eur_kwh`` (< 0). This makes the effective price ≤ 0
+    whenever surplus PV can serve the extra load, matching household
+    economics rather than market opportunity cost.
 
     Parameters
     ----------
@@ -113,7 +125,8 @@ def marginal_effective_eur_kwh(
         Consumer buy price (b_h), incl. tariffs/VAT. EUR/kWh.
     sell_eur_kwh
         Sell price (s_h) = spot − commission − export_fee. EUR/kWh.
-        Can be negative when spot is below total deductions.
+        Can be negative when spot is below total deductions. Only its
+        negative part contributes (self-consumed PV is otherwise free).
     pv_kwh
         Hourly PV production. kWh. ≥ 0.
     baseload_kwh
@@ -122,19 +135,24 @@ def marginal_effective_eur_kwh(
     Returns
     -------
     float
-        Marginal cost m_h ∈ [s_h, b_h]. EUR/kWh.
+        Marginal cost m_h ∈ [min(0, s_h), b_h]. EUR/kWh.
 
     Formula
     -------
-        pv_avail = max(0, pv − baseload)
-        from_pv  = min(1, pv_avail)
-        from_grid = 1 − from_pv
-        m_h      = from_pv · sell + from_grid · buy
+        pv_avail     = max(0, pv − baseload)
+        from_pv      = min(1, pv_avail)
+        from_grid    = 1 − from_pv
+        pv_unit_cost = min(0, sell)      # self-consumed PV is free
+        m_h          = from_pv · pv_unit_cost + from_grid · buy
     """
     pv_avail = max(0.0, pv_kwh - baseload_kwh)
     from_pv = min(1.0, pv_avail)
     from_grid = 1.0 - from_pv
-    return from_pv * sell_eur_kwh + from_grid * buy_eur_kwh
+    # Self-consumed PV is free (no spot / transmission / tax); it only turns
+    # negative when the export price is negative, where avoiding the export
+    # penalty is a genuine per-kWh saving worth `sell_eur_kwh`.
+    pv_unit_cost = min(0.0, sell_eur_kwh)
+    return from_pv * pv_unit_cost + from_grid * buy_eur_kwh
 
 
 def net_household_cost_eur(

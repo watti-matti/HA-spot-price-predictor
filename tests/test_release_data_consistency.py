@@ -206,10 +206,11 @@ def validate_forecast_row(row: dict, cfg: TariffConfig | None = None,
     if abs(exp_eff - eff) > TOL:
         v.append(f"effective {eff} != marginal(consumer,sell,pv,base)={exp_eff}")
 
-    # 4) Bound: min(sell, consumer) <= effective <= max(sell, consumer).
-    lo, hi = min(sell, cons), max(sell, cons)
+    # 4) Bound: self-consumed PV is free (v2.11.4), so effective floors at
+    #    min(0, sell) and is capped at the consumer buy price.
+    lo, hi = min(0.0, sell), cons
     if not (lo - TOL <= eff <= hi + TOL):
-        v.append(f"effective {eff} outside [{lo}, {hi}] (sell/consumer bound)")
+        v.append(f"effective {eff} outside [{lo}, {hi}] (free-PV bound)")
 
     # 5) Regression invariant: when PV cannot cover an extra kWh
     #    (pv <= baseload), effective MUST equal the consumer buy price.

@@ -414,8 +414,8 @@ def test_pv_aware_dk_identity_no_pv_equals_no_pv_path() -> None:
 def test_end_to_end_synthetic_finnish_day() -> None:
     """Combine PV estimator + marginal cost on a 24h Finnish-style day.
 
-    Asserts the bound m_h ∈ [s_h, b_h] holds for every hour and that
-    midday has lower effective cost than night."""
+    Asserts the bound m_h ∈ [min(0, s_h), b_h] holds for every hour (PV is
+    free, v2.11.4) and that midday has lower effective cost than night."""
     # Finnish summer day: irradiance peaks at noon, low spot at noon
     # (solar pressure), high in evening
     spot_eur_mwh = [
@@ -450,10 +450,10 @@ def test_end_to_end_synthetic_finnish_day() -> None:
         ) for b, s, p in zip(buy, sell, pv)
     ]
 
-    # Bound check
+    # Bound check: self-consumed PV is free → floor is min(0, sell), not sell
     for h in range(24):
-        lo = min(buy[h], sell[h])
-        hi = max(buy[h], sell[h])
+        lo = min(0.0, sell[h])
+        hi = buy[h]
         assert lo - 1e-9 <= eff[h] <= hi + 1e-9, (
             f"hour {h}: m_h={eff[h]} not in [{lo}, {hi}]")
 
