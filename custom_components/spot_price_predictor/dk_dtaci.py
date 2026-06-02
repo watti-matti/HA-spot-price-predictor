@@ -56,6 +56,17 @@ _LOGGER = logging.getLogger(__name__)
 CHEAP_PEAK_K_RANGE: tuple[int, ...] = tuple(range(1, 25))
 """All 48 D(i) order statistics — k=1..24 for both cheap and peak ends."""
 
+SCHEMA_VERSION: int = 2
+"""Persisted-state schema version.
+
+v1 (Phase B v2) only stored k=1..12 per direction. v2.8.1 expanded the
+bundle to k=1..24 but did not migrate state, so upgraded installs reloaded
+warm k=1..12 instances while k=13..24 cold-started — producing a spurious
+bias/coverage discontinuity at the 12/13 boundary. v2 deliberately refuses
+to load v1 state so the whole bundle cold-starts and all 24 levels re-warm
+with identical history (no seam). The re-warm takes ~1-3 weeks, which was
+already happening to k=13..24 on those installs."""
+
 
 def _instance_key(direction: str, k: int) -> str:
     """Canonical key for a (direction, k) DtACI instance."""
@@ -271,7 +282,7 @@ class DkDtACIBundle:
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-serialisable dict of the entire bundle's state."""
         return {
-            "version": 1,
+            "version": SCHEMA_VERSION,
             "target_coverage": self.target_coverage,
             "gammas": list(self.gammas),
             "eta": self.eta,
@@ -289,9 +300,20 @@ class DkDtACIBundle:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "DkDtACIBundle":
-        """Restore from `to_dict` output. Missing instances cold-start."""
-        if d.get("version", 1) != 1:
-            raise ValueError(f"Unknown bundle version: {d.get('version')}")
+        """Restore from `to_dict` output. Missing instances cold-start.
+
+        Refuses pre-v2 (12-level) state so the caller cold-starts a fresh
+        bundle — see ``SCHEMA_VERSION``. Loading v1 partially would reload
+        warm k=1..12 next to cold k=13..24 and reintroduce the 12/13 seam.
+        """
+        ver = d.get("version", 1)
+        if ver == 1:
+            raise ValueError(
+                "DkDtACIBundle schema v1 (12-level) predates the 24-level "
+                "expansion and is not migratable; cold-starting to remove "
+                "the 12/13 calibration seam")
+        if ver != SCHEMA_VERSION:
+            raise ValueError(f"Unknown bundle version: {ver}")
         bundle = cls(
             target_coverage=d.get("target_coverage", 0.9),
             gammas=d.get("gammas", DEFAULT_GAMMAS),

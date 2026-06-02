@@ -64,7 +64,8 @@ def load_or_create_bundle(
                 return DkDtACIBundle.from_dict(json.load(f))
         except Exception as exc:
             _LOGGER.warning(
-                "DkDtACIBundle state %s unreadable (%s); starting fresh",
+                "DkDtACIBundle state %s unreadable or incompatible (%s); "
+                "cold-starting a fresh bundle",
                 state_path, exc,
             )
     return DkDtACIBundle(target_coverage=target_coverage)

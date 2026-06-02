@@ -201,6 +201,68 @@ def test_from_dict_rejects_wrong_version():
         DkDtACIBundle.from_dict({"version": 99, "instances": {}})
 
 
+def test_to_dict_writes_schema_v2():
+    """Persisted state advertises the v2 (24-level) schema."""
+    assert DkDtACIBundle().to_dict()["version"] == 2
+    assert dk_dtaci.SCHEMA_VERSION == 2
+
+
+def test_from_dict_rejects_legacy_v1_12level_state():
+    """The 12-level v1 state must be refused so the caller cold-starts the
+    whole bundle — otherwise warm k=1..12 reload next to cold k=13..24 and
+    recreate the spurious 12/13 bias/coverage seam."""
+    rng = random.Random(3)
+    b = DkDtACIBundle()
+    for _ in range(40):
+        a_cheap, a_peak = _synth_day(rng)
+        f_cheap = [a + rng.gauss(0, 4) for a in a_cheap]
+        f_peak = [a + rng.gauss(0, 6) for a in a_peak]
+        b.update(f_cheap, f_peak, a_cheap, a_peak)
+
+    # Simulate a real v1 file: version 1, only k=1..12 instances present.
+    state = b.to_dict()
+    state["version"] = 1
+    state["instances"] = {
+        key: inst for key, inst in state["instances"].items()
+        if int(key.rsplit("_", 1)[1]) <= 12
+    }
+    with pytest.raises(ValueError, match="v1|seam|12-level"):
+        DkDtACIBundle.from_dict(state)
+
+
+def test_legacy_state_cold_starts_uniformly_via_loader(tmp_path):
+    """End-to-end: a v1 state file makes load_or_create_bundle cold-start a
+    fresh 48-instance bundle where NO k is warmer than another (no seam)."""
+    import json
+
+    integ = _load(
+        "custom_components.spot_price_predictor.dtaci_integration",
+        _PKG / "dtaci_integration.py")
+
+    # Build a warm bundle, then write it back as a legacy v1, 12-level file.
+    rng = random.Random(5)
+    warm = DkDtACIBundle()
+    for _ in range(60):
+        a_cheap, a_peak = _synth_day(rng)
+        warm.update([a + 3 for a in a_cheap], [a + 3 for a in a_peak],
+                    a_cheap, a_peak)
+    legacy = warm.to_dict()
+    legacy["version"] = 1
+    legacy["instances"] = {
+        k: v for k, v in legacy["instances"].items()
+        if int(k.rsplit("_", 1)[1]) <= 12
+    }
+    path = tmp_path / "dtaci_dk_FI.json"
+    path.write_text(json.dumps(legacy), encoding="utf-8")
+
+    bundle = integ.load_or_create_bundle(path, target_coverage=0.9)
+    # All 48 instances exist and every one is cold (n_updates == 0) — so
+    # k=1..12 and k=13..24 are indistinguishable: no 12/13 seam.
+    assert len(bundle.instances) == 48
+    n_updates = [inst.n_updates for inst in bundle.instances.values()]
+    assert set(n_updates) == {0}, "legacy load must cold-start ALL levels"
+
+
 # ── Bias correction realised on biased data ───────────────────────
 
 
