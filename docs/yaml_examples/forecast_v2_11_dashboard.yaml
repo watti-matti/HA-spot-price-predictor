@@ -219,17 +219,16 @@ views:
                     .sort((a,b) => a[0]-b[0]);
 
           # ── 2. D(k) cheapest-k-hours curve (today) ─────────────────────
-          # Per-k chart, NOT a time-series. apexcharts-card defaults to a
-          # time x-axis when `graph_span` is set; we must NOT set it here
-          # or the integer k values 1..24 get interpreted as UNIX
-          # timestamps (1970-01-01 + N seconds).
-          # x-axis uses `type: category` with data points {x: "1", y: …}
-          # so k displays as plain integer labels.
+          # NOTE: apexcharts-card is time-series only — a category/numeric
+          # k-axis does not render. We map k=1..24 onto today's 24 hours
+          # (timestamps) and relabel the axis/tooltip back to "k".
           - type: custom:apexcharts-card
             header:
               show: true
               title: "Today's cheapest-k-hours mean price"
-            chart_type: line
+            graph_span: 24h
+            span:
+              start: day
             apex_config:
               chart:
                 height: 240px
@@ -238,17 +237,21 @@ views:
                 curve: smooth
                 width: 3
               xaxis:
-                type: category
+                type: datetime
                 title:
                   text: k (number of hours)
                 labels:
-                  rotate: 0
-                  hideOverlappingLabels: false
+                  datetimeUTC: false
+                  formatter: |
+                    EVAL: function (value, timestamp) {
+                      var ms = (timestamp != null) ? timestamp : value;
+                      return 'k' + (new Date(ms).getHours() + 1);
+                    }
               tooltip:
                 shared: true
                 x:
                   formatter: |
-                    EVAL: function (val) { return 'k = ' + val; }
+                    EVAL: function (val) { return 'k = ' + (new Date(val).getHours() + 1); }
             yaxis:
               - id: price
                 opposite: false
@@ -267,13 +270,14 @@ views:
                   extremas: false
                 data_generator: |
                   const days = entity.attributes.daily_forecast;
-                  if (!days || days.length === 0) return [];
-                  const today = days[0];
-                  if (!today.dk_cheap_eur_kwh) return [];
-                  return today.dk_cheap_eur_kwh.map((v, i) => ({
-                    x: String(i + 1),
-                    y: v * 100,
-                  }));
+                  if (!days || !days.length) return [];
+                  const t = new Date();
+                  const iso = `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`;
+                  const today = days.find(d => d.date === iso && d.dk_cheap_eur_kwh)
+                             || days.find(d => d.dk_cheap_eur_kwh);
+                  if (!today) return [];
+                  const b = new Date(); b.setHours(0,0,0,0); const base = b.getTime();
+                  return today.dk_cheap_eur_kwh.map((v, i) => [base + i*3600000, v * 100]);
               - entity: sensor.spot_price_predictor_duration_forecast
                 name: cheap k-h (PV-aware)
                 yaxis_id: price
@@ -285,13 +289,14 @@ views:
                   extremas: false
                 data_generator: |
                   const days = entity.attributes.daily_forecast;
-                  if (!days || days.length === 0) return [];
-                  const today = days[0];
-                  if (!today.dk_cheap_pv_eur_kwh) return [];
-                  return today.dk_cheap_pv_eur_kwh.map((v, i) => ({
-                    x: String(i + 1),
-                    y: v * 100,
-                  }));
+                  if (!days || !days.length) return [];
+                  const t = new Date();
+                  const iso = `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`;
+                  const today = days.find(d => d.date === iso && d.dk_cheap_pv_eur_kwh)
+                             || days.find(d => d.dk_cheap_pv_eur_kwh);
+                  if (!today) return [];
+                  const b = new Date(); b.setHours(0,0,0,0); const base = b.getTime();
+                  return today.dk_cheap_pv_eur_kwh.map((v, i) => [base + i*3600000, v * 100]);
               - entity: sensor.spot_price_predictor_duration_forecast
                 name: peak k-h (grid)
                 yaxis_id: price
@@ -303,13 +308,14 @@ views:
                   extremas: false
                 data_generator: |
                   const days = entity.attributes.daily_forecast;
-                  if (!days || days.length === 0) return [];
-                  const today = days[0];
-                  if (!today.dk_peak_eur_kwh) return [];
-                  return today.dk_peak_eur_kwh.map((v, i) => ({
-                    x: String(i + 1),
-                    y: v * 100,
-                  }));
+                  if (!days || !days.length) return [];
+                  const t = new Date();
+                  const iso = `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`;
+                  const today = days.find(d => d.date === iso && d.dk_peak_eur_kwh)
+                             || days.find(d => d.dk_peak_eur_kwh);
+                  if (!today) return [];
+                  const b = new Date(); b.setHours(0,0,0,0); const base = b.getTime();
+                  return today.dk_peak_eur_kwh.map((v, i) => [base + i*3600000, v * 100]);
 
           # ── 3. PV-aware daily CVaR strip (v2.11.0) ─────────────────────
           - type: custom:apexcharts-card
@@ -331,14 +337,14 @@ views:
               dataLabels:
                 enabled: true
                 formatter: |
-                  EVAL: function (val) { return val.toFixed(1) + ' c/kWh'; }
+                  EVAL: function (val) { return val != null ? val.toFixed(1) + ' c/kWh' : ''; }
                 offsetY: -20
                 style:
                   fontSize: 11px
                   colors: ["#374151"]
-              xaxis:
-                type: category
               tooltip:
+                x:
+                  format: ddd dd.MM
                 y:
                   formatter: |
                     EVAL: function (val) { return val.toFixed(2) + ' c/kWh'; }
@@ -369,10 +375,10 @@ views:
                   if (!days) return [];
                   return days
                     .filter(d => d.pv_aware_cvar95_eur_kwh != null)
-                    .map(d => ({
-                      x: d.weekday + ' ' + d.date.slice(5),
-                      y: d.pv_aware_cvar95_eur_kwh * 100
-                    }));
+                    .map(d => [
+                      new Date(d.date + 'T12:00:00').getTime(),
+                      d.pv_aware_cvar95_eur_kwh * 100
+                    ]);
 
           # ── 4. PV-aware diagnostics summary ────────────────────────────
           - type: markdown

@@ -2,7 +2,7 @@
 
 [![HACS Integration](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-2.11.0-blue.svg)](https://github.com/watti-matti/HA-spot-price-predictor/releases/tag/v2.11.0)
+[![Version](https://img.shields.io/badge/version-2.11.8-blue.svg)](https://github.com/watti-matti/HA-spot-price-predictor/releases/latest)
 
 **Forecast Finnish electricity prices for the next 170 hours**, in both spot (EUR/MWh) and consumer (EUR/kWh) terms, with calibrated probabilistic bands and 7-day duration curves for cost-aware load scheduling.
 
@@ -14,12 +14,20 @@
 - **Probabilistic fan chart** — per-hour P5 / P25 / P50 / P75 / P95 bands sampled from a Normal-body + Generalized Pareto tail mixture (heavy-tail spike model).
 - **Nordpool-compatible spot-price-forecast sensor** (new in v2.11.0) — `sensor.spot_price_forecast_fi` exposes the L1+L2+L3+L4 forecast as a drop-in for the [Nordpool integration](https://github.com/custom-components/nordpool) schema (`state` in EUR/kWh, `raw_today` / `raw_tomorrow` / `raw_extended` lists of `{start, end, value}`). EMHASS, ApexCharts, and any Nordpool-aware automation consume it without code changes; the new `raw_extended` field extends the forecast horizon from today+tomorrow to the full 170 hours.
 - **D(k) cheap/peak duration curves** — 7 days × 4 arrays per day, each 24-entry and 0-indexed: `dk_cheap_eur_mwh[i]` / `dk_peak_eur_mwh[i]` (spot) and `dk_cheap_eur_kwh[i]` / `dk_peak_eur_kwh[i]` (consumer). Each `[i]` is the mean of the (i+1) cheapest / priciest hours of the day. Equivalent to CVaR at α=(i+1)/24 in both tails.
-- **Optional PV-aware effective price** — when a `pv_capacity_kwp > 0` (or an external PV-forecast entity) is configured, each forecast hour gains `effective_eur_kwh` (marginal cost of running one extra kWh given PV self-consumption) and parallel `dk_cheap_pv_eur_kwh[24]` / `dk_peak_pv_eur_kwh[24]` curves.
+- **Optional PV-aware effective price** — when a `pv_capacity_kwp > 0` (or an external PV-forecast entity) is configured, each forecast hour gains `effective_eur_kwh` (marginal cost of running one extra kWh given PV self-consumption) and parallel `dk_cheap_pv_eur_kwh[24]` / `dk_peak_pv_eur_kwh[24]` curves. **Self-consumed PV is valued as free** (no spot, transmission, or tax): `effective_eur_kwh` floors at `0` when surplus PV can serve the extra load, and only goes negative during negative export prices (since v2.11.4).
 - **PV-aware risk metric** (new in v2.11.0) — daily `pv_aware_cvar95_eur_kwh` reports the expected effective cost in the worst 5 % of joint price+PV scenarios for each forecast day. The headline number a risk-averse scheduler reads to decide which day this week is safest for a discretionary load. Computed via a shared `pv_cost_kernel` library that the downstream thermal optimiser can call with its own per-load schedule for an "achieved" CVaR comparison.
-- **Optional online calibration (DtACI)** — adaptive conformal prediction intervals on the D(k) curves, with per-(direction, k) bias correction. Targets 90 % marginal coverage; warms up over the first few days.
+- **Optional online calibration (DtACI)** — adaptive conformal prediction intervals on the **FI** consumer-price D(k) curves, with per-(direction, k) bias correction. Targets 90 % marginal coverage; warms up over ≈ 5–7 days of reconciled daily updates. (Cross-border SE1/SE3/EE DtACI bundles were removed in v2.11.8 as redundant — neighbour prices still feed the FI model as features.)
 - **External EMA-profile integration point** (new in v2.11.0) — `consumption_profile_entity` reads an external HA-consumption-profiler module's published profile sensor; when unconfigured the integration falls back to a synthetic Finnish-typical baseload calibrated to `annual_consumption_kwh`. Profile provenance (`synthetic_cold_start` / `ema_warm` / `ema_blended`) propagates to the PV-aware CVaR attributes so dashboards can flag low-confidence numbers.
 - **Refit on demand** — the `spot_price_predictor.retrain_models` Home Assistant service refits the L1 seasonal, L2/L3/L4 spike, and (optionally) solar sub-model artifacts and reloads the pipeline without a Home Assistant restart.
 - **All data sources are free.** The integration ships pre-trained artifacts and works out of the box after picking your distribution operator.
+
+## Recent changes (v2.11.3 → v2.11.8)
+
+- **v2.11.8** — DtACI de-scoped to FI only; the redundant SE1/SE3/EE per-D(i) bundles were removed (neighbour prices still feed the FI model as features).
+- **v2.11.6** — fixed a spurious 12/13 discontinuity in the DtACI per-k bias/coverage (stale 12-level calibration state is now reset on upgrade).
+- **v2.11.5** — fixed a weather/PV time-alignment bug that shifted solar/PV (and the price model's weather inputs) later by the update's UTC hour. PV now lines up with local time.
+- **v2.11.4** — self-consumed PV is now valued as **free**; `effective_eur_kwh` floors at `0` when surplus PV can serve the load (was previously charged the export opportunity cost).
+- **v2.11.3** — fixed `effective_eur_kwh` / `net_household_cost_eur` / `sell_eur_kwh` going stale after the L1–L4 pipeline overwrote spot/consumer; PV-aware D(k) now also covers *today*.
 
 ## How It Works
 

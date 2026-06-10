@@ -81,6 +81,9 @@ views:
             header:
               show: true
               title: "Per-k coverage — D_cheap (target 90 %)"
+            graph_span: 24h
+            span:
+              start: day
             apex_config:
               chart:
                 height: 320px
@@ -94,9 +97,16 @@ views:
               dataLabels:
                 enabled: false
               xaxis:
-                type: category
+                type: datetime
                 title:
                   text: k
+                labels:
+                  datetimeUTC: false
+                  formatter: |
+                    EVAL: function (value, timestamp) {
+                      var ms = (timestamp != null) ? timestamp : value;
+                      return 'k' + (new Date(ms).getHours() + 1);
+                    }
               yaxis:
                 min: 70
                 max: 100
@@ -133,19 +143,23 @@ views:
                   const diag = entity.attributes.dtaci_diagnostics;
                   if (!diag || !diag.zones || !diag.zones.fi) return [];
                   const cheap = diag.zones.fi.per_k.cheap;
+                  const b = new Date(); b.setHours(0,0,0,0); const base = b.getTime();
                   return Array.from({length: 24}, (_, i) => i + 1)
-                    .map(k => ({
-                      x: String(k),
-                      y: cheap && cheap[k] && cheap[k].coverage != null
+                    .map(k => [
+                      base + (k - 1) * 3600000,
+                      cheap && cheap[k] && cheap[k].coverage != null
                           ? cheap[k].coverage * 100
                           : null,
-                    }));
+                    ]);
 
           # ── Per-k coverage bars (peak end) ───────────────────────────
           - type: custom:apexcharts-card
             header:
               show: true
               title: "Per-k coverage — D_peak (target 90 %)"
+            graph_span: 24h
+            span:
+              start: day
             apex_config:
               chart:
                 height: 320px
@@ -159,9 +173,16 @@ views:
               dataLabels:
                 enabled: false
               xaxis:
-                type: category
+                type: datetime
                 title:
                   text: k
+                labels:
+                  datetimeUTC: false
+                  formatter: |
+                    EVAL: function (value, timestamp) {
+                      var ms = (timestamp != null) ? timestamp : value;
+                      return 'k' + (new Date(ms).getHours() + 1);
+                    }
               yaxis:
                 min: 70
                 max: 100
@@ -198,19 +219,23 @@ views:
                   const diag = entity.attributes.dtaci_diagnostics;
                   if (!diag || !diag.zones || !diag.zones.fi) return [];
                   const peak = diag.zones.fi.per_k.peak;
+                  const b = new Date(); b.setHours(0,0,0,0); const base = b.getTime();
                   return Array.from({length: 24}, (_, i) => i + 1)
-                    .map(k => ({
-                      x: String(k),
-                      y: peak && peak[k] && peak[k].coverage != null
+                    .map(k => [
+                      base + (k - 1) * 3600000,
+                      peak && peak[k] && peak[k].coverage != null
                           ? peak[k].coverage * 100
                           : null,
-                    }));
+                    ]);
 
           # ── Per-k bias EMA (cheap + peak) ────────────────────────────
           - type: custom:apexcharts-card
             header:
               show: true
               title: "Per-k bias EMA  (consumer c/kWh)"
+            graph_span: 24h
+            span:
+              start: day
             apex_config:
               chart:
                 height: 420px
@@ -225,7 +250,14 @@ views:
                 show: true
                 width: 1
               xaxis:
-                type: category
+                type: datetime
+                labels:
+                  datetimeUTC: false
+                  formatter: |
+                    EVAL: function (value, timestamp) {
+                      var ms = (timestamp != null) ? timestamp : value;
+                      return 'k' + (new Date(ms).getHours() + 1);
+                    }
               yaxis:
                 decimalsInFloat: 2
             series:
@@ -237,10 +269,11 @@ views:
                   const diag = entity.attributes.dtaci_diagnostics;
                   if (!diag || !diag.zones || !diag.zones.fi) return [];
                   const cheap = diag.zones.fi.per_k.cheap;
-                  return Array.from({length: 24}, (_, i) => i + 1).map(k => ({
-                    x: 'k=' + k,
-                    y: cheap[k] ? cheap[k].bias_ema * 100 : null
-                  }));
+                  const b = new Date(); b.setHours(0,0,0,0); const base = b.getTime();
+                  return Array.from({length: 24}, (_, i) => i + 1).map(k => [
+                    base + (k - 1) * 3600000,
+                    cheap[k] ? cheap[k].bias_ema * 100 : null
+                  ]);
               - entity: sensor.spot_price_predictor_duration_forecast
                 name: D_peak
                 type: column
@@ -249,10 +282,11 @@ views:
                   const diag = entity.attributes.dtaci_diagnostics;
                   if (!diag || !diag.zones || !diag.zones.fi) return [];
                   const peak = diag.zones.fi.per_k.peak;
-                  return Array.from({length: 24}, (_, i) => i + 1).map(k => ({
-                    x: 'k=' + k,
-                    y: peak[k] ? peak[k].bias_ema * 100 : null
-                  }));
+                  const b = new Date(); b.setHours(0,0,0,0); const base = b.getTime();
+                  return Array.from({length: 24}, (_, i) => i + 1).map(k => [
+                    base + (k - 1) * 3600000,
+                    peak[k] ? peak[k].bias_ema * 100 : null
+                  ]);
 
           # ── Dominant γ + weight entropy spotlight: D_peak(1) ─────────
           - type: markdown
@@ -281,7 +315,7 @@ views:
           # ── Neighbour zones (research diagnostic) ────────────────────
           - type: markdown
             content: |
-              ### Neighbour zones  ·  bias diagnostics
+              ### Calibration summary
               {% set d = state_attr("sensor.spot_price_predictor_duration_forecast", "dtaci_diagnostics") %}
               {% if d and d.zones %}
               <table style="width:100%; border-collapse:collapse; margin-top:8px;">
@@ -293,7 +327,8 @@ views:
               <th style="padding:6px; text-align:right;">Mean width</th>
               </tr></thead>
               <tbody>
-              {% for zone in ['fi', 'se1', 'se3', 'ee'] %}{% set z = d.zones.get(zone) %}{% if z %}<tr><td style="padding:5px 8px;"><b>{{ zone | upper }}</b></td><td style="padding:5px 8px; text-align:right;">{{ z.n_warm_instances }} / {{ z.n_total_instances }}</td><td style="padding:5px 8px; text-align:right;">{{ (z.mean_coverage * 100) | round(1) }} %</td><td style="padding:5px 8px; text-align:right;">{{ z.mean_width | round(3) }}</td></tr>{% endif %}{% endfor %}
+              {# DtACI is FI-only since v2.11.8; iterate whatever zones exist. #}
+              {% for zone, z in d.zones.items() %}<tr><td style="padding:5px 8px;"><b>{{ zone | upper }}</b></td><td style="padding:5px 8px; text-align:right;">{{ z.n_warm_instances }} / {{ z.n_total_instances }}</td><td style="padding:5px 8px; text-align:right;">{{ (z.mean_coverage * 100) | round(1) }} %</td><td style="padding:5px 8px; text-align:right;">{{ z.mean_width | round(3) }}</td></tr>{% endfor %}
               </tbody>
               </table>
               {% else %}

@@ -12,11 +12,26 @@
 > weight update `L[m] ← ρ · L[m] + err_t`, `w[m] = softmax(−η · L[m])`.
 > 15-expert γ ladder log-spaced over [0.0005, 0.2].
 >
-> **Production scope:** four zones (FI, SE1, SE3, EE). FI bundle drives
-> consumer-price duration bands; SE1/SE3/EE bundles bias-correct the
-> AR(2) features fed into the FI Ridge model. The neighbour-FI residual
-> correlation (R² = 0.667 on a 3-feature OLS, see
-> `studies/neighbor_bias_propagation.py`) justifies the 4-zone scope.
+> **Production scope (v2.11.8+):** **FI only.** A single FI bundle drives
+> the consumer-price duration bands. The SE1/SE3/EE per-D(i) bundles were
+> **removed in v2.11.8**: they were created, persisted, and reported but
+> never fed (no neighbour D(k) is produced and the feed loop is FI-only),
+> so they stayed permanently cold. The estimated FI-accuracy benefit of
+> neighbour DtACI bias-correction was ~1 % MAE — largely already absorbed
+> by the pipeline's own final-stage FI bias EMA — so the cross-border
+> DtACI estimates were dropped as redundant. Neighbour PRICES still couple
+> into the FI model as features (`Y_se*` deseasonalised inputs, `ar_se*`
+> AR(2) forecasts); that path is unchanged. The historical
+> `studies/neighbor_bias_propagation.py` analysis (neighbour↔FI residual
+> R² ≈ 0.67) measured the value of neighbours **as features** (already
+> realised by the Ridge), not the value of calibrating them.
+
+---
+
+> **Note:** the sections below are **legacy v1** documentation describing
+> the original *hourly* DtACI design, retained for reference only. The
+> shipping implementation is the per-(direction, k) Phase B v2 layer
+> summarised above.
 
 # Legacy v1 documentation (hourly DtACI) follows for reference
 

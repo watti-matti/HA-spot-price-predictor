@@ -120,15 +120,21 @@ The integration creates a device named **Spot Price Predictor** with sensor enti
 
 ## Step 9 — Add the dashboard (optional)
 
-A ready-made Lovelace dashboard is available at [`ha_dashboard.yaml`](ha_dashboard.yaml). Install [ApexCharts Card](https://github.com/RomRider/apexcharts-card) via HACS → Frontend, then add the dashboard:
+Install [ApexCharts Card](https://github.com/RomRider/apexcharts-card) via HACS → Frontend first. Then pick a ready-made dashboard:
+
+- **[`docs/yaml_examples/forecast_v2_11_dashboard.yaml`](docs/yaml_examples/forecast_v2_11_dashboard.yaml)** — **recommended**, current (v2.11). Fan-chart bands, consumer/PV-aware effective price, today's cheap/peak D(k) curves (grid + PV-aware), and the 7-day PV-aware CVaR₉₅ risk strip.
+- [`ha_dashboard.yaml`](ha_dashboard.yaml) — lightweight Mushroom + ApexCharts starter (price trend + grid D(k) only; no PV-aware/CVaR cards).
+- [`docs/yaml_examples/dtaci_diagnostics_card.yaml`](docs/yaml_examples/dtaci_diagnostics_card.yaml) — optional DtACI calibration monitor (only useful when `enable_dtaci_dk` is on).
+
+To add one:
 
 1. Go to your HA dashboard → **Edit** → **+ Add Card** → **Manual**.
-2. Paste the YAML from `ha_dashboard.yaml`.
-3. Adjust entity IDs if your installation differs.
+2. Paste the YAML from the file above.
+3. Entity IDs are the integration defaults (`sensor.spot_price_predictor_*`) — no editing needed unless you renamed the integration.
 
 ![Dashboard Example](docs/screenshots/example_UI.png)
 
-The dashboard shows the 7-day consumer-price trend, today's D(k) cheap/peak curve, wind speed, and (when configured) Nordpool actual price for comparison.
+> The PV-aware cards (effective price, PV D(k), CVaR₉₅) only populate when PV is configured (`pv_capacity_kwp > 0` or an external PV-forecast entity). They self-hide on days that lack PV data, so seeing fewer bars than 7 — or none until PV is set up — is expected, not a bug.
 
 ## Changing settings later
 

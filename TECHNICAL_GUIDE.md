@@ -1,4 +1,4 @@
-# Technical Guide — HA Spot Price Predictor (v2.11.0)
+# Technical Guide — HA Spot Price Predictor (v2.11.8)
 
 Finnish consumer-electricity price and D(k) duration cost forecasting for Home Assistant. Produces a 170-hour spot/consumer point forecast, P5/P25/P50/P75/P95 fan-chart bands, and 7-day cheap/peak duration curves driven by a four-layer prediction pipeline. This guide describes only what the shipping code actually does.
 
@@ -154,7 +154,7 @@ Two configuration fields drive the baseload `c_h` used in the PV calculation:
 
 When `enable_dtaci_dk = true` the coordinator wraps the D(k) curves with adaptive conformal bands. Implementation: [`dk_dtaci.py`](custom_components/spot_price_predictor/dk_dtaci.py) (`DkDtACIBundle`) + [`dtaci_integration.py`](custom_components/spot_price_predictor/dtaci_integration.py).
 
-- **48 DtACI instances per zone** — one per `(direction, k)` for direction ∈ {cheap, peak} and k = 1..24. Each instance tracks its own residual distribution, alpha, dominant gamma, weight entropy, and per-instance bias EMA.
+- **48 DtACI instances (FI zone only, since v2.11.8)** — one per `(direction, k)` for direction ∈ {cheap, peak} and k = 1..24. Each instance tracks its own residual distribution, alpha, dominant gamma, weight entropy, and per-instance bias EMA. (The SE1/SE3/EE bundles were removed in v2.11.8: they were never fed and provided no benefit; neighbour prices still feed the FI model as `Y_se*` / `ar_se*` features.)
 - **Bands written back** as 24-element arrays `dk_cheap_lower_eur_kwh`, `dk_cheap_upper_eur_kwh`, `dk_peak_lower_eur_kwh`, `dk_peak_upper_eur_kwh` per day entry once instances have warmed up. Before warmup, bands collapse to the point forecast (deliberate — no spurious confidence).
 - **Diagnostics** surface on the duration sensor as `dtaci_diagnostics`, `dtaci_warmup_status`, `dtaci_target_coverage`, `dtaci_fi_mean_coverage`, `dtaci_fi_mean_width_eur_kwh`, `dtaci_fi_warm_instances`, `dtaci_fi_total_instances`, `dtaci_min_n_updates`.
 
