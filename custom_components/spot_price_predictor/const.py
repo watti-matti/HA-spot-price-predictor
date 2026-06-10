@@ -154,15 +154,22 @@ assert abs(sum(FINLAND_RESIDENTIAL_MONTHLY_FACTORS) - 12.0) < 1e-9, \
     "Monthly factors must sum to exactly 12 for normalization invariant"
 
 # DtACI online calibration layer (Phase B v2). Off by default; enabling
-# wires up per-(direction, k) DtACI on FI consumer-price D(i) statistics
-# and runs neighbour-zone (SE1, SE3, EE) bundles for bias diagnostics.
+# wires up per-(direction, k) DtACI on FI consumer-price D(i) statistics.
 CONF_ENABLE_DTACI_DK = "enable_dtaci_dk"
 DEFAULT_ENABLE_DTACI_DK = False
 DTACI_TARGET_COVERAGE = 0.9  # 90% prediction intervals
-# Zones whose D(i) statistics get a DtACI bundle. FI drives sensor bands;
-# the neighbour bundles produce bias estimates that can later be fed back
-# into the AR(2) features (separate enhancement).
-DTACI_ZONES = ("fi", "se1", "se3", "ee")
+# Zones whose D(i) statistics get a DtACI bundle. FI only — the FI bundle
+# is the one that drives the sensor's calibrated D(k) bands.
+#
+# v2.11.8: the neighbour-zone (SE1, SE3, EE) bundles were removed. They
+# were never fed (no neighbour D(k) is produced and the feed loop is
+# FI-only), so they stayed permanently cold while still being created,
+# persisted, and reported — a misleading no-op. An analytical estimate
+# put the FI-accuracy benefit of neighbour DtACI at ~1% MAE (capped by
+# the pipeline's own bias EMA), so the cross-border DtACI estimates were
+# dropped as redundant. Neighbour PRICES still couple into the FI model
+# as features (Y_se*, ar_se*) — that path is unchanged.
+DTACI_ZONES = ("fi",)
 
 # Update intervals (seconds)
 UPDATE_INTERVAL_WEATHER = 21600  # 6 hours

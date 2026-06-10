@@ -924,11 +924,13 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
     # ── DtACI per-D(i) calibration layer ──────────────────────────
 
     def _dtaci_init_bundles(self) -> None:
-        """Lazy-init the four DtACI bundles (FI, SE1, SE3, EE).
+        """Lazy-init the DtACI bundle(s) — FI only (see DTACI_ZONES).
 
         Each bundle is loaded from `<config_dir>/.storage/<DOMAIN>_dtaci/
         dtaci_dk_<zone>.json` if present, otherwise cold-started. Idempotent —
-        safe to call every cycle.
+        safe to call every cycle. Stale state files for zones no longer in
+        DTACI_ZONES (e.g. the removed SE1/SE3/EE neighbour bundles) are
+        cleaned up once on init.
         """
         if self._dtaci_bundles:
             return
@@ -942,8 +944,19 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                 self._dtaci_bundles[zone] = load_or_create_bundle(
                     path, target_coverage=DTACI_TARGET_COVERAGE,
                 )
+            # Remove stale state files for de-scoped zones (SE1/SE3/EE).
+            for stale in base.glob("dtaci_dk_*.json"):
+                zone = stale.stem.replace("dtaci_dk_", "")
+                if zone not in DTACI_ZONES:
+                    try:
+                        stale.unlink()
+                        _LOGGER.info(
+                            "DtACI: removed stale neighbour-zone state %s",
+                            stale.name)
+                    except OSError:
+                        pass
             _LOGGER.info(
-                "DtACI: initialised %d zone bundles in %s",
+                "DtACI: initialised %d zone bundle(s) in %s",
                 len(self._dtaci_bundles), base,
             )
         except Exception as err:
@@ -1361,9 +1374,9 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                         d["dk_peak_pv_eur_kwh"] = extra["dk_peak_pv_eur_kwh"]
 
             # ── DtACI per-D(i) calibration layer ────────────────────
-            # When enabled, run the four-zone bundle: capture today's
-            # forecast, reconcile newly-actual days, attach calibrated
-            # bands to forecast-mode entries, persist state.
+            # When enabled, run the FI bundle: capture today's forecast,
+            # reconcile newly-actual days, attach calibrated bands to
+            # forecast-mode entries, persist state.
             dtaci_diagnostics: dict[str, Any] = {}
             if self.enable_dtaci_dk:
                 self._dtaci_init_bundles()

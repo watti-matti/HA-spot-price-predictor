@@ -201,6 +201,23 @@ def test_from_dict_rejects_wrong_version():
         DkDtACIBundle.from_dict({"version": 99, "instances": {}})
 
 
+def test_dtaci_scoped_to_fi_only():
+    """v2.11.8 de-scoped DtACI to FI: the neighbour-zone (SE1/SE3/EE)
+    bundles were redundant (never fed) and were removed. Guard against a
+    silent regression back to a 4-zone deployment, and confirm the
+    coordinator cleans up stale neighbour-zone state files."""
+    const_src = (_PKG / "const.py").read_text(encoding="utf-8")
+    assert 'DTACI_ZONES = ("fi",)' in const_src, (
+        "DtACI must be scoped to FI only; neighbour-zone bundles were "
+        "removed as redundant")
+    assert 'DTACI_ZONES = ("fi", "se1"' not in const_src
+
+    coord_src = (_PKG / "coordinator.py").read_text(encoding="utf-8")
+    # Stale neighbour-zone state files are cleaned up on init.
+    assert "dtaci_dk_*.json" in coord_src and "zone not in DTACI_ZONES" in coord_src, (
+        "coordinator must remove stale de-scoped zone state files on init")
+
+
 def test_to_dict_writes_schema_v2():
     """Persisted state advertises the v2 (24-level) schema."""
     assert DkDtACIBundle().to_dict()["version"] == 2

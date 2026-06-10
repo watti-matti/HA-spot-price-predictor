@@ -80,7 +80,7 @@ def _device_info(entry: ConfigEntry) -> dict[str, Any]:
         "name": "Spot Price Predictor",
         "manufacturer": "watti-matti",
         "model": "Spot Price Predictor",
-        "sw_version": "2.11.6",
+        "sw_version": "2.11.8",
     }
 
 
@@ -486,10 +486,10 @@ class DurationForecastSensor(CoordinatorEntity, SensorEntity):
             #   "ready (24/24 warm)"
             #   "warming up (3/24 warm — needs ~2 more daily updates)"
             #   "cold start (0/24 warm)"
-            # Logic: scan all 4 zones (fi/se1/se3/ee), report the
-            # min(n_updates) seen and how many of the 4 × 24 = 96
-            # instances are warm. The most-lagging instance dictates
-            # whether the global state is "ready" or "warming".
+            # Logic: scan the configured zone(s) — FI only since v2.11.8 —
+            # reporting the min(n_updates) seen and how many of the
+            # 2 × 24 = 48 instances are warm. The most-lagging instance
+            # dictates whether the global state is "ready" or "warming".
             zones = diag.get("zones") or {}
             min_updates: int | None = None
             warm_total = 0
