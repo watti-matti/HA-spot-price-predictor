@@ -349,7 +349,33 @@ views:
                 borderColor: "rgba(120,120,120,0.25)"
                 yaxis:
                   lines:
-                    show: true
+                    show: false          # 10 c anchors come from annotations below
+              # Highlighted 10 c/kWh scale indicators. The 0-line (breakeven)
+              # is solid + emphasized; the 10/20/30/40 lines are dashed.
+              # NOTE: these live under apex_config.annotations.yaxis — NOT the
+              # card-level `yaxis:` axis list — or the colors won't apply.
+              annotations:
+                yaxis:
+                  - y: 0
+                    borderColor: "#374151"
+                    borderWidth: 2
+                    strokeDashArray: 0
+                  - y: 10
+                    borderColor: "#60a5fa"
+                    borderWidth: 1
+                    strokeDashArray: 4
+                  - y: 20
+                    borderColor: "#60a5fa"
+                    borderWidth: 1
+                    strokeDashArray: 4
+                  - y: 30
+                    borderColor: "#60a5fa"
+                    borderWidth: 1
+                    strokeDashArray: 4
+                  - y: 40
+                    borderColor: "#60a5fa"
+                    borderWidth: 1
+                    strokeDashArray: 4
               stroke:
                 width: 4
                 curve: smooth
