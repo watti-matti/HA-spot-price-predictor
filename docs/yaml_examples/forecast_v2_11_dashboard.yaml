@@ -376,6 +376,20 @@ views:
                     borderColor: "#60a5fa"
                     borderWidth: 1
                     strokeDashArray: 4
+              xaxis:
+                type: datetime
+                # Center each day's label UNDER its noon data point instead of
+                # on the midnight day boundary: shift the visible range to
+                # [first-day 12:00 … last-day 12:00] and place one tick per day,
+                # so the ticks coincide exactly with the (noon) data points.
+                tickAmount: 6
+                min: |
+                  EVAL: function (min) { return min + 12 * 3600000; }
+                max: |
+                  EVAL: function (max) { return max - 12 * 3600000; }
+                labels:
+                  datetimeUTC: false
+                  format: ddd dd.MM
               stroke:
                 width: 4
                 curve: smooth
