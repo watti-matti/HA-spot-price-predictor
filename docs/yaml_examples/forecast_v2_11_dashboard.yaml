@@ -40,7 +40,7 @@
 # Cards are responsive and work on phone-width.
 # ════════════════════════════════════════════════════════════════════════
 
-title: Spot price forecast (v2.11.0)
+title: Spot price forecast (v2.11)
 views:
   - title: Forecast
     path: forecast
@@ -316,6 +316,226 @@ views:
                   if (!today) return [];
                   const b = new Date(); b.setHours(0,0,0,0); const base = b.getTime();
                   return today.dk_peak_eur_kwh.map((v, i) => [base + i*3600000, v * 100]);
+
+          # ── 2b. 7-day duration overview: cheap/peak + PV-compensated ───
+          #   Solid = grid consumer price; dashed (stroke_dash 2) = PV-aware.
+          #   Y-axis is dynamic but snaps to 10 c/kWh with horizontal grid
+          #   anchors; min always includes 0 so negative (export) values show.
+          - type: custom:apexcharts-card
+            header:
+              show: true
+              title: "Daily Cost by Usage Duration — 7 day (c/kWh)"
+              show_states: false
+            graph_span: 7d
+            span:
+              start: day
+            yaxis:
+              - id: dk
+                decimals: 1
+                apex_config:
+                  forceNiceScale: true
+                  min: |
+                    EVAL: function (min) { return Math.floor(Math.min(min, 0) / 10) * 10; }
+                  max: |
+                    EVAL: function (max) { return Math.ceil(max / 10) * 10; }
+                  labels:
+                    formatter: |
+                      EVAL: function (val) { return val.toFixed(0); }
+            apex_config:
+              chart:
+                height: 600
+              grid:
+                show: true
+                borderColor: "rgba(120,120,120,0.25)"
+                yaxis:
+                  lines:
+                    show: true
+              stroke:
+                width: 4
+                curve: smooth
+              legend:
+                show: true
+                position: top
+                formatter: |
+                  EVAL: function(seriesName, opts) {
+                    var series = opts.w.config.series[opts.seriesIndex];
+                    if (!series || !series.data || series.data.length === 0) {
+                      return seriesName;
+                    }
+                    var firstPoint = series.data[1];
+                    var v = Array.isArray(firstPoint) ? firstPoint[1] : firstPoint;
+                    return seriesName + ': ' + (v != null ? v.toFixed(1) + ' c/kWh' : '–');
+                  }
+              markers:
+                size: 4
+              tooltip:
+                shared: true
+                x:
+                  format: dddd
+            series:
+              - entity: sensor.spot_price_predictor_duration_forecast
+                name: Peak(1)
+                yaxis_id: dk
+                type: line
+                float_precision: 1
+                unit: " c/kWh"
+                color: "#22d3ee"
+                curve: straight
+                stroke_dash: 5
+                show:
+                  legend_value: false
+                data_generator: >
+                  const dk = entity.attributes.daily_forecast; if (!dk) return []; return
+                  dk.map((d) => [new Date(d.date + 'T12:00:00').getTime(),
+                  d.dk_peak_eur_kwh[0] * 100]);
+              - entity: sensor.spot_price_predictor_duration_forecast
+                name: Peak(4)
+                yaxis_id: dk
+                type: line
+                float_precision: 1
+                unit: " c/kWh"
+                color: "#facc15"
+                curve: straight
+                stroke_dash: 5
+                show:
+                  legend_value: false
+                data_generator: >
+                  const dk = entity.attributes.daily_forecast; if (!dk) return []; return
+                  dk.map((d) => [new Date(d.date + 'T12:00:00').getTime(),
+                  d.dk_peak_eur_kwh[3] * 100]);
+              - entity: sensor.spot_price_predictor_duration_forecast
+                name: Peak(8)
+                yaxis_id: dk
+                type: line
+                float_precision: 1
+                unit: " c/kWh"
+                color: "#f97316"
+                curve: straight
+                stroke_dash: 5
+                show:
+                  legend_value: false
+                data_generator: >
+                  const dk = entity.attributes.daily_forecast; if (!dk) return []; return
+                  dk.map((d) => [new Date(d.date + 'T12:00:00').getTime(),
+                  d.dk_peak_eur_kwh[7] * 100]);
+              - entity: sensor.spot_price_predictor_duration_forecast
+                name: Average(24)
+                yaxis_id: dk
+                type: line
+                float_precision: 1
+                unit: " c/kWh"
+                color: "#ef4444"
+                curve: straight
+                stroke_dash: 5
+                show:
+                  legend_value: false
+                data_generator: >
+                  const dk = entity.attributes.daily_forecast; if (!dk) return []; return
+                  dk.map((d) => [new Date(d.date + 'T12:00:00').getTime(),
+                  d.dk_peak_eur_kwh[23] * 100]);
+              - entity: sensor.spot_price_predictor_duration_forecast
+                name: Cheap(8)
+                yaxis_id: dk
+                type: line
+                float_precision: 1
+                unit: " c/kWh"
+                color: "#f97316"
+                show:
+                  legend_value: false
+                data_generator: >
+                  const dk = entity.attributes.daily_forecast; if (!dk) return []; return
+                  dk.map((d) => [new Date(d.date + 'T12:00:00').getTime(),
+                  d.dk_cheap_eur_kwh[7] * 100]);
+              - entity: sensor.spot_price_predictor_duration_forecast
+                name: Cheap(4)
+                yaxis_id: dk
+                type: line
+                float_precision: 1
+                unit: " c/kWh"
+                color: "#facc15"
+                show:
+                  legend_value: false
+                data_generator: >
+                  const dk = entity.attributes.daily_forecast; if (!dk) return []; return
+                  dk.map((d) => [new Date(d.date + 'T12:00:00').getTime(),
+                  d.dk_cheap_eur_kwh[3] * 100]);
+              - entity: sensor.spot_price_predictor_duration_forecast
+                name: Cheapest(1)
+                yaxis_id: dk
+                type: line
+                float_precision: 1
+                unit: " c/kWh"
+                color: "#22d3ee"
+                show:
+                  legend_value: false
+                data_generator: >
+                  const dk = entity.attributes.daily_forecast; if (!dk) return []; return
+                  dk.map((d) => [new Date(d.date + 'T12:00:00').getTime(),
+                  d.dk_cheap_eur_kwh[0] * 100]);
+              - entity: sensor.spot_price_predictor_duration_forecast
+                name: Average(24) PV
+                yaxis_id: dk
+                type: line
+                float_precision: 1
+                unit: " c/kWh"
+                color: "#ef4444"
+                curve: straight
+                stroke_dash: 2
+                show:
+                  legend_value: false
+                data_generator: >
+                  const dk = entity.attributes.daily_forecast; if (!dk) return []; return
+                  dk.filter((d) => Array.isArray(d.dk_peak_pv_eur_kwh) &&
+                  d.dk_peak_pv_eur_kwh.length === 24).map((d) => [new Date(d.date +
+                  'T12:00:00').getTime(), d.dk_peak_pv_eur_kwh[23] * 100]);
+              - entity: sensor.spot_price_predictor_duration_forecast
+                name: Cheap(8) PV
+                yaxis_id: dk
+                type: line
+                float_precision: 1
+                unit: " c/kWh"
+                color: "#f97316"
+                curve: straight
+                stroke_dash: 2
+                show:
+                  legend_value: false
+                data_generator: >
+                  const dk = entity.attributes.daily_forecast; if (!dk) return []; return
+                  dk.filter((d) => Array.isArray(d.dk_cheap_pv_eur_kwh) &&
+                  d.dk_cheap_pv_eur_kwh.length === 24).map((d) => [new Date(d.date +
+                  'T12:00:00').getTime(), d.dk_cheap_pv_eur_kwh[7] * 100]);
+              - entity: sensor.spot_price_predictor_duration_forecast
+                name: Cheap(4) PV
+                yaxis_id: dk
+                type: line
+                float_precision: 1
+                unit: " c/kWh"
+                color: "#facc15"
+                curve: straight
+                stroke_dash: 2
+                show:
+                  legend_value: false
+                data_generator: >
+                  const dk = entity.attributes.daily_forecast; if (!dk) return []; return
+                  dk.filter((d) => Array.isArray(d.dk_cheap_pv_eur_kwh) &&
+                  d.dk_cheap_pv_eur_kwh.length === 24).map((d) => [new Date(d.date +
+                  'T12:00:00').getTime(), d.dk_cheap_pv_eur_kwh[3] * 100]);
+              - entity: sensor.spot_price_predictor_duration_forecast
+                name: Cheapest(1) PV
+                yaxis_id: dk
+                type: line
+                float_precision: 1
+                unit: " c/kWh"
+                color: "#22d3ee"
+                curve: straight
+                stroke_dash: 2
+                show:
+                  legend_value: false
+                data_generator: >
+                  const dk = entity.attributes.daily_forecast; if (!dk) return []; return
+                  dk.filter((d) => Array.isArray(d.dk_cheap_pv_eur_kwh) &&
+                  d.dk_cheap_pv_eur_kwh.length === 24).map((d) => [new Date(d.date +
+                  'T12:00:00').getTime(), d.dk_cheap_pv_eur_kwh[0] * 100]);
 
           # ── 3. PV-aware daily CVaR strip (v2.11.0) ─────────────────────
           - type: custom:apexcharts-card
