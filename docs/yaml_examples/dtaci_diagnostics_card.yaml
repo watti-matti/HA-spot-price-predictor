@@ -312,27 +312,32 @@ views:
               Awaiting first reconciliation cycle. Each forecast/actual day-pair adds one update; full warm-up takes ~14 days.
               {% endif %}
 
-          # ── Neighbour zones (research diagnostic) ────────────────────
+          # ── Plain-language status (for non-technical users) ──────────
+          # FI-only by construction: reads the dtaci_fi_* scalars, so no
+          # neighbour zones can appear here even on a pre-v2.11.8 install
+          # that still emits se1/se3/ee in dtaci_diagnostics.zones.
           - type: markdown
             content: |
-              ### Calibration summary
-              {% set d = state_attr("sensor.spot_price_predictor_duration_forecast", "dtaci_diagnostics") %}
-              {% if d and d.zones %}
-              <table style="width:100%; border-collapse:collapse; margin-top:8px;">
-              <colgroup><col style="width:18%"><col style="width:22%"><col style="width:30%"><col style="width:30%"></colgroup>
-              <thead><tr style="background:#374151; color:#fff;">
-              <th style="padding:6px; text-align:left;">Zone</th>
-              <th style="padding:6px; text-align:right;">Warm / Total</th>
-              <th style="padding:6px; text-align:right;">Mean coverage</th>
-              <th style="padding:6px; text-align:right;">Mean width</th>
-              </tr></thead>
-              <tbody>
-              {# DtACI is FI-only since v2.11.8; iterate whatever zones exist. #}
-              {% for zone, z in d.zones.items() %}<tr><td style="padding:5px 8px;"><b>{{ zone | upper }}</b></td><td style="padding:5px 8px; text-align:right;">{{ z.n_warm_instances }} / {{ z.n_total_instances }}</td><td style="padding:5px 8px; text-align:right;">{{ (z.mean_coverage * 100) | round(1) }} %</td><td style="padding:5px 8px; text-align:right;">{{ z.mean_width | round(3) }}</td></tr>{% endfor %}
-              </tbody>
-              </table>
+              ### Calibration status
+              {% set ent = "sensor.spot_price_predictor_duration_forecast" %}
+              {% set status = state_attr(ent, "dtaci_warmup_status") %}
+              {% set cov = state_attr(ent, "dtaci_fi_mean_coverage") %}
+              {% set warm = state_attr(ent, "dtaci_fi_warm_instances") %}
+              {% set total = state_attr(ent, "dtaci_fi_total_instances") %}
+              {% if status %}
+              **{{ status }}**
+
+              The price-band calibration (FI) learns from each day's realised
+              prices, targeting **90 %** coverage — the true daily cost should
+              land inside the band ~9 days out of 10. It currently sits at
+              **{{ (cov * 100) | round(1) if cov is not none else '–' }} %**
+              ({{ warm }}/{{ total }} statistics warmed up). Until warm-up
+              finishes (~5–7 days) the bands stay at the point forecast — that
+              is intentional, not an error. The charts above are an advanced
+              diagnostic; you don't need them for day-to-day use.
               {% else %}
-              _DtACI not yet enabled or coordinator hasn't completed first cycle._
+              _DtACI not yet enabled, or the coordinator hasn't completed its
+              first cycle._
               {% endif %}
 
           # ── Reference / threshold table ──────────────────────────────
