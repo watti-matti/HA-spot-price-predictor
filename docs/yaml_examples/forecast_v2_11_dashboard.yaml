@@ -381,13 +381,14 @@ views:
                 labels:
                   datetimeUTC: false
                   format: ddd dd.MM
-                  # Data points are at noon, but datetime ticks land on the
-                  # midnight day boundary. NOTE: xaxis.min/max CANNOT be
-                  # functions in ApexCharts (only yaxis can), so we can't
-                  # shift the range — instead nudge the labels right by ~half
-                  # a day in pixels to sit under the noon points. Tune offsetX
-                  # to your card width (positive = right).
-                  offsetX: 35
+                  # Labels sit at the midnight day boundary; data points are
+                  # plotted at noon. There is NO resolution-independent way to
+                  # center datetime labels under arbitrary point positions in
+                  # apexcharts-card (xaxis.min/max can't be functions, a fixed
+                  # offsetX is pixel-hardcoded and breaks across screen sizes).
+                  # Boundary labels are responsive and standard for HA time
+                  # charts. For exact, resize-proof centering, a card with a
+                  # native category axis (e.g. plotly-graph-card) is required.
               stroke:
                 width: 4
                 curve: smooth
