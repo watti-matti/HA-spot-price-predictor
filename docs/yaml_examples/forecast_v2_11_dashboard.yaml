@@ -378,18 +378,16 @@ views:
                     strokeDashArray: 4
               xaxis:
                 type: datetime
-                # Center each day's label UNDER its noon data point instead of
-                # on the midnight day boundary: shift the visible range to
-                # [first-day 12:00 … last-day 12:00] and place one tick per day,
-                # so the ticks coincide exactly with the (noon) data points.
-                tickAmount: 6
-                min: |
-                  EVAL: function (min) { return min + 12 * 3600000; }
-                max: |
-                  EVAL: function (max) { return max - 12 * 3600000; }
                 labels:
                   datetimeUTC: false
                   format: ddd dd.MM
+                  # Data points are at noon, but datetime ticks land on the
+                  # midnight day boundary. NOTE: xaxis.min/max CANNOT be
+                  # functions in ApexCharts (only yaxis can), so we can't
+                  # shift the range — instead nudge the labels right by ~half
+                  # a day in pixels to sit under the noon points. Tune offsetX
+                  # to your card width (positive = right).
+                  offsetX: 35
               stroke:
                 width: 4
                 curve: smooth
