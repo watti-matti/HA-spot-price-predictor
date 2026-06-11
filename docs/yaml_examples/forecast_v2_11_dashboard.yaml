@@ -656,19 +656,29 @@ views:
                   title:
                     text: c/kWh
             series:
+              # Grouped bars per day: expected (mean) vs worst-5% (CVaR₉₅).
+              # The gap = the PV-production downside risk.
               - entity: sensor.spot_price_predictor_duration_forecast
-                name: CVaR₉₅ (worst-5% expected cost)
+                name: Expected (mean)
                 yaxis_id: cvar
                 type: column
-                color_threshold:
-                  - value: 0
-                    color: "#16a34a"
-                  - value: 15
-                    color: "#eab308"
-                  - value: 22
-                    color: "#f97316"
-                  - value: 30
-                    color: "#dc2626"
+                color: "#16a34a"
+                show:
+                  legend_value: false
+                data_generator: |
+                  const days = entity.attributes.daily_forecast;
+                  if (!days) return [];
+                  return days
+                    .filter(d => d.pv_aware_mean_eur_kwh != null)
+                    .map(d => [
+                      new Date(d.date + 'T12:00:00').getTime(),
+                      d.pv_aware_mean_eur_kwh * 100
+                    ]);
+              - entity: sensor.spot_price_predictor_duration_forecast
+                name: Worst-5% (CVaR₉₅)
+                yaxis_id: cvar
+                type: column
+                color: "#f97316"
                 show:
                   legend_value: false
                 data_generator: |
@@ -679,6 +689,102 @@ views:
                     .map(d => [
                       new Date(d.date + 'T12:00:00').getTime(),
                       d.pv_aware_cvar95_eur_kwh * 100
+                    ]);
+
+          # ── 3b. PV cost reduction: with vs without PV ──────────────────
+          - type: custom:apexcharts-card
+            header:
+              show: true
+              title: "Daily cost — with vs without PV (c/kWh)"
+            graph_span: 7d
+            span:
+              start: day
+            apex_config:
+              chart:
+                height: 240px
+                type: bar
+              grid:
+                show: true
+                borderColor: "rgba(120,120,120,0.25)"
+                yaxis:
+                  lines:
+                    show: false
+              annotations:
+                yaxis:
+                  - y: 0
+                    borderColor: "#374151"
+                    borderWidth: 2
+                    strokeDashArray: 0
+                  - y: 10
+                    borderColor: "#60a5fa"
+                    borderWidth: 1
+                    strokeDashArray: 4
+                  - y: 20
+                    borderColor: "#60a5fa"
+                    borderWidth: 1
+                    strokeDashArray: 4
+                  - y: 30
+                    borderColor: "#60a5fa"
+                    borderWidth: 1
+                    strokeDashArray: 4
+                  - y: 40
+                    borderColor: "#60a5fa"
+                    borderWidth: 1
+                    strokeDashArray: 4
+              tooltip:
+                x:
+                  format: ddd dd.MM
+                y:
+                  formatter: |
+                    EVAL: function (val) { return val.toFixed(2) + ' c/kWh'; }
+            yaxis:
+              - id: cost
+                decimals: 1
+                apex_config:
+                  forceNiceScale: true
+                  min: |
+                    EVAL: function (min) { return Math.floor(Math.min(min, 0) / 10) * 10; }
+                  max: |
+                    EVAL: function (max) { return Math.ceil(max / 10) * 10; }
+                  labels:
+                    formatter: |
+                      EVAL: function (val) { return val.toFixed(0); }
+                  title:
+                    text: c/kWh
+            series:
+              # No-PV grid baseline vs PV-aware expected cost. The gap = the
+              # expected saving PV delivers that day.
+              - entity: sensor.spot_price_predictor_duration_forecast
+                name: Without PV (grid)
+                yaxis_id: cost
+                type: column
+                color: "#9ca3af"
+                show:
+                  legend_value: false
+                data_generator: |
+                  const days = entity.attributes.daily_forecast;
+                  if (!days) return [];
+                  return days
+                    .filter(d => d.grid_cost_eur_kwh != null)
+                    .map(d => [
+                      new Date(d.date + 'T12:00:00').getTime(),
+                      d.grid_cost_eur_kwh * 100
+                    ]);
+              - entity: sensor.spot_price_predictor_duration_forecast
+                name: With PV (expected)
+                yaxis_id: cost
+                type: column
+                color: "#16a34a"
+                show:
+                  legend_value: false
+                data_generator: |
+                  const days = entity.attributes.daily_forecast;
+                  if (!days) return [];
+                  return days
+                    .filter(d => d.pv_aware_mean_eur_kwh != null)
+                    .map(d => [
+                      new Date(d.date + 'T12:00:00').getTime(),
+                      d.pv_aware_mean_eur_kwh * 100
                     ]);
 
           # ── 4. PV-aware diagnostics summary ────────────────────────────

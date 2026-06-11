@@ -1979,14 +1979,7 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                             _np.array(day_pvs),
                             _np.array(day_cons),
                         )
-                        # Per the audit in
-                        # studies/results/pv_adjusted_buy_sell_duration_curves.md
-                        # the published Phase-D surface is the four
-                        # genuinely-new fields: tail-risk number, the
-                        # two PV bookkeeping diagnostics, and the
-                        # provenance flag. mean / quantiles / EUR totals
-                        # are derivable from existing fields and not
-                        # republished.
+                        # Tail-risk number + PV bookkeeping + provenance.
                         day_entry["pv_aware_cvar95_eur_kwh"] = round(
                             cvar["cvar95_eur_kwh"], 4)
                         day_entry["pv_aware_self_consumed_kwh"] = round(
@@ -1994,6 +1987,26 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                         day_entry["pv_aware_exported_kwh"] = round(
                             cvar["pv_exported_kwh"], 2)
                         day_entry["pv_aware_data_provenance"] = profile_used
+                        # v2.11.9: also publish the kernel's expected value
+                        # and fan-chart quantiles (already computed) so
+                        # dashboards can show expected-vs-worst-case risk.
+                        day_entry["pv_aware_mean_eur_kwh"] = round(
+                            cvar["mean_eur_kwh"], 4)
+                        day_entry["pv_aware_p5_eur_kwh"] = round(
+                            cvar["p5_eur_kwh"], 4)
+                        day_entry["pv_aware_p95_eur_kwh"] = round(
+                            cvar["p95_eur_kwh"], 4)
+                        # Deterministic NO-PV baseline (consumption-weighted
+                        # consumer price; no self-consumption, no export) so
+                        # dashboards can show the with-vs-without-PV saving.
+                        # With pv=0 the CVaR kernel is degenerate (no spread),
+                        # so this equals the grid mean — computed directly.
+                        _cons_sum = float(sum(day_cons))
+                        if _cons_sum > 0:
+                            _grid_cost = float(sum(
+                                c * b for c, b in zip(day_cons, day_buys)
+                            )) / _cons_sum
+                            day_entry["grid_cost_eur_kwh"] = round(_grid_cost, 4)
                 except Exception as exc:  # noqa: BLE001
                     _LOGGER.debug(
                         "PV-aware CVaR skipped for %s: %s", date_str, exc,
