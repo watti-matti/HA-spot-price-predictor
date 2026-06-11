@@ -260,6 +260,12 @@ views:
                   title:
                     text: c/kWh
             series:
+              # All three lines resolve the SAME day via an identical
+              # predicate (prefer today, else the first FORECAST day) so grid
+              # and PV-aware are read from the same prices. Independent
+              # fallbacks would let the grid line land on a historical day
+              # while PV lands on a forecast day, making PV-aware appear
+              # higher than grid — impossible when self-consumed PV is free.
               - entity: sensor.spot_price_predictor_duration_forecast
                 name: cheap k-h (grid)
                 yaxis_id: price
@@ -273,11 +279,13 @@ views:
                   if (!days || !days.length) return [];
                   const t = new Date();
                   const iso = `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`;
-                  const today = days.find(d => d.date === iso && d.dk_cheap_eur_kwh)
-                             || days.find(d => d.dk_cheap_eur_kwh);
-                  if (!today) return [];
+                  const has = d => d.dk_cheap_eur_kwh && d.dk_peak_eur_kwh;
+                  const day = days.find(d => d.date === iso && has(d))
+                           || days.find(d => d.source === 'forecast' && has(d))
+                           || days.find(has);
+                  if (!day) return [];
                   const b = new Date(); b.setHours(0,0,0,0); const base = b.getTime();
-                  return today.dk_cheap_eur_kwh.map((v, i) => [base + i*3600000, v * 100]);
+                  return day.dk_cheap_eur_kwh.map((v, i) => [base + i*3600000, v * 100]);
               - entity: sensor.spot_price_predictor_duration_forecast
                 name: cheap k-h (PV-aware)
                 yaxis_id: price
@@ -292,11 +300,13 @@ views:
                   if (!days || !days.length) return [];
                   const t = new Date();
                   const iso = `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`;
-                  const today = days.find(d => d.date === iso && d.dk_cheap_pv_eur_kwh)
-                             || days.find(d => d.dk_cheap_pv_eur_kwh);
-                  if (!today) return [];
+                  const has = d => d.dk_cheap_eur_kwh && d.dk_peak_eur_kwh;
+                  const day = days.find(d => d.date === iso && has(d))
+                           || days.find(d => d.source === 'forecast' && has(d))
+                           || days.find(has);
+                  if (!day || !day.dk_cheap_pv_eur_kwh) return [];
                   const b = new Date(); b.setHours(0,0,0,0); const base = b.getTime();
-                  return today.dk_cheap_pv_eur_kwh.map((v, i) => [base + i*3600000, v * 100]);
+                  return day.dk_cheap_pv_eur_kwh.map((v, i) => [base + i*3600000, v * 100]);
               - entity: sensor.spot_price_predictor_duration_forecast
                 name: peak k-h (grid)
                 yaxis_id: price
@@ -311,11 +321,13 @@ views:
                   if (!days || !days.length) return [];
                   const t = new Date();
                   const iso = `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`;
-                  const today = days.find(d => d.date === iso && d.dk_peak_eur_kwh)
-                             || days.find(d => d.dk_peak_eur_kwh);
-                  if (!today) return [];
+                  const has = d => d.dk_cheap_eur_kwh && d.dk_peak_eur_kwh;
+                  const day = days.find(d => d.date === iso && has(d))
+                           || days.find(d => d.source === 'forecast' && has(d))
+                           || days.find(has);
+                  if (!day) return [];
                   const b = new Date(); b.setHours(0,0,0,0); const base = b.getTime();
-                  return today.dk_peak_eur_kwh.map((v, i) => [base + i*3600000, v * 100]);
+                  return day.dk_peak_eur_kwh.map((v, i) => [base + i*3600000, v * 100]);
 
           # ── 2b. 7-day duration overview: cheap/peak + PV-compensated ───
           #   Solid = grid consumer price; dashed (stroke_dash 2) = PV-aware.
