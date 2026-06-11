@@ -580,7 +580,9 @@ views:
           - type: custom:apexcharts-card
             header:
               show: true
-              title: "7-day PV-aware risk forecast (CVaR₉₅)"
+              # Layman framing of CVaR₉₅ (mean cost in the worst 5% of
+              # joint price+PV scenarios) = "what a bad day could cost".
+              title: "Cost on a bad day — 7-day risk outlook (c/kWh)"
             graph_span: 7d
             span:
               start: day
@@ -588,6 +590,34 @@ views:
               chart:
                 height: 240px
                 type: bar
+              grid:
+                show: true
+                borderColor: "rgba(120,120,120,0.25)"
+                yaxis:
+                  lines:
+                    show: false
+              annotations:
+                yaxis:
+                  - y: 0
+                    borderColor: "#374151"
+                    borderWidth: 2
+                    strokeDashArray: 0
+                  - y: 10
+                    borderColor: "#60a5fa"
+                    borderWidth: 1
+                    strokeDashArray: 4
+                  - y: 20
+                    borderColor: "#60a5fa"
+                    borderWidth: 1
+                    strokeDashArray: 4
+                  - y: 30
+                    borderColor: "#60a5fa"
+                    borderWidth: 1
+                    strokeDashArray: 4
+                  - y: 40
+                    borderColor: "#60a5fa"
+                    borderWidth: 1
+                    strokeDashArray: 4
               plotOptions:
                 bar:
                   horizontal: false
@@ -611,8 +641,18 @@ views:
               - id: cvar
                 decimals: 1
                 apex_config:
+                  # Always include 0 (Math.min(min,0)) so the baseline shows
+                  # even when all bars are positive; snap to 10 c steps.
+                  forceNiceScale: true
+                  min: |
+                    EVAL: function (min) { return Math.floor(Math.min(min, 0) / 10) * 10; }
+                  max: |
+                    EVAL: function (max) { return Math.ceil(max / 10) * 10; }
+                  labels:
+                    formatter: |
+                      EVAL: function (val) { return val.toFixed(0); }
                   title:
-                    text: CVaR₉₅ c/kWh
+                    text: c/kWh
             series:
               - entity: sensor.spot_price_predictor_duration_forecast
                 name: CVaR₉₅ (worst-5% expected cost)
