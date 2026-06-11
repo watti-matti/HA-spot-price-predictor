@@ -580,9 +580,9 @@ views:
           - type: custom:apexcharts-card
             header:
               show: true
-              # Layman framing of CVaR₉₅ (mean cost in the worst 5% of
-              # joint price+PV scenarios) = "what a bad day could cost".
-              title: "Cost on a bad day — 7-day risk outlook (c/kWh)"
+              # CVaR₉₅ = mean cost across the worst 5% of joint price+PV
+              # scenarios (NOT a single 5%-probability value — that's VaR).
+              title: "CVaR₉₅ price risk (average cost in the worst 5% of cases)"
             graph_span: 7d
             span:
               start: day
