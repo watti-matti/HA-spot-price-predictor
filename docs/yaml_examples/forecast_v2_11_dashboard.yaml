@@ -580,9 +580,11 @@ views:
           - type: custom:apexcharts-card
             header:
               show: true
-              # CVaR₉₅ = mean cost across the worst 5% of joint price+PV
-              # scenarios (NOT a single 5%-probability value — that's VaR).
-              title: "CVaR₉₅ price risk (average cost in the worst 5% of cases)"
+              # This is the PV-AWARE CVaR (pv_aware_cvar95_eur_kwh) — the
+              # only CVaR the integration publishes. CVaR₉₅ = mean cost
+              # across the worst 5% of scenarios (NOT a 5%-probability value,
+              # which would be VaR).
+              title: "PV aware CVaR₉₅ price risk (avg of the worst 5% of days)"
             graph_span: 7d
             span:
               start: day
