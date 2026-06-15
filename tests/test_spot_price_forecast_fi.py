@@ -32,7 +32,8 @@ def _stub_ha_and_load_sensor():
     _fake("homeassistant")
     _fake("homeassistant.components")
     _fake("homeassistant.components.sensor",
-            SensorDeviceClass=SimpleNamespace(MONETARY="monetary"),
+            SensorDeviceClass=SimpleNamespace(
+                MONETARY="monetary", WIND_SPEED="wind_speed"),
             SensorEntity=object,
             SensorStateClass=SimpleNamespace(
                 MEASUREMENT="measurement", TOTAL="total"),
@@ -50,10 +51,14 @@ def _stub_ha_and_load_sensor():
     _fake("homeassistant.helpers.update_coordinator",
             CoordinatorEntity=_FakeCoordinatorEntity)
 
-    # const.py imports homeassistant.const for Platform; stub it.
+    # const.py imports homeassistant.const for Platform; sensor.py imports
+    # UnitOfSpeed. Stub both.
     class _Platform:
         SENSOR = "sensor"
-    _fake("homeassistant.const", Platform=_Platform)
+
+    class _UnitOfSpeed:
+        METERS_PER_SECOND = "m/s"
+    _fake("homeassistant.const", Platform=_Platform, UnitOfSpeed=_UnitOfSpeed)
 
     # const.py is plain Python — load directly.
     spec = importlib.util.spec_from_file_location(
@@ -246,3 +251,43 @@ def test_native_value_none_when_current_spot_missing(sensor_module):
     s = sensor_module.SpotPriceForecastSensor(coord, _make_entry())
     # current_spot_eur_mwh missing → native_value is None
     assert s.native_value is None
+
+
+# ── Effective Wind Speed sensor ─────────────────────────────────────
+
+def test_wind_sensor_state_and_forecast(sensor_module):
+    coord = MagicMock()
+    coord.data = {
+        "current_wind": 5.4,
+        "forecast": [
+            {"timestamp": "2026-04-15T00:00:00+00:00", "wind": 5.4},
+            {"timestamp": "2026-04-15T01:00:00+00:00", "wind": 6.1},
+            {"timestamp": "2026-04-15T02:00:00+00:00", "spot_eur_mwh": 50.0},  # no wind
+        ],
+        "last_update": "2026-04-15T00:00:00+00:00",
+    }
+    s = sensor_module.EffectiveWindSpeedSensor(coord, _make_entry())
+    assert s.native_value == pytest.approx(5.4)
+    attrs = s.extra_state_attributes
+    # Only entries carrying wind are surfaced.
+    assert len(attrs["forecast"]) == 2
+    assert attrs["forecast"][0] == {"timestamp": "2026-04-15T00:00:00+00:00", "wind": 5.4}
+    assert attrs["forecast_hours"] == 2
+    assert attrs["height_m"] == 120
+    assert s._attr_native_unit_of_measurement == "m/s"
+    assert s._attr_device_class == "wind_speed"
+
+
+def test_wind_sensor_none_without_data(sensor_module):
+    coord = MagicMock()
+    coord.data = None
+    s = sensor_module.EffectiveWindSpeedSensor(coord, _make_entry())
+    assert s.native_value is None
+    assert s.extra_state_attributes == {}
+
+
+def test_wind_sensor_registered_in_setup(sensor_module):
+    """Defensive: the sensor must be in the always-created entities list."""
+    import inspect
+    src = inspect.getsource(sensor_module.async_setup_entry)
+    assert "EffectiveWindSpeedSensor(coordinator, entry)" in src

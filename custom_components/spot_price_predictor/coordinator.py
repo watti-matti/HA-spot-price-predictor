@@ -1415,6 +1415,10 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
             result = {
                 "current_consumer_eur_kwh": forecast[0]["consumer_eur_kwh"] if forecast else 0.0,
                 "current_spot_eur_mwh": forecast[0]["spot_eur_mwh"] if forecast else 0.0,
+                # Model's current capacity-weighted effective wind (120 m hub
+                # height, FI wind regions) — surfaced as its own sensor so
+                # downstream consumers don't re-fetch Open-Meteo.
+                "current_wind": forecast[0].get("wind") if forecast else None,
                 "forecast": combined_forecast,
                 "duration_forecast": duration_forecast,
                 "dtaci_diagnostics": dtaci_diagnostics,

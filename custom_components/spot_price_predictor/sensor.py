@@ -22,6 +22,7 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import UnitOfSpeed
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -61,6 +62,7 @@ async def async_setup_entry(
         PriceForecastSensor(coordinator, entry),
         SpotPriceForecastSensor(coordinator, entry),
         DurationForecastSensor(coordinator, entry),
+        EffectiveWindSpeedSensor(coordinator, entry),
     ]
 
     # Add Nordpool-derived sensors if entity is configured
@@ -179,6 +181,66 @@ class PriceForecastSensor(CoordinatorEntity, SensorEntity):
                         sum(eff) / len(eff), 4)
                     attrs["week_max_effective_eur_kwh"] = round(max(eff), 4)
 
+        attrs.update(_status_attributes(data))
+        return attrs
+
+    @property
+    def device_info(self) -> dict[str, Any]:
+        return _device_info(self._entry)
+
+
+class EffectiveWindSpeedSensor(CoordinatorEntity, SensorEntity):
+    """Model's capacity-weighted effective wind speed (FI wind regions).
+
+    This is Open-Meteo `wind_speed_120m` (turbine hub height) aggregated
+    capacity-weighted across the Finnish wind regions and used as a
+    price-model feature — NOT local surface wind. Exposed as its own
+    sensor so downstream consumers (dashboards, optimisers like ENP) can
+    read the model's effective wind without making their own Open-Meteo
+    calls.
+
+    State: current-hour effective wind speed (m/s).
+    Attributes:
+      forecast: [{timestamp, wind}, ...] over the forecast horizon (m/s).
+    """
+
+    _attr_has_entity_name = True
+    _attr_name = "Effective Wind Speed"
+    _attr_native_unit_of_measurement = UnitOfSpeed.METERS_PER_SECOND
+    _attr_device_class = SensorDeviceClass.WIND_SPEED
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:weather-windy"
+    _attr_suggested_display_precision = 1
+
+    def __init__(self, coordinator: SpotPriceCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_effective_wind_speed"
+        self._entry = entry
+
+    @property
+    def native_value(self) -> float | None:
+        if self.coordinator.data:
+            return self.coordinator.data.get("current_wind")
+        return None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        if not self.coordinator.data:
+            return {}
+        data = self.coordinator.data
+        forecast = data.get("forecast", [])
+        wind_series = [
+            {"timestamp": f.get("timestamp"), "wind": f.get("wind")}
+            for f in forecast
+            if f.get("wind") is not None
+        ]
+        attrs: dict[str, Any] = {
+            "forecast": wind_series,
+            "forecast_hours": len(wind_series),
+            "height_m": 120,
+            "aggregation": "capacity-weighted over FI wind regions",
+            "source": "open-meteo wind_speed_120m",
+        }
         attrs.update(_status_attributes(data))
         return attrs
 
