@@ -86,6 +86,7 @@ All sensors share the device "Spot Price Predictor" and the domain prefix `spot_
 | `sensor.spot_price_predictor_price_forecast` | Current hour consumer price | EUR/kWh |
 | `sensor.spot_price_forecast_fi` | Current hour spot forecast (Nordpool-compatible schema) | EUR/kWh |
 | `sensor.spot_price_predictor_duration_forecast` | Today's `dk_cheap_eur_kwh[3]` (mean of cheapest 4 hours) | EUR/kWh |
+| `sensor.spot_price_predictor_effective_wind_speed` | Current hour effective wind speed | m/s |
 
 ### Conditional
 
@@ -162,6 +163,18 @@ A sample-week illustration of forecast vs realised is in [studies/results/figure
 | `dk_cheap_lower_eur_kwh`, `dk_cheap_upper_eur_kwh`, `dk_peak_lower_eur_kwh`, `dk_peak_upper_eur_kwh` | float[24] | EUR/kWh | DtACI band endpoints. Present only when DtACI is enabled and warmed up. |
 
 **Identity** — the full-day mean is direction-invariant: `dk_cheap_eur_mwh[23] == dk_peak_eur_mwh[23] == daily_average_spot` (and the same for the `_eur_kwh` arrays in consumer space).
+
+### Effective Wind Speed — attributes
+
+`sensor.spot_price_predictor_effective_wind_speed` surfaces the model's internal capacity‑weighted wind so downstream consumers (dashboards, optimisers) don't re‑fetch Open‑Meteo. **This is `wind_speed_120m` at turbine hub height, weighted across the Finnish wind regions and used as a price‑model feature — not local surface wind.** State is the current‑hour value (m/s, `device_class: wind_speed`).
+
+| Attribute | Type | Description |
+|---|---|---|
+| `forecast` | list | `[{timestamp, wind}, …]` effective wind (m/s) over the forecast horizon. |
+| `forecast_hours` | int | Number of forecast entries. |
+| `height_m` | int | `120` — hub height of the wind input. |
+| `aggregation` | string | `"capacity-weighted over FI wind regions"`. |
+| `source` | string | `"open-meteo wind_speed_120m"`. |
 
 ### Spot Electricity Price / Selling Price (Nordpool, optional)
 

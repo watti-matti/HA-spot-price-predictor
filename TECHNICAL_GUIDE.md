@@ -241,10 +241,24 @@ Each entry in `daily_forecast[]` (up to 7):
 | `dk_cheap_eur_mwh`, `dk_peak_eur_mwh` | float[24] | Spot EUR/MWh, 0-indexed, monotone in i |
 | `dk_cheap_eur_kwh`, `dk_peak_eur_kwh` | float[24] | Consumer EUR/kWh, per-hour tariff applied |
 | `dk_cheap_pv_eur_kwh`, `dk_peak_pv_eur_kwh` | float[24] | PV-aware variants (single-baseload "flexible kWh" approximation). Present only when PV is enabled. Dashboards-only; per-load optimisers compose their own α from per-hour buy/sell. |
-| `pv_aware_cvar95_eur_kwh` | float | **v2.11.0.** Tail-mean of effective cost in the worst 5 % of joint price+PV scenarios. EUR/kWh. Present only when PV is enabled. |
+| `pv_aware_cvar95_eur_kwh` | float | **v2.11.0.** Tail-mean of effective cost in the worst 5 % of joint price+PV scenarios. EUR/kWh. Present only when PV is enabled. The CVaR's spread is driven by **PV-production uncertainty** (prices are deterministic in the kernel). |
+| `pv_aware_mean_eur_kwh`, `pv_aware_p5_eur_kwh`, `pv_aware_p95_eur_kwh` | float | **v2.11.9.** Expected cost and 5 %/95 % fan-chart quantiles for the day (EUR/kWh). For expected-vs-worst-case dashboards. Present only when PV is enabled. |
+| `grid_cost_eur_kwh` | float | **v2.11.9.** Deterministic no-PV daily cost (consumption-weighted consumer price). The with-vs-without-PV baseline. Present only when PV is enabled. |
 | `pv_aware_self_consumed_kwh`, `pv_aware_exported_kwh` | float | **v2.11.0.** Expected PV self-consumed / exported this day, mean across scenarios. Present only when PV is enabled. |
 | `pv_aware_data_provenance` | string | **v2.11.0.** `"synthetic_cold_start"` / `"ema_blended"` / `"ema_warm"` / `"coordinator_baseload"` — confidence flag for the consumption profile underlying the CVaR. |
 | `dk_cheap_lower_eur_kwh`, `dk_cheap_upper_eur_kwh`, `dk_peak_lower_eur_kwh`, `dk_peak_upper_eur_kwh` | float[24] | DtACI bands. Present only when DtACI is enabled and instances are warm. |
+
+### Effective wind speed sensor — v2.11.9
+
+`sensor.spot_price_predictor_effective_wind_speed` surfaces the model's internal capacity-weighted wind input so downstream consumers don't re-fetch Open-Meteo. **This is `wind_speed_120m` (turbine hub height) weighted across the Finnish wind regions — a price-model feature, NOT local surface wind.**
+
+| Attribute | Type | Description |
+|---|---|---|
+| state | float (m/s) | Current-hour effective wind; `device_class: wind_speed` |
+| `forecast` | list of `{timestamp, wind}` | Effective wind (m/s) over the forecast horizon |
+| `forecast_hours` | int | Number of forecast entries |
+| `height_m` | int | `120` (hub height) |
+| `aggregation`, `source` | string | `"capacity-weighted over FI wind regions"`, `"open-meteo wind_speed_120m"` |
 
 ### Diagnostics on the coordinator result
 
