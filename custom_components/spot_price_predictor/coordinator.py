@@ -779,22 +779,42 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                 items = sorted(watts.items(), key=lambda kv: kv[0])
                 return [_clamp(float(v) / 1000.0) for _, v in items]
 
-            # 4) irradiance = list[number] (pre-multiplied PV power);
-            #    auto-detect W vs kWh by magnitude.
+            # 4) irradiance = list[number]: pre-multiplied PV POWER (W or
+            #    kWh), auto-detected by magnitude. When a parallel time axis
+            #    (`iso_time` / `time`) is present we MUST align by timestamp:
+            #    consuming the list positionally against the forecast clock
+            #    misplaces production (a source whose list starts at local
+            #    midnight drops midday values into the night). The companion
+            #    time axis (e.g. meteo_7day_forecast_total.iso_time) is naive
+            #    LOCAL time, which `_parse_ts` interprets in the configured
+            #    zone before flooring to the UTC hour.
             irr_attr = attrs.get("irradiance")
             if isinstance(irr_attr, list) and irr_attr:
-                # Skip non-numeric entries when probing magnitude
+                # Keep index alignment with the time axis: coerce bad entries
+                # to 0 rather than dropping them.
                 numeric: list[float] = []
                 for v in irr_attr:
                     try:
                         numeric.append(float(v))
                     except (TypeError, ValueError):
-                        continue
-                if not numeric:
+                        numeric.append(0.0)
+                if not any(numeric):
                     return None
-                # If the largest magnitude exceeds 50, assume Watts
+                # If the largest magnitude exceeds 50, assume Watts → kWh.
                 divisor = 1000.0 if max(numeric) > 50.0 else 1.0
-                return [_clamp(v / divisor) for v in numeric]
+                scaled = [_clamp(v / divisor) for v in numeric]
+                time_axis = attrs.get("iso_time") or attrs.get("time")
+                if isinstance(time_axis, list) and time_axis:
+                    dated_irr: dict[datetime, float] = {}
+                    for ts_raw, val in zip(time_axis, scaled):
+                        ts = _parse_ts(ts_raw)
+                        if ts is not None:
+                            dated_irr[ts] = val
+                    if len(dated_irr) >= max(1, len(scaled) // 2):
+                        return dated_irr
+                # No usable time axis → positional (caller still gates by
+                # irradiance, so a misaligned source can't put PV at night).
+                return scaled
 
             return None
         except Exception as err:
@@ -828,16 +848,35 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
         # Try external entity first
         external = self._read_external_pv_forecast()
         if external:
+            # Physical sanity gate against the model's OWN irradiance.
+            # An external PV forecast can be misaligned in time (wrong tz,
+            # positional fallback, or simply spurious night entries), which
+            # places production in the middle of the night where the sun is
+            # down. The Open-Meteo irradiance is aligned to the same forecast
+            # clock (weather[i] == start_utc + i, same index as the lookup
+            # below), so it is ground truth for "is the sun up": when
+            # irradiance is effectively zero, PV MUST be zero regardless of
+            # what the external source claims. Daytime values pass through.
+            sun_down_w_m2 = 5.0  # below this the sun is effectively down
+            have_irradiance = bool(weather)
+            def _sun_is_up(i: int) -> bool:
+                # No irradiance data to judge against → don't gate (trust the
+                # external source rather than zeroing all PV).
+                if not have_irradiance or i >= len(weather):
+                    return True
+                solar = weather[i].get("solar_weighted", 0.0)
+                return float(solar or 0.0) > sun_down_w_m2
             if isinstance(external, dict):
                 # Timestamp-aligned: pick the value for each forecast hour.
                 return [
-                    float(external.get(start_utc + timedelta(hours=i), 0.0))
+                    (float(external.get(start_utc + timedelta(hours=i), 0.0))
+                     if _sun_is_up(i) else 0.0)
                     for i in range(n_hours)
                 ]
             out = list(external[:n_hours])
             while len(out) < n_hours:
                 out.append(0.0)
-            return out
+            return [v if _sun_is_up(i) else 0.0 for i, v in enumerate(out)]
 
         # Internal estimator from Open-Meteo solar irradiance
         out: list[float] = []

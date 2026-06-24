@@ -75,3 +75,15 @@ def test_coordinator_publishes_new_cvar_fields():
                   "pv_aware_p95_eur_kwh", "grid_cost_eur_kwh"):
         assert f'day_entry["{field}"]' in src, (
             f"coordinator must publish {field} for the parallel CVaR cards")
+
+
+def test_cvar_widget_binds_to_published_fields():
+    """The composite CVaR widget (expected · 90% band · worst-5% · no-PV
+    baseline) must read exactly the fields the coordinator publishes —
+    guards against a rename drifting the card and sensor apart."""
+    dash = (REPO / "docs" / "yaml_examples"
+            / "forecast_v2_11_dashboard.yaml").read_text(encoding="utf-8")
+    for field in ("d.pv_aware_mean_eur_kwh", "d.pv_aware_p5_eur_kwh",
+                  "d.pv_aware_p95_eur_kwh", "d.pv_aware_cvar95_eur_kwh",
+                  "d.grid_cost_eur_kwh"):
+        assert field in dash, f"CVaR widget must bind {field}"

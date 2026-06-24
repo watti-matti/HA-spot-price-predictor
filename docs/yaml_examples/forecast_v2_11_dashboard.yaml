@@ -588,6 +588,374 @@ views:
                   d.dk_cheap_pv_eur_kwh.length === 24).map((d) => [new Date(d.date +
                   'T12:00:00').getTime(), d.dk_cheap_pv_eur_kwh[0] * 100]);
 
+          # ── 2c. Duration & risk cockpit (composite) ────────────────────
+          # One self-contained "cockpit": the cheap→peak spread for the week
+          # on top, then the single BEST upcoming day (cheapest by daily mean)
+          # broken out into (left) its duration curve "how long can I run a
+          # load and at what price" and (right) a plain-language risk & PV
+          # ledger. The curve card and the ledger card resolve the SAME day
+          # with an identical predicate, so they never disagree.
+          - type: vertical-stack
+            cards:
+              # ── DAY PICKER ─────────────────────────────────────────────
+              # Drives the duration curve + ledger below so you can inspect
+              # the day you actually decide on (rolling horizon) — not just
+              # the cheapest. "Cheapest upcoming" keeps the auto-pick.
+              # Requires an input_select helper. Create it once via
+              # Settings → Devices & Services → Helpers → Dropdown, OR add to
+              # configuration.yaml:
+              #
+              #   input_select:
+              #     spp_cockpit_day:
+              #       name: SPP cockpit day
+              #       icon: mdi:calendar-search
+              #       initial: Tomorrow
+              #       options:
+              #         - Cheapest upcoming
+              #         - Today
+              #         - Tomorrow
+              #         - In 2 days
+              #         - In 3 days
+              #         - In 4 days
+              #         - In 5 days
+              #         - In 6 days
+              #
+              # If the helper is absent, the cards fall back to the cheapest
+              # upcoming day, so the cockpit still works before you create it.
+              - type: entities
+                title: Day to inspect
+                entities:
+                  - entity: input_select.spp_cockpit_day
+                    name: Day
+              # ── TOP: 7-day cheap→peak spread ───────────────────────────
+              - type: custom:apexcharts-card
+                header:
+                  show: true
+                  title: "Cheap→peak spread (7 days, c/kWh)"
+                graph_span: 7d
+                update_interval: 60s
+                span:
+                  start: day
+                apex_config:
+                  chart:
+                    height: 240px
+                    type: rangeArea
+                  # 1-3 nested shaded bands (k1 ⊃ k4 ⊃ k8); 4 mean spine;
+                  # 5 selected-day highlight dots; 6 hidden refresh series.
+                  fill:
+                    opacity: [0.15, 0.25, 0.38, 1, 1, 1]
+                  stroke:
+                    width: [0, 0, 0, 3, 0, 0]
+                    curve: straight
+                  markers:
+                    size: [0, 0, 0, 0, 7, 0]
+                  xaxis:
+                    type: datetime
+                    labels:
+                      datetimeUTC: false
+                      format: ddd dd.MM
+                  tooltip:
+                    shared: true
+                    x:
+                      format: ddd dd.MM
+                yaxis:
+                  - id: spread
+                    decimals: 1
+                    apex_config:
+                      forceNiceScale: true
+                      min: |
+                        EVAL: function (min) { return Math.floor(Math.min(min, 0) / 10) * 10; }
+                      max: |
+                        EVAL: function (max) { return Math.ceil(max / 10) * 10; }
+                      title:
+                        text: c/kWh
+                series:
+                  # Band 1 (widest): cheapest 1h ↔ priciest 1h of each day.
+                  - entity: sensor.spot_price_predictor_duration_forecast
+                    name: "Full day, cheapest↔priciest (k1)"
+                    yaxis_id: spread
+                    type: rangeArea
+                    color: "#60a5fa"
+                    show:
+                      legend_value: false
+                    data_generator: >
+                      const dk = entity.attributes.daily_forecast; if (!dk) return [];
+                      return dk.filter(d => d.dk_cheap_eur_kwh && d.dk_peak_eur_kwh).map(d
+                      => [new Date(d.date + 'T12:00:00').getTime(),
+                      [d.dk_cheap_eur_kwh[0] * 100, d.dk_peak_eur_kwh[0] * 100]]);
+                  # Band 2: cheapest 4h-avg ↔ costliest 4h-avg.
+                  - entity: sensor.spot_price_predictor_duration_forecast
+                    name: "Best/worst 4h (k4)"
+                    yaxis_id: spread
+                    type: rangeArea
+                    color: "#60a5fa"
+                    show:
+                      legend_value: false
+                    data_generator: >
+                      const dk = entity.attributes.daily_forecast; if (!dk) return [];
+                      return dk.filter(d => d.dk_cheap_eur_kwh && d.dk_peak_eur_kwh).map(d
+                      => [new Date(d.date + 'T12:00:00').getTime(),
+                      [d.dk_cheap_eur_kwh[3] * 100, d.dk_peak_eur_kwh[3] * 100]]);
+                  # Band 3 (narrowest): cheapest 8h-avg ↔ costliest 8h-avg.
+                  - entity: sensor.spot_price_predictor_duration_forecast
+                    name: "Best/worst 8h (k8)"
+                    yaxis_id: spread
+                    type: rangeArea
+                    color: "#60a5fa"
+                    show:
+                      legend_value: false
+                    data_generator: >
+                      const dk = entity.attributes.daily_forecast; if (!dk) return [];
+                      return dk.filter(d => d.dk_cheap_eur_kwh && d.dk_peak_eur_kwh).map(d
+                      => [new Date(d.date + 'T12:00:00').getTime(),
+                      [d.dk_cheap_eur_kwh[7] * 100, d.dk_peak_eur_kwh[7] * 100]]);
+                  # Spine: the daily mean (cheap and peak meet here at k=24).
+                  - entity: sensor.spot_price_predictor_duration_forecast
+                    name: "Daily average (mean)"
+                    yaxis_id: spread
+                    type: line
+                    color: "#7c3aed"
+                    show:
+                      legend_value: false
+                    data_generator: >
+                      const dk = entity.attributes.daily_forecast; if (!dk) return [];
+                      return dk.filter(d => d.dk_cheap_eur_kwh).map(d => [new Date(d.date
+                      + 'T12:00:00').getTime(), d.dk_cheap_eur_kwh[23] * 100]);
+                  # Selected-day highlight: 3 dots (cheapest 1h, mean, priciest
+                  # 1h) at the picked day so the spread shows where the day you
+                  # are inspecting sits in the week. Driven by the day picker.
+                  - entity: sensor.spot_price_predictor_duration_forecast
+                    name: "Selected day"
+                    yaxis_id: spread
+                    type: line
+                    color: "#fbbf24"
+                    show:
+                      legend_value: false
+                    data_generator: |
+                      const days = entity.attributes.daily_forecast;
+                      if (!days || !days.length) return [];
+                      const has = d => d.dk_cheap_eur_kwh && d.dk_peak_eur_kwh;
+                      const sel = (hass && hass.states['input_select.spp_cockpit_day']) ? hass.states['input_select.spp_cockpit_day'].state : 'Cheapest upcoming';
+                      let day = null;
+                      if (sel === 'Cheapest upcoming') { let bm = Infinity; for (const d of days) { if (d.source === 'forecast' && has(d) && d.dk_cheap_eur_kwh[23] < bm) { bm = d.dk_cheap_eur_kwh[23]; day = d; } } }
+                      else { const off = {'Today':0,'Tomorrow':1,'In 2 days':2,'In 3 days':3,'In 4 days':4,'In 5 days':5,'In 6 days':6}[sel]; const t = new Date(); t.setHours(0,0,0,0); t.setDate(t.getDate() + (off==null?1:off)); const iso = `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`; day = days.find(d => d.date === iso && has(d)) || null; }
+                      if (!day) return [];
+                      const ts = new Date(day.date + 'T12:00:00').getTime();
+                      return [[ts, day.dk_cheap_eur_kwh[0] * 100], [ts, day.dk_cheap_eur_kwh[23] * 100], [ts, day.dk_peak_eur_kwh[0] * 100]];
+                  # Hidden refresh series so the spread redraws on day change.
+                  - entity: input_select.spp_cockpit_day
+                    name: " "
+                    type: line
+                    color: "#0e1420"
+                    show:
+                      legend_value: false
+                      in_header: false
+                    data_generator: |
+                      return [];
+
+              # ── BOTTOM: best-day duration curve + risk/PV ledger ───────
+              - type: horizontal-stack
+                cards:
+                  # LEFT — duration curve for the best day (k on x-axis)
+                  - type: custom:apexcharts-card
+                    header:
+                      show: true
+                      title: "Selected day — how long can I run a load? (c/kWh by k)"
+                    graph_span: 24h
+                    update_interval: 60s
+                    apex_config:
+                      chart:
+                        height: 260px
+                        type: rangeArea
+                      # Series 1 = shaded band; 2-5 = lines; 6 = hidden
+                      # refresh series so the card redraws when the day
+                      # picker (input_select) changes.
+                      fill:
+                        opacity: [0.18, 1, 1, 1, 1, 1]
+                      stroke:
+                        width: [0, 3, 2, 3, 2, 0]
+                        dashArray: [0, 0, 6, 0, 6, 0]
+                        curve: smooth
+                      markers:
+                        size: 0
+                      xaxis:
+                        type: datetime
+                        title:
+                          text: k (hours of operation)
+                        labels:
+                          datetimeUTC: false
+                          formatter: |
+                            EVAL: function (value, timestamp) { var ms = (timestamp != null) ? timestamp : value; return 'k' + (new Date(ms).getHours() + 1); }
+                      tooltip:
+                        shared: true
+                        x:
+                          formatter: |
+                            EVAL: function (val) { return 'k = ' + (new Date(val).getHours() + 1); }
+                    yaxis:
+                      - id: dkprice
+                        decimals: 1
+                        apex_config:
+                          title:
+                            text: c/kWh
+                    series:
+                      # Shaded cost-range band: cheapest↔priciest at each k
+                      # (the operating-cost envelope for running k hours).
+                      - entity: sensor.spot_price_predictor_duration_forecast
+                        name: "Cost range (cheap↔peak)"
+                        yaxis_id: dkprice
+                        type: rangeArea
+                        color: "#94a3b8"
+                        show:
+                          legend_value: false
+                          extremas: false
+                        data_generator: |
+                          const days = entity.attributes.daily_forecast;
+                          if (!days || !days.length) return [];
+                          const has = d => d.dk_cheap_eur_kwh && d.dk_peak_eur_kwh;
+                          const sel = (hass && hass.states['input_select.spp_cockpit_day']) ? hass.states['input_select.spp_cockpit_day'].state : 'Cheapest upcoming';
+                          let best = null;
+                          if (sel === 'Cheapest upcoming') { let bm = Infinity; for (const d of days) { if (d.source === 'forecast' && has(d) && d.dk_cheap_eur_kwh[23] < bm) { bm = d.dk_cheap_eur_kwh[23]; best = d; } } }
+                          else { const off = {'Today':0,'Tomorrow':1,'In 2 days':2,'In 3 days':3,'In 4 days':4,'In 5 days':5,'In 6 days':6}[sel]; const t = new Date(); t.setHours(0,0,0,0); t.setDate(t.getDate() + (off==null?1:off)); const iso = `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`; best = days.find(d => d.date === iso && has(d)) || null; }
+                          if (!best) return [];
+                          const b = new Date(); b.setHours(0,0,0,0); const base = b.getTime();
+                          return best.dk_cheap_eur_kwh.map((v, i) => [base + i*3600000, [v * 100, best.dk_peak_eur_kwh[i] * 100]]);
+                      - entity: sensor.spot_price_predictor_duration_forecast
+                        name: "Cheap k-h (grid)"
+                        yaxis_id: dkprice
+                        type: line
+                        color: "#1d4ed8"
+                        show:
+                          legend_value: false
+                          extremas: false
+                        data_generator: |
+                          const days = entity.attributes.daily_forecast;
+                          if (!days || !days.length) return [];
+                          const has = d => d.dk_cheap_eur_kwh && d.dk_peak_eur_kwh;
+                          const sel = (hass && hass.states['input_select.spp_cockpit_day']) ? hass.states['input_select.spp_cockpit_day'].state : 'Cheapest upcoming';
+                          let best = null;
+                          if (sel === 'Cheapest upcoming') { let bm = Infinity; for (const d of days) { if (d.source === 'forecast' && has(d) && d.dk_cheap_eur_kwh[23] < bm) { bm = d.dk_cheap_eur_kwh[23]; best = d; } } }
+                          else { const off = {'Today':0,'Tomorrow':1,'In 2 days':2,'In 3 days':3,'In 4 days':4,'In 5 days':5,'In 6 days':6}[sel]; const t = new Date(); t.setHours(0,0,0,0); t.setDate(t.getDate() + (off==null?1:off)); const iso = `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`; best = days.find(d => d.date === iso && has(d)) || null; }
+                          if (!best) return [];
+                          const b = new Date(); b.setHours(0,0,0,0); const base = b.getTime();
+                          return best.dk_cheap_eur_kwh.map((v, i) => [base + i*3600000, v * 100]);
+                      - entity: sensor.spot_price_predictor_duration_forecast
+                        name: "Cheap k-h (PV-aware)"
+                        yaxis_id: dkprice
+                        type: line
+                        color: "#16a34a"
+                        show:
+                          legend_value: false
+                          extremas: false
+                        data_generator: |
+                          const days = entity.attributes.daily_forecast;
+                          if (!days || !days.length) return [];
+                          const has = d => d.dk_cheap_eur_kwh && d.dk_peak_eur_kwh;
+                          const sel = (hass && hass.states['input_select.spp_cockpit_day']) ? hass.states['input_select.spp_cockpit_day'].state : 'Cheapest upcoming';
+                          let best = null;
+                          if (sel === 'Cheapest upcoming') { let bm = Infinity; for (const d of days) { if (d.source === 'forecast' && has(d) && d.dk_cheap_eur_kwh[23] < bm) { bm = d.dk_cheap_eur_kwh[23]; best = d; } } }
+                          else { const off = {'Today':0,'Tomorrow':1,'In 2 days':2,'In 3 days':3,'In 4 days':4,'In 5 days':5,'In 6 days':6}[sel]; const t = new Date(); t.setHours(0,0,0,0); t.setDate(t.getDate() + (off==null?1:off)); const iso = `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`; best = days.find(d => d.date === iso && has(d)) || null; }
+                          if (!best || !best.dk_cheap_pv_eur_kwh) return [];
+                          const b = new Date(); b.setHours(0,0,0,0); const base = b.getTime();
+                          return best.dk_cheap_pv_eur_kwh.map((v, i) => [base + i*3600000, v * 100]);
+                      - entity: sensor.spot_price_predictor_duration_forecast
+                        name: "Peak k-h (grid)"
+                        yaxis_id: dkprice
+                        type: line
+                        color: "#dc2626"
+                        opacity: 0.6
+                        show:
+                          legend_value: false
+                          extremas: false
+                        data_generator: |
+                          const days = entity.attributes.daily_forecast;
+                          if (!days || !days.length) return [];
+                          const has = d => d.dk_cheap_eur_kwh && d.dk_peak_eur_kwh;
+                          const sel = (hass && hass.states['input_select.spp_cockpit_day']) ? hass.states['input_select.spp_cockpit_day'].state : 'Cheapest upcoming';
+                          let best = null;
+                          if (sel === 'Cheapest upcoming') { let bm = Infinity; for (const d of days) { if (d.source === 'forecast' && has(d) && d.dk_cheap_eur_kwh[23] < bm) { bm = d.dk_cheap_eur_kwh[23]; best = d; } } }
+                          else { const off = {'Today':0,'Tomorrow':1,'In 2 days':2,'In 3 days':3,'In 4 days':4,'In 5 days':5,'In 6 days':6}[sel]; const t = new Date(); t.setHours(0,0,0,0); t.setDate(t.getDate() + (off==null?1:off)); const iso = `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`; best = days.find(d => d.date === iso && has(d)) || null; }
+                          if (!best) return [];
+                          const b = new Date(); b.setHours(0,0,0,0); const base = b.getTime();
+                          return best.dk_peak_eur_kwh.map((v, i) => [base + i*3600000, v * 100]);
+                      - entity: sensor.spot_price_predictor_duration_forecast
+                        name: "Peak k-h (PV-aware)"
+                        yaxis_id: dkprice
+                        type: line
+                        color: "#f59e0b"
+                        show:
+                          legend_value: false
+                          extremas: false
+                        data_generator: |
+                          const days = entity.attributes.daily_forecast;
+                          if (!days || !days.length) return [];
+                          const has = d => d.dk_cheap_eur_kwh && d.dk_peak_eur_kwh;
+                          const sel = (hass && hass.states['input_select.spp_cockpit_day']) ? hass.states['input_select.spp_cockpit_day'].state : 'Cheapest upcoming';
+                          let best = null;
+                          if (sel === 'Cheapest upcoming') { let bm = Infinity; for (const d of days) { if (d.source === 'forecast' && has(d) && d.dk_cheap_eur_kwh[23] < bm) { bm = d.dk_cheap_eur_kwh[23]; best = d; } } }
+                          else { const off = {'Today':0,'Tomorrow':1,'In 2 days':2,'In 3 days':3,'In 4 days':4,'In 5 days':5,'In 6 days':6}[sel]; const t = new Date(); t.setHours(0,0,0,0); t.setDate(t.getDate() + (off==null?1:off)); const iso = `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`; best = days.find(d => d.date === iso && has(d)) || null; }
+                          if (!best || !best.dk_peak_pv_eur_kwh) return [];
+                          const b = new Date(); b.setHours(0,0,0,0); const base = b.getTime();
+                          return best.dk_peak_pv_eur_kwh.map((v, i) => [base + i*3600000, v * 100]);
+                      # Hidden series: subscribes the card to the day picker so
+                      # changing it re-runs every data_generator above.
+                      - entity: input_select.spp_cockpit_day
+                        name: " "
+                        type: line
+                        color: "#0e1420"
+                        show:
+                          legend_value: false
+                          in_header: false
+                        data_generator: |
+                          return [];
+
+                  # RIGHT — risk & PV ledger for the SELECTED day
+                  - type: markdown
+                    content: |
+                      {%- set sel = states('input_select.spp_cockpit_day') -%}
+                      {%- set days = state_attr('sensor.spot_price_predictor_duration_forecast','daily_forecast') -%}
+                      {%- set ns = namespace(best=none, bm=9999) -%}
+                      {%- if days -%}
+                      {%- if sel in ['Cheapest upcoming','unknown','unavailable','none',''] or sel == none -%}
+                      {%- for d in days -%}
+                      {%- if d.source == 'forecast' and d.dk_cheap_eur_kwh and d.dk_cheap_eur_kwh[23] < ns.bm -%}
+                      {%- set ns.bm = d.dk_cheap_eur_kwh[23] -%}
+                      {%- set ns.best = d -%}
+                      {%- endif -%}
+                      {%- endfor -%}
+                      {%- else -%}
+                      {%- set offmap = {'Today':0,'Tomorrow':1,'In 2 days':2,'In 3 days':3,'In 4 days':4,'In 5 days':5,'In 6 days':6} -%}
+                      {%- set off = offmap.get(sel, 1) -%}
+                      {%- set iso = (now() + timedelta(days=off)).strftime('%Y-%m-%d') -%}
+                      {%- for d in days -%}
+                      {%- if d.date == iso and d.dk_cheap_eur_kwh -%}
+                      {%- set ns.best = d -%}
+                      {%- endif -%}
+                      {%- endfor -%}
+                      {%- endif -%}
+                      {%- endif -%}
+                      {% if ns.best %}{% set d = ns.best %}
+                      ### {{ d.weekday }} {{ d.date }}{% if sel in ['Cheapest upcoming', none] %} — cheapest upcoming{% endif %}
+
+                      {% if d.pv_aware_mean_eur_kwh is defined %}| Reading | Value |
+                      |---|--:|
+                      | Expected cost (PVaR mean) | {{ '%.1f'|format(d.pv_aware_mean_eur_kwh*100) }} c/kWh |
+                      | Likely range (PVaR p5–p95) | {{ '%.1f'|format(d.pv_aware_p5_eur_kwh*100) }}–{{ '%.1f'|format(d.pv_aware_p95_eur_kwh*100) }} c/kWh |
+                      | Worst-5% of days (PVaR CVaR₉₅) | {{ '%.1f'|format(d.pv_aware_cvar95_eur_kwh*100) }} c/kWh |
+                      | Cost without solar (no-PV baseline) | {{ '%.1f'|format(d.grid_cost_eur_kwh*100) }} c/kWh |
+                      | PV self-consumed, free (kWh) | {{ '%.1f'|format(d.pv_aware_self_consumed_kwh) }} |
+                      | PV exported (kWh) | {{ '%.1f'|format(d.pv_aware_exported_kwh) }} |
+                      {% else %}| Reading | Value |
+                      |---|--:|
+                      | Daily average (mean) | {{ '%.1f'|format(d.dk_cheap_eur_kwh[23]*100) }} c/kWh |
+                      | Cheapest 1h | {{ '%.1f'|format(d.dk_cheap_eur_kwh[0]*100) }} c/kWh |
+                      | Priciest 1h | {{ '%.1f'|format(d.dk_peak_eur_kwh[0]*100) }} c/kWh |
+
+                      _Enable PV for the cost-risk ledger._
+                      {% endif %}
+                      {% else %}
+                      _No duration data for **{{ sel }}** — it may be beyond the forecast horizon. Decide on nearer days._
+                      {% endif %}
+
           # ── 3. PV-aware daily CVaR strip (v2.11.0) ─────────────────────
           - type: custom:apexcharts-card
             header:
@@ -671,7 +1039,7 @@ views:
               # Grouped bars per day: expected (mean) vs worst-5% (CVaR₉₅).
               # The gap = the PV-production downside risk.
               - entity: sensor.spot_price_predictor_duration_forecast
-                name: Expected (mean)
+                name: "Expected cost (PVaR mean)"
                 yaxis_id: cvar
                 type: column
                 color: "#16a34a"
@@ -687,7 +1055,7 @@ views:
                       d.pv_aware_mean_eur_kwh * 100
                     ]);
               - entity: sensor.spot_price_predictor_duration_forecast
-                name: Worst-5% (CVaR₉₅)
+                name: "Worst-5% of days (PVaR CVaR₉₅)"
                 yaxis_id: cvar
                 type: column
                 color: "#f97316"
@@ -701,6 +1069,147 @@ views:
                     .map(d => [
                       new Date(d.date + 'T12:00:00').getTime(),
                       d.pv_aware_cvar95_eur_kwh * 100
+                    ]);
+
+          # ── 3a-risk. CVaR widget: expected · 90% band · worst-5% ───────
+          # The full PV-aware risk (PVaR) picture for the week in ONE
+          # consistent geometry — every series is a LINE (no bars), so the
+          # whole family reads as a single fan, top line down:
+          #   • Worst-5% of days   (PVaR CVaR₉₅)   — orange, the tail to plan against
+          #   • High estimate      (PVaR p95)      — thin blue, upper of 90% band
+          #   • Expected cost      (PVaR mean)     — thick green, the middle
+          #   • Low estimate       (PVaR p5)       — thin blue, lower of 90% band
+          #   • Cost without solar (no-PV baseline)— grey dashed reference
+          # Series labels use "plain meaning (PVaR indicator)" so purpose is
+          # readable without knowing the maths. All series in c/kWh.
+          - type: custom:apexcharts-card
+            header:
+              show: true
+              title: "Daily electricity cost with solar — read top line down (PVaR)"
+            graph_span: 7d
+            span:
+              start: day
+            apex_config:
+              chart:
+                height: 280px
+                type: line
+              grid:
+                show: true
+                borderColor: "rgba(120,120,120,0.25)"
+              # Only the no-PV baseline is dashed (a reference); the PVaR
+              # family is solid so it reads as one fan, not mixed shapes.
+              stroke:
+                width: [1.5, 1.5, 1.5, 2.5, 3]
+                dashArray: [4, 4, 3, 0, 0]
+                curve: straight
+              markers:
+                size: [0, 0, 0, 3, 4]
+              annotations:
+                yaxis:
+                  - y: 0
+                    borderColor: "#374151"
+                    borderWidth: 2
+              tooltip:
+                x:
+                  format: ddd dd.MM
+                "y":
+                  formatter: |
+                    EVAL: function (val) { return val != null ? val.toFixed(2) + ' c/kWh' : ''; }
+            yaxis:
+              - id: risk
+                decimals: 1
+                apex_config:
+                  forceNiceScale: true
+                  min: |
+                    EVAL: function (min) { return Math.floor(Math.min(min, 0) / 10) * 10; }
+                  max: |
+                    EVAL: function (max) { return Math.ceil(max / 10) * 10; }
+                  labels:
+                    formatter: |
+                      EVAL: function (val) { return val.toFixed(0); }
+                  title:
+                    text: c/kWh
+            series:
+              # Band edges first (thin blue) so the bolder lines draw on top.
+              - entity: sensor.spot_price_predictor_duration_forecast
+                name: "Low estimate (PVaR p5)"
+                yaxis_id: risk
+                type: line
+                color: "#60a5fa"
+                show:
+                  legend_value: false
+                data_generator: |
+                  const days = entity.attributes.daily_forecast;
+                  if (!days) return [];
+                  return days
+                    .filter(d => d.pv_aware_p5_eur_kwh != null)
+                    .map(d => [
+                      new Date(d.date + 'T12:00:00').getTime(),
+                      d.pv_aware_p5_eur_kwh * 100
+                    ]);
+              - entity: sensor.spot_price_predictor_duration_forecast
+                name: "High estimate (PVaR p95)"
+                yaxis_id: risk
+                type: line
+                color: "#60a5fa"
+                show:
+                  legend_value: false
+                data_generator: |
+                  const days = entity.attributes.daily_forecast;
+                  if (!days) return [];
+                  return days
+                    .filter(d => d.pv_aware_p95_eur_kwh != null)
+                    .map(d => [
+                      new Date(d.date + 'T12:00:00').getTime(),
+                      d.pv_aware_p95_eur_kwh * 100
+                    ]);
+              - entity: sensor.spot_price_predictor_duration_forecast
+                name: "Cost without solar (no-PV baseline)"
+                yaxis_id: risk
+                type: line
+                color: "#9ca3af"
+                show:
+                  legend_value: false
+                data_generator: |
+                  const days = entity.attributes.daily_forecast;
+                  if (!days) return [];
+                  return days
+                    .filter(d => d.grid_cost_eur_kwh != null)
+                    .map(d => [
+                      new Date(d.date + 'T12:00:00').getTime(),
+                      d.grid_cost_eur_kwh * 100
+                    ]);
+              - entity: sensor.spot_price_predictor_duration_forecast
+                name: "Worst-5% of days (PVaR CVaR₉₅)"
+                yaxis_id: risk
+                type: line
+                color: "#f97316"
+                show:
+                  legend_value: false
+                data_generator: |
+                  const days = entity.attributes.daily_forecast;
+                  if (!days) return [];
+                  return days
+                    .filter(d => d.pv_aware_cvar95_eur_kwh != null)
+                    .map(d => [
+                      new Date(d.date + 'T12:00:00').getTime(),
+                      d.pv_aware_cvar95_eur_kwh * 100
+                    ]);
+              - entity: sensor.spot_price_predictor_duration_forecast
+                name: "Expected cost (PVaR mean)"
+                yaxis_id: risk
+                type: line
+                color: "#16a34a"
+                show:
+                  legend_value: false
+                data_generator: |
+                  const days = entity.attributes.daily_forecast;
+                  if (!days) return [];
+                  return days
+                    .filter(d => d.pv_aware_mean_eur_kwh != null)
+                    .map(d => [
+                      new Date(d.date + 'T12:00:00').getTime(),
+                      d.pv_aware_mean_eur_kwh * 100
                     ]);
 
           # ── 3b. PV cost reduction: with vs without PV ──────────────────
