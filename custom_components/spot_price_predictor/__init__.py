@@ -61,6 +61,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Register listener for options flow changes -> reload integration
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
 
+    # v2.12.0 — fast PV-nowcast poll. Registered only when a measured-PV
+    # sensor is configured; the tick self-guards otherwise. Cleaned up on
+    # unload. The 6-hour coordinator interval is untouched — this timer
+    # only requests a (gated) refresh when the live sky drifts from the
+    # published forecast.
+    if getattr(coordinator, "pv_measured_entity", ""):
+        from datetime import timedelta
+
+        from homeassistant.helpers.event import async_track_time_interval
+
+        from .const import PV_NOWCAST_POLL_SECONDS
+
+        entry.async_on_unload(
+            async_track_time_interval(
+                hass,
+                coordinator._async_pv_nowcast_tick,
+                timedelta(seconds=PV_NOWCAST_POLL_SECONDS),
+            )
+        )
+
     # Register services (once, not per entry)
     if not hass.services.has_service(DOMAIN, SERVICE_UPLOAD_COEFFICIENTS):
         _register_services(hass)
