@@ -35,6 +35,7 @@ from .const import (
     CONF_PV_AZIMUTH_DEG,
     CONF_PV_SYSTEM_EFFICIENCY,
     CONF_PV_EXTERNAL_ENTITY,
+    CONF_PV_MEASURED_POWER_ENTITY,
     CONF_PV_EXPORT_GRID_FEE,
     CONF_BASELOAD_KWH_PER_HOUR,
     CONF_BASELOAD_DAY_FACTOR,
@@ -242,6 +243,9 @@ class SpotPricePredictorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._data[CONF_PV_EXTERNAL_ENTITY] = user_input.get(
                 CONF_PV_EXTERNAL_ENTITY, ""
             )
+            self._data[CONF_PV_MEASURED_POWER_ENTITY] = user_input.get(
+                CONF_PV_MEASURED_POWER_ENTITY, ""
+            )
             self._data[CONF_PV_EXPORT_GRID_FEE] = float(
                 user_input.get(CONF_PV_EXPORT_GRID_FEE, DEFAULT_PV_EXPORT_GRID_FEE)
             )
@@ -287,6 +291,10 @@ class SpotPricePredictorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 description={"suggested_value": DEFAULT_PV_SYSTEM_EFFICIENCY},
             ): vol.All(vol.Coerce(float), vol.Range(min=0.5, max=1.0)),
             vol.Optional(CONF_PV_EXTERNAL_ENTITY, default=""): str,
+            # v2.12.0 — real-time MEASURED PV power sensor (W) for the
+            # intraday nowcast correction. Distinct from the day-ahead
+            # forecast entity above. Empty disables the nowcast.
+            vol.Optional(CONF_PV_MEASURED_POWER_ENTITY, default=""): str,
             vol.Optional(
                 CONF_PV_EXPORT_GRID_FEE, default=DEFAULT_PV_EXPORT_GRID_FEE,
                 description={"suggested_value": DEFAULT_PV_EXPORT_GRID_FEE},
@@ -399,6 +407,9 @@ class SpotPriceOptionsFlow(config_entries.OptionsFlow):
                 new_data[CONF_PV_EXTERNAL_ENTITY] = user_input.get(
                     CONF_PV_EXTERNAL_ENTITY, ""
                 )
+                new_data[CONF_PV_MEASURED_POWER_ENTITY] = user_input.get(
+                    CONF_PV_MEASURED_POWER_ENTITY, ""
+                )
                 new_data[CONF_PV_EXPORT_GRID_FEE] = float(user_input.get(
                     CONF_PV_EXPORT_GRID_FEE, DEFAULT_PV_EXPORT_GRID_FEE
                 ))
@@ -510,6 +521,10 @@ class SpotPriceOptionsFlow(config_entries.OptionsFlow):
             vol.Optional(
                 CONF_PV_EXTERNAL_ENTITY,
                 default=current.get(CONF_PV_EXTERNAL_ENTITY, ""),
+            ): str,
+            vol.Optional(
+                CONF_PV_MEASURED_POWER_ENTITY,
+                default=current.get(CONF_PV_MEASURED_POWER_ENTITY, ""),
             ): str,
             vol.Optional(
                 CONF_PV_EXPORT_GRID_FEE,

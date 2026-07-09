@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
@@ -30,6 +30,7 @@ from .const import (
     CONF_PV_AZIMUTH_DEG,
     CONF_PV_SYSTEM_EFFICIENCY,
     CONF_PV_EXTERNAL_ENTITY,
+    CONF_PV_MEASURED_POWER_ENTITY,
     CONF_PV_EXPORT_GRID_FEE,
     CONF_BASELOAD_KWH_PER_HOUR,
     CONF_BASELOAD_DAY_FACTOR,
@@ -60,6 +61,8 @@ from .const import (
     DEFAULT_ENERGY_TAX,
     DEMAND_DEFAULTS,
     UPDATE_INTERVAL_WEATHER,
+    PV_NOWCAST_REFRESH_K_DELTA,
+    PV_NOWCAST_REFRESH_MIN_GAP_SECONDS,
     FORECAST_HOURS,
     DEFAULT_TIMEZONE,
 )
@@ -70,6 +73,7 @@ from .consumption_profile_loader import load_profile_from_entity_attrs
 from .holidays import build_holiday_set
 from .model import SpotPriceModel
 from .pv_aware_cvar import compute_pv_aware_cvar_for_day
+from . import pv_nowcast
 from .pv_estimate import (
     estimate_pv_kwh_per_hour,
     marginal_effective_eur_kwh,
@@ -150,6 +154,18 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
             CONF_PV_SYSTEM_EFFICIENCY, DEFAULT_PV_SYSTEM_EFFICIENCY))
         self.pv_external_entity = entry.data.get(
             CONF_PV_EXTERNAL_ENTITY, "") or ""
+        # v2.12.0 — real-time measured PV power sensor (W) for the
+        # intraday nowcast correction. Empty → nowcast disabled.
+        self.pv_measured_entity = entry.data.get(
+            CONF_PV_MEASURED_POWER_ENTITY, "") or ""
+        # Smoothed clear-sky index (persists across cycles); last value
+        # actually baked into a published forecast; and the last-fired
+        # nowcast-triggered refresh time (rate limiting).
+        self._pv_nowcast_k: float | None = None
+        self._pv_nowcast_k_applied: float | None = None
+        self._pv_nowcast_last_refresh_utc: datetime | None = None
+        self._pv_nowcast_diag: dict[str, Any] = {}
+        self._pv_forecast_snapshot: tuple[datetime, list[float]] | None = None
         self.pv_export_grid_fee = float(entry.data.get(
             CONF_PV_EXPORT_GRID_FEE, DEFAULT_PV_EXPORT_GRID_FEE))
         self.pv_sell_commission = float(entry.data.get(
@@ -868,18 +884,20 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                 return float(solar or 0.0) > sun_down_w_m2
             if isinstance(external, dict):
                 # Timestamp-aligned: pick the value for each forecast hour.
-                return [
+                out = [
                     (float(external.get(start_utc + timedelta(hours=i), 0.0))
                      if _sun_is_up(i) else 0.0)
                     for i in range(n_hours)
                 ]
-            out = list(external[:n_hours])
-            while len(out) < n_hours:
-                out.append(0.0)
-            return [v if _sun_is_up(i) else 0.0 for i, v in enumerate(out)]
+            else:
+                out = list(external[:n_hours])
+                while len(out) < n_hours:
+                    out.append(0.0)
+                out = [v if _sun_is_up(i) else 0.0 for i, v in enumerate(out)]
+            return self._apply_pv_nowcast(out, start_utc)
 
         # Internal estimator from Open-Meteo solar irradiance
-        out: list[float] = []
+        out = []
         for i in range(n_hours):
             irr = (weather[i].get("solar_weighted", 0.0)
                    if i < len(weather) else 0.0)
@@ -890,7 +908,151 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                 azimuth_deg=self.pv_azimuth_deg,
                 efficiency=self.pv_efficiency,
             ))
+        return self._apply_pv_nowcast(out, start_utc)
+
+    def _read_measured_pv_kw(self) -> float | None:
+        """Read the measured-PV sensor as a production rate (kW ≈ kWh/h).
+
+        Accepts watts (the common ``power`` sensor) and converts to kW.
+        Returns ``None`` when no sensor is configured, the state is
+        missing/unavailable, or the value is non-numeric — the caller
+        then skips the nowcast for this cycle. Auto-scales: a value that
+        looks like watts (≥ 100) is divided by 1000; a small value is
+        assumed already in kW.
+        """
+        if not self.pv_measured_entity or self.hass is None:
+            return None
+        state = self.hass.states.get(self.pv_measured_entity)
+        if state is None or state.state in (None, "", "unknown", "unavailable"):
+            return None
+        try:
+            val = float(state.state)
+        except (TypeError, ValueError):
+            return None
+        if val < 0.0:
+            return None
+        unit = ""
+        try:
+            unit = str(state.attributes.get("unit_of_measurement", "")).lower()
+        except Exception:
+            unit = ""
+        if unit in ("w", "watt", "watts"):
+            return val / 1000.0
+        if unit in ("kw", "kilowatt", "kilowatts"):
+            return val
+        # No/unknown unit → magnitude heuristic (residential PV rarely
+        # exceeds ~30 kW; a reading ≥ 100 is almost certainly watts).
+        return val / 1000.0 if val >= 100.0 else val
+
+    def _apply_pv_nowcast(
+        self, pv_forecast: list[float], start_utc: datetime,
+    ) -> list[float]:
+        """Correct TODAY's remaining forecast with the measured clear-sky
+        index. No-op (returns the input) when no measured sensor is
+        configured or no valid index can be formed this cycle.
+
+        The correction scales only forecast hours whose LOCAL date equals
+        today's — today's sky says nothing about tomorrow. Diagnostics
+        (``k``, applied flag, realized fraction, confidence) are stashed
+        on ``self._pv_nowcast_diag`` for the daily_forecast builder.
+        """
+        self._pv_nowcast_diag = {}
+        if not self.pv_measured_entity or not pv_forecast:
+            return pv_forecast
+
+        # Snapshot the RAW (pre-correction) forecast + its start so the
+        # fast nowcast tick can form a correct clear-sky index against
+        # the right hour later in the 6-hour window.
+        self._pv_forecast_snapshot = (start_utc, list(pv_forecast))
+
+        measured_kw = self._read_measured_pv_kw()
+        forecast_now = pv_forecast[0] if pv_forecast else 0.0
+        k_raw = pv_nowcast.clear_sky_index(measured_kw, forecast_now)
+        self._pv_nowcast_k = pv_nowcast.smooth_index(self._pv_nowcast_k, k_raw)
+
+        now_utc = datetime.now(timezone.utc)
+        today_local = self._local_date_str(now_utc)
+        # Offsets from now (hours) and today-mask per forecast index.
+        hours_from_now: list[float] = []
+        today_mask: list[bool] = []
+        for i in range(len(pv_forecast)):
+            hour_utc = start_utc + timedelta(hours=i)
+            hours_from_now.append(
+                (hour_utc - now_utc).total_seconds() / 3600.0
+            )
+            today_mask.append(self._local_date_str(hour_utc) == today_local)
+
+        k = self._pv_nowcast_k
+        applied = k is not None and abs(k - 1.0) >= 1e-9
+        if applied:
+            corrected: list[float] = []
+            for pv, h, is_today in zip(pv_forecast, hours_from_now, today_mask):
+                # Only lift/suppress today's still-future hours.
+                if is_today and h > 0.0:
+                    corrected.append(max(0.0, float(pv) * float(k)))
+                else:
+                    corrected.append(float(pv))
+            out = corrected
+        else:
+            out = pv_forecast
+        # Record the index baked into this published forecast so the
+        # fast tick only triggers a refresh once the live index has
+        # drifted materially away from what is currently published.
+        self._pv_nowcast_k_applied = k
+
+        # Realized PV-energy fraction over today's hours only.
+        today_pv = [pv for pv, t in zip(pv_forecast, today_mask) if t]
+        today_hours = [h for h, t in zip(hours_from_now, today_mask) if t]
+        realized = pv_nowcast.realized_pv_fraction(today_pv, today_hours)
+        self._pv_nowcast_diag = {
+            "pv_nowcast_k": round(float(k), 4) if k is not None else None,
+            "pv_nowcast_applied": bool(applied),
+            "pv_realized_fraction": round(realized, 4),
+            "pv_nowcast_confidence": pv_nowcast.nowcast_confidence(
+                realized, measurement_live=measured_kw is not None,
+            ),
+        }
         return out
+
+    @callback
+    def _async_pv_nowcast_tick(self, now: datetime) -> None:
+        """Fast PV-nowcast poll (every ``PV_NOWCAST_POLL_SECONDS``).
+
+        Updates the smoothed clear-sky index from the measured sensor and
+        requests a full refresh when it has drifted materially from the
+        published forecast — the intraday reactivity the 6-hour weather
+        cycle cannot provide. Cheap: one sensor read + arithmetic; the
+        expensive recompute only happens on the gated refresh.
+        """
+        if not self.pv_measured_entity or self._pv_forecast_snapshot is None:
+            return
+        start_utc, raw_fc = self._pv_forecast_snapshot
+        now_utc = datetime.now(timezone.utc)
+        idx = int((now_utc - start_utc).total_seconds() // 3600)
+        if idx < 0 or idx >= len(raw_fc):
+            return
+        measured_kw = self._read_measured_pv_kw()
+        k_raw = pv_nowcast.clear_sky_index(measured_kw, raw_fc[idx])
+        self._pv_nowcast_k = pv_nowcast.smooth_index(self._pv_nowcast_k, k_raw)
+
+        gap = (
+            None if self._pv_nowcast_last_refresh_utc is None
+            else (now_utc - self._pv_nowcast_last_refresh_utc).total_seconds()
+        )
+        if pv_nowcast.should_trigger_refresh(
+            self._pv_nowcast_k,
+            self._pv_nowcast_k_applied,
+            gap,
+            k_delta=PV_NOWCAST_REFRESH_K_DELTA,
+            min_gap_seconds=PV_NOWCAST_REFRESH_MIN_GAP_SECONDS,
+        ):
+            self._pv_nowcast_last_refresh_utc = now_utc
+            _LOGGER.info(
+                "PV nowcast index drifted (k=%.2f vs applied %s); "
+                "requesting refresh",
+                self._pv_nowcast_k, self._pv_nowcast_k_applied,
+            )
+            self.hass.async_create_task(self.async_request_refresh())
 
     def _pv_dk_by_local_date(
         self, forecast: list[dict[str, Any]],
@@ -2054,6 +2216,21 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                     _LOGGER.debug(
                         "PV-aware CVaR skipped for %s: %s", date_str, exc,
                     )
+
+            # v2.12.0 — attach intraday PV-nowcast diagnostics to TODAY's
+            # entry only. Downstream planners read these to (a) know the
+            # day-0 effective-price curve has been corrected with measured
+            # PV, and (b) size the residual uncertainty band via the
+            # realized-fraction / confidence signal. Present only when a
+            # measured-PV sensor is configured (diag dict non-empty).
+            if self._pv_nowcast_diag:
+                try:
+                    today_local = self._local_date_str(
+                        datetime.now(timezone.utc))
+                    if date_str == today_local:
+                        day_entry.update(self._pv_nowcast_diag)
+                except Exception:  # noqa: BLE001
+                    pass
 
             result.append(day_entry)
 

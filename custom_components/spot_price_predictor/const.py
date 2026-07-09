@@ -46,6 +46,12 @@ CONF_PV_TILT_DEG            = "pv_tilt_deg"
 CONF_PV_AZIMUTH_DEG         = "pv_azimuth_deg"
 CONF_PV_SYSTEM_EFFICIENCY   = "pv_system_efficiency"
 CONF_PV_EXTERNAL_ENTITY     = "pv_external_entity"       # optional, overrides internal
+# v2.12.0 — optional real-time MEASURED PV power sensor (W). Distinct
+# from CONF_PV_EXTERNAL_ENTITY (a day-ahead forecast): this is actual
+# production used to nowcast-correct today's remaining forecast via the
+# clear-sky index. Empty disables the nowcast layer.
+CONF_PV_MEASURED_POWER_ENTITY = "pv_measured_power_entity"
+DEFAULT_PV_MEASURED_POWER_ENTITY = ""
 CONF_PV_EXPORT_GRID_FEE     = "pv_export_grid_fee"       # extra EUR/kWh fee on exported energy
 CONF_BASELOAD_KWH_PER_HOUR  = "baseload_kwh_per_hour"
 CONF_BASELOAD_DAY_FACTOR    = "baseload_day_factor"
@@ -173,6 +179,14 @@ DTACI_ZONES = ("fi",)
 
 # Update intervals (seconds)
 UPDATE_INTERVAL_WEATHER = 21600  # 6 hours
+# v2.12.0 — fast PV-nowcast poll. The 6-hour weather/model recompute is
+# too slow to react to an intraday sky change; this lighter timer reads
+# the measured-PV sensor, updates the smoothed clear-sky index, and
+# requests a refresh only when the index has moved materially AND a
+# rate-limit has elapsed (so Open-Meteo is not hammered).
+PV_NOWCAST_POLL_SECONDS = 900        # 15 min
+PV_NOWCAST_REFRESH_MIN_GAP_SECONDS = 1800   # ≥30 min between triggered refreshes
+PV_NOWCAST_REFRESH_K_DELTA = 0.15    # trigger when |k − last_applied_k| exceeds this
 UPDATE_INTERVAL_FINGRID = 3600   # 1 hour
 
 # Forecast window
