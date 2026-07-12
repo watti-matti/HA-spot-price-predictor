@@ -43,6 +43,37 @@ REL_STD_PARAM = 0.30
 # the user reads to one or two decimal places.
 N_PATHS_PARAM = 200
 
+# v2.13.0 — lead-time PRICE uncertainty for the CVaR.
+#
+# Days 0-1 are Nord Pool day-ahead *cleared* prices (known, real
+# hourly volatility). Days 2+ are the ML model's price *forecast* —
+# a conditional MEAN, which is smooth and hourly-under-dispersed. If
+# the CVaR perturbs only PV (as before v2.13.0), a forecast day's
+# price tail collapses and the published CVaR drops discontinuously
+# at the cleared→forecast boundary — reading "far days are low-risk"
+# when they are merely uncertain.
+#
+# This profile injects a mean-preserving multiplicative price
+# perturbation whose relative std grows with lead time: ~0 for
+# cleared days, rising through the forecast horizon (approximate
+# day-ahead-price rRMSE growth). It is a literature/heuristic COLD-
+# START prior; a follow-up replaces it with a learned per-lead-time
+# forecast-error profile (rolling forecast-vs-realized verification).
+DEFAULT_PRICE_REL_STD_BY_LEAD = (
+    0.0, 0.0, 0.10, 0.15, 0.20, 0.25, 0.30,
+)
+
+
+def price_rel_std_for_lead(days_ahead: int) -> float:
+    """Relative price-forecast std for a horizon day (0 = today).
+
+    Days 0-1 (cleared) → 0. Beyond the profile length, held flat at
+    the last value.
+    """
+    d = max(0, int(days_ahead))
+    prof = DEFAULT_PRICE_REL_STD_BY_LEAD
+    return prof[d] if d < len(prof) else prof[-1]
+
 
 def _sample_pv_paths(
     pv_point_kwh: np.ndarray,
@@ -66,6 +97,34 @@ def _sample_pv_paths(
     return paths
 
 
+def _sample_price_paths(
+    price_point_eur_kwh: np.ndarray,
+    *,
+    n_paths: int,
+    rel_std: float,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Mean-preserving multiplicative per-hour price perturbation.
+
+    Used to restore realistic hourly price volatility on forecast
+    days, where the ML point forecast is a smooth conditional mean.
+    ``rel_std = 0`` returns the point forecast broadcast unchanged
+    (cleared days). Applied to the BUY price — the tail (worst-5%
+    net cost) is import-driven, so buy-side volatility is what the
+    CVaR needs; the sell/export leg is left deterministic (and may be
+    negative, where a multiplicative perturbation is ill-defined).
+    """
+    n_h = len(price_point_eur_kwh)
+    if rel_std <= 0.0:
+        return np.broadcast_to(
+            price_point_eur_kwh[None, :], (n_paths, n_h)
+        )
+    sigma_log = np.sqrt(np.log(1.0 + rel_std ** 2))
+    mu_log = -0.5 * sigma_log ** 2  # so E[exp(X)] = 1
+    z = rng.normal(mu_log, sigma_log, size=(n_paths, n_h))
+    return price_point_eur_kwh[None, :] * np.exp(z)
+
+
 def compute_pv_aware_cvar_for_day(
     buy_eur_kwh:     np.ndarray,   # [24]
     sell_eur_kwh:    np.ndarray,   # [24]
@@ -74,6 +133,7 @@ def compute_pv_aware_cvar_for_day(
     *,
     n_paths: int = N_PATHS_PARAM,
     rel_std: float = REL_STD_PARAM,
+    price_rel_std: float = 0.0,
     alpha:   float = 0.05,
     rng:     np.random.Generator | None = None,
 ) -> dict:
@@ -110,9 +170,15 @@ def compute_pv_aware_cvar_for_day(
         rel_std=rel_std,
         rng=rng,
     )
-    buy_paths = np.broadcast_to(
-        np.asarray(buy_eur_kwh, dtype=float)[None, :],
-        (n_paths, 24),
+    # v2.13.0 — perturb the BUY price on forecast days (price_rel_std
+    # > 0) to restore the hourly volatility the ML mean forecast
+    # lacks; on cleared days (price_rel_std = 0) this broadcasts the
+    # known prices unchanged, byte-identical to the pre-v2.13.0 path.
+    buy_paths = _sample_price_paths(
+        np.asarray(buy_eur_kwh, dtype=float),
+        n_paths=n_paths,
+        rel_std=price_rel_std,
+        rng=rng,
     )
     sell_paths = np.broadcast_to(
         np.asarray(sell_eur_kwh, dtype=float)[None, :],
@@ -141,4 +207,5 @@ def compute_pv_aware_cvar_for_day(
         "pv_exported_kwh":         float(out.pv_exported_kwh_mean),
         "n_paths":                 int(n_paths),
         "rel_std":                 float(rel_std),
+        "price_rel_std":           float(price_rel_std),
     }
