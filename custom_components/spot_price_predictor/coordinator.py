@@ -76,6 +76,7 @@ from .pv_aware_cvar import (
     compute_pv_aware_cvar_for_day,
     price_rel_std_for_lead,
 )
+from . import price_forecast_verifier as _pfv
 from . import pv_nowcast
 from .pv_estimate import (
     estimate_pv_kwh_per_hour,
@@ -233,6 +234,20 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
         # Days that have already been fed to the bundle, to avoid
         # double-counting on subsequent coordinator cycles.
         self._dk_reconciled_dates: set[tuple[str, str]] = set()
+
+        # v2.14.0 — learned per-lead-time price-forecast uncertainty.
+        # Replaces the static `price_rel_std_for_lead` heuristic that
+        # feeds the PV-aware CVaR's buy-price perturbation with a
+        # site-specific profile learned from forecast-vs-realized
+        # relative error. Lazy-loaded on first duration-forecast build;
+        # state file lives under
+        # `<config_dir>/.storage/spot_price_predictor_price_verifier/`.
+        self._price_verifier: _pfv.PriceForecastVerifier | None = None
+        self._price_verifier_path: Path | None = None
+        # Realized 24h consumer (buy) price per local date, retained from
+        # `_compute_actual_duration_curves` so the verifier can reconcile
+        # a forecast against the day's cleared price once it is known.
+        self._actual_consumer_prices: dict[str, list[float]] = {}
 
         # Build holiday set
         now = datetime.now(timezone.utc)
@@ -1272,6 +1287,68 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
         except Exception as err:
             _LOGGER.warning("DtACI: save_bundle failed: %s", err)
 
+    # ── Learned lead-time price-uncertainty layer ─────────────────
+
+    def _price_verifier_init(self) -> None:
+        """Lazy-load the price-forecast verifier. Idempotent; best-effort.
+
+        On any failure the verifier stays None and the CVaR falls back
+        to the static `price_rel_std_for_lead` heuristic (v2.13.0
+        behaviour), so this never blocks a forecast build.
+        """
+        if self._price_verifier is not None:
+            return
+        try:
+            base = (Path(self.hass.config.path()) / ".storage"
+                    / f"{DOMAIN}_price_verifier")
+            base.mkdir(parents=True, exist_ok=True)
+            path = base / "price_rel_std.json"
+            self._price_verifier_path = path
+            self._price_verifier = _pfv.load_or_create(str(path))
+            _LOGGER.info("Price verifier: loaded from %s", path)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning("Price verifier: init failed (%s); using "
+                            "static lead-time prior", err)
+            self._price_verifier = None
+
+    def _price_verifier_reconcile(
+        self, duration_forecast: list[dict[str, Any]],
+    ) -> int:
+        """Feed newly-cleared days' realized buy curves to the learner.
+
+        For each `source == "actual"` entry whose realized 24h consumer
+        price we retained, reconcile against any stored forecasts.
+        Returns the number of (lead) samples ingested this cycle.
+        """
+        if self._price_verifier is None:
+            return 0
+        n = 0
+        for d in duration_forecast:
+            if d.get("source") != "actual":
+                continue
+            date_str = d.get("date")
+            realized = self._actual_consumer_prices.get(date_str or "")
+            if not realized or len(realized) < 24:
+                continue
+            n += self._price_verifier.reconcile(date_str, realized)
+        if n:
+            _LOGGER.info("Price verifier: reconciled %d new lead sample(s)", n)
+        # Bound the retained realized-price buffer to the reconciliation
+        # window (actuals only ever span the last couple of days).
+        if len(self._actual_consumer_prices) > 8:
+            for old in sorted(self._actual_consumer_prices)[:-8]:
+                del self._actual_consumer_prices[old]
+        return n
+
+    def _price_verifier_save(self) -> None:
+        """Persist verifier state atomically. Best-effort."""
+        if self._price_verifier is None or self._price_verifier_path is None:
+            return
+        try:
+            _pfv.save(str(self._price_verifier_path), self._price_verifier)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning("Price verifier: save failed: %s", err)
+
     def _dtaci_diagnostics(self) -> dict[str, Any]:
         """Per-zone diagnostics for the duration-forecast sensor.
 
@@ -1590,6 +1667,15 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                 self._dtaci_save()
                 dtaci_diagnostics = self._dtaci_diagnostics()
 
+            # ── Learned lead-time price-uncertainty layer ───────────
+            # Reconcile any newly-cleared day against the forecasts the
+            # verifier stored for it (recorded during the CVaR build in
+            # `_compute_duration_forecast`), then persist. The learned
+            # profile is consumed on the *next* forecast build.
+            if self._price_verifier is not None:
+                self._price_verifier_reconcile(duration_forecast)
+                self._price_verifier_save()
+
             # Merge into rolling history (keeps past predictions for charts)
             for f in forecast:
                 self._forecast_history[f["timestamp"]] = f
@@ -1626,6 +1712,10 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                 "forecast": combined_forecast,
                 "duration_forecast": duration_forecast,
                 "dtaci_diagnostics": dtaci_diagnostics,
+                "price_verifier_diagnostics": (
+                    self._price_verifier.diagnostics()
+                    if self._price_verifier is not None else {}
+                ),
                 "data_sources_active": " + ".join(sources),
                 "last_update": now.isoformat(),
                 "stale": False,
@@ -1839,6 +1929,9 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
         """
         if not self.model.duration_model:
             return []
+
+        # Lazy-load the learned lead-time price-uncertainty profile.
+        self._price_verifier_init()
 
         import math
         dur_model = self.model.duration_model
@@ -2197,12 +2290,24 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                             ).days
                         except Exception:
                             days_ahead = 0
+                        # v2.14.0 — record this forecast so it can be
+                        # scored once the day clears, and use the learned
+                        # per-lead rel_std (falls back to the static
+                        # heuristic during warm-up / if unavailable).
+                        if self._price_verifier is not None:
+                            self._price_verifier.record_forecast(
+                                date_str, days_ahead, day_buys)
+                            _price_rel_std = (
+                                self._price_verifier.rel_std_for_lead(
+                                    days_ahead))
+                        else:
+                            _price_rel_std = price_rel_std_for_lead(days_ahead)
                         cvar = compute_pv_aware_cvar_for_day(
                             _np.array(day_buys),
                             _np.array(day_sells),
                             _np.array(day_pvs),
                             _np.array(day_cons),
-                            price_rel_std=price_rel_std_for_lead(days_ahead),
+                            price_rel_std=_price_rel_std,
                         )
                         # Tail-risk number + PV bookkeeping + provenance.
                         day_entry["pv_aware_cvar95_eur_kwh"] = round(
@@ -2221,6 +2326,12 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                             cvar["p5_eur_kwh"], 4)
                         day_entry["pv_aware_p95_eur_kwh"] = round(
                             cvar["p95_eur_kwh"], 4)
+                        # v2.14.0 — publish the (learned, lead-time)
+                        # price-forecast uncertainty applied to this
+                        # day's CVaR so downstream planners (ENP) can
+                        # size their own scenario dispersion from it.
+                        day_entry["price_rel_std"] = round(
+                            float(cvar.get("price_rel_std", 0.0)), 4)
                         # Deterministic NO-PV baseline (consumption-weighted
                         # consumer price; no self-consumption, no export) so
                         # dashboards can show the with-vs-without-PV saving.
@@ -2314,6 +2425,11 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                 self._spot_to_consumer_eur_kwh(hours_map[h], h < 7 or h >= 22)
                 for h in range(24)
             ]
+            # Retain the realized (cleared) consumer buy curve so the
+            # price-forecast verifier can reconcile it against the
+            # forecasts it stored for this date at each lead time. Same
+            # `consumer_eur_kwh` basis as the forecast `day_buys`.
+            self._actual_consumer_prices[date_str] = list(consumer_prices)
 
             spot_asc  = sorted(spot_prices_24)
             spot_desc = sorted(spot_prices_24, reverse=True)
