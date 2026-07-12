@@ -72,7 +72,10 @@ from .features import build_forecast_features
 from .consumption_profile_loader import load_profile_from_entity_attrs
 from .holidays import build_holiday_set
 from .model import SpotPriceModel
-from .pv_aware_cvar import compute_pv_aware_cvar_for_day
+from .pv_aware_cvar import (
+    compute_pv_aware_cvar_for_day,
+    price_rel_std_for_lead,
+)
 from . import pv_nowcast
 from .pv_estimate import (
     estimate_pv_kwh_per_hour,
@@ -2178,11 +2181,28 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
 
                     if len(day_buys) == 24 and len(day_cons) == 24:
                         import numpy as _np
+                        # v2.13.0 — lead-time price uncertainty. Days 0-1
+                        # are cleared day-ahead prices (rel_std 0); days
+                        # 2+ are the ML forecast (smooth mean) and get a
+                        # growing price perturbation so their CVaR tail
+                        # does not collapse at the cleared→forecast
+                        # boundary.
+                        try:
+                            from datetime import datetime as _dt2
+                            today_local = self._local_date_str(
+                                datetime.now(timezone.utc))
+                            days_ahead = (
+                                _dt2.strptime(date_str, "%Y-%m-%d").date()
+                                - _dt2.strptime(today_local, "%Y-%m-%d").date()
+                            ).days
+                        except Exception:
+                            days_ahead = 0
                         cvar = compute_pv_aware_cvar_for_day(
                             _np.array(day_buys),
                             _np.array(day_sells),
                             _np.array(day_pvs),
                             _np.array(day_cons),
+                            price_rel_std=price_rel_std_for_lead(days_ahead),
                         )
                         # Tail-risk number + PV bookkeeping + provenance.
                         day_entry["pv_aware_cvar95_eur_kwh"] = round(
