@@ -12,6 +12,7 @@ The pipeline adapts to available data sources:
 
 import argparse
 import gc
+import hashlib
 import json
 import logging
 import os
@@ -35,6 +36,76 @@ logger = logging.getLogger(__name__)
 
 BATCH_SIZE = 512
 PW_BREAKS_DEFAULT = [1.0]  # Single knee: dampens near-zero noise, no high-price ceiling
+
+
+# ---------------------------------------------------------------------------
+# Provenance (reproducibility metadata)
+# ---------------------------------------------------------------------------
+
+def _git_info(repo_root: Path) -> dict:
+    """Best-effort git SHA + dirty flag of the training code."""
+    import subprocess
+
+    def _run(args):
+        return subprocess.run(
+            ["git", "-C", str(repo_root), *args],
+            capture_output=True, text=True, timeout=5).stdout.strip()
+    try:
+        return {"sha": _run(["rev-parse", "HEAD"]) or None,
+                "dirty": bool(_run(["status", "--porcelain"]))}
+    except Exception:
+        return {"sha": None, "dirty": None}
+
+
+def _content_hash(frame) -> str:
+    """Deterministic short sha256 of a Series/DataFrame's values + index.
+
+    Hashes the data *content*, so identical numbers give an identical hash
+    regardless of parquet re-encoding — the anchor for "same data in ->
+    same model out".
+    """
+    try:
+        h = pd.util.hash_pandas_object(frame, index=True).values
+        return hashlib.sha256(h.tobytes()).hexdigest()[:16]
+    except Exception:
+        return "?"
+
+
+def _source_prov(obj) -> dict | None:
+    """Row count, columns, date range, and content hash for one input.
+
+    The content hash is the key drift detector: the weather series comes
+    from Open-Meteo's *mutable* historical-forecast archive, so a changed
+    hash for the same window flags that the provider revised the archive
+    (e.g. after new industrial PV capacity shifts the modelled solar).
+    """
+    if obj is None:
+        return None
+    if isinstance(obj, dict):
+        try:
+            obj = pd.DataFrame(obj)
+        except Exception:
+            return {"keys": sorted(map(str, obj.keys()))}
+    if isinstance(obj, pd.Series):
+        obj = obj.to_frame()
+    idx = obj.index
+    return {
+        "rows": int(len(obj)),
+        "columns": [str(c) for c in obj.columns],
+        "start": str(idx.min()) if len(idx) else None,
+        "end": str(idx.max()) if len(idx) else None,
+        "content_sha256_16": _content_hash(obj),
+    }
+
+
+def _store_snapshot() -> str | None:
+    """The data-store ``snapshot_id`` this model trained on, linking the
+    model to an exact set of source data. None if the store isn't in use."""
+    try:
+        from src.data_store import load_manifest
+        return (load_manifest() or {}).get("snapshot_id")
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -712,14 +783,18 @@ def main():
 
     # ── Fetch or load data ──────────────────────────────────────────────
     if args.use_cache:
-        logger.info("Loading cached data from %s", out_dir)
-        prices = pd.read_parquet(out_dir / "fi_prices.parquet")["price_eur_mwh"]
-        weather = pd.read_parquet(out_dir / "fi_weather.parquet")
+        # Prefer the canonical incremental data store (src/data_store.py);
+        # fall back to the run's out_dir parquets for older checkouts.
+        from src.data_store import STORE as _STORE
+        cache_dir = _STORE if (_STORE / "fi_prices.parquet").exists() else out_dir
+        logger.info("Loading cached data from %s", cache_dir)
+        prices = pd.read_parquet(cache_dir / "fi_prices.parquet")["price_eur_mwh"]
+        weather = pd.read_parquet(cache_dir / "fi_weather.parquet")
         logger.info("  Prices: %d rows, Weather: %d rows", len(prices), len(weather))
 
         neighbor_prices = None
         if not args.skip_cross_border:
-            np_path = out_dir / "fi_neighbor_prices.parquet"
+            np_path = cache_dir / "fi_neighbor_prices.parquet"
             if np_path.exists():
                 np_df = pd.read_parquet(np_path)
                 neighbor_prices = {col: np_df[col] for col in np_df.columns}
@@ -727,7 +802,7 @@ def main():
 
         grid_data = None
         if not args.skip_nuclear:
-            gd_path = out_dir / "fi_grid_data.parquet"
+            gd_path = cache_dir / "fi_grid_data.parquet"
             api_key = os.environ.get("FINGRID_API_KEY", "").strip()
             # Helper: do the cached columns include the v2.2 net-load
             # series? Older caches had only `nuclear_mw`.
@@ -761,14 +836,19 @@ def main():
                     grid_data = None
     else:
         prices = fetch_prices(config, start_dt, end_dt)
+        # Persist prices immediately so a later weather timeout doesn't
+        # force a re-fetch of prices on the next run.
+        prices.to_frame().to_parquet(out_dir / "fi_prices.parquet")
+
+        # Per-location weather cache lives under the output dir, so a
+        # re-run after a transient timeout resumes (only the failed
+        # location is re-fetched) instead of starting from scratch.
         weather = fetch_weather(
             config,
             start_dt.strftime("%Y-%m-%d"),
             end_dt.strftime("%Y-%m-%d"),
+            cache_dir=out_dir / ".weather_cache",
         )
-
-        # Save data artifacts
-        prices.to_frame().to_parquet(out_dir / "fi_prices.parquet")
         weather.to_parquet(out_dir / "fi_weather.parquet")
 
         # Cross-border neighbor prices
@@ -797,6 +877,14 @@ def main():
         neighbor_prices=neighbor_prices,
         grid_data=grid_data,
     )
+    # Capture input-data provenance (row counts, date ranges, content
+    # hashes) before releasing the frames.
+    data_provenance = {
+        "prices":          _source_prov(prices),
+        "weather":         _source_prov(weather),
+        "neighbor_prices": _source_prov(neighbor_prices),
+        "grid_data":       _source_prov(grid_data),
+    }
     del prices, weather, neighbor_prices, grid_data
     gc.collect()
 
@@ -818,6 +906,40 @@ def main():
 
     del df
     gc.collect()
+
+    # ── Provenance: make the model self-documenting & reproducible ────
+    # Every field here is deterministic for a given (data, code, config)
+    # EXCEPT `trained_at_utc` (wall clock). Reproducibility is verified by
+    # comparing everything else — in particular the per-source
+    # `content_sha256_16` hashes, which are identical iff the fetched data
+    # is identical. A changed weather hash for the same window is the
+    # signal that Open-Meteo revised its historical-forecast archive.
+    coefs["provenance"] = {
+        "trained_at_utc": datetime.now(timezone.utc).isoformat(),
+        "train_window": {
+            "start": start_dt.isoformat(),
+            "end":   end_dt.isoformat(),
+            "years": years,
+        },
+        "region": region_name,
+        "git": _git_info(Path(__file__).resolve().parents[1]),
+        "config": {
+            "half_life_days":    training.get("half_life_days"),
+            "ridge_alpha":       training.get("ridge_alpha", 1.0),
+            "log_offset":        training.get("log_offset", 55),
+            "used_cache":        bool(args.use_cache),
+            "skip_cross_border": bool(args.skip_cross_border),
+            "skip_nuclear":      bool(args.skip_nuclear),
+            "skip_duration":     bool(getattr(args, "skip_duration", False)),
+        },
+        "data": data_provenance,
+        "data_store_snapshot": _store_snapshot(),
+        "env": {
+            "python": sys.version.split()[0],
+            "numpy":  np.__version__,
+            "pandas": pd.__version__,
+        },
+    }
 
     # ── Save results ──────────────────────────────────────────────────
     coefs_path = out_dir / "model_coefs.json"

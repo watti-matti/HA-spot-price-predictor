@@ -1,0 +1,63 @@
+{
+  "sources": {
+    "prices": {
+      "file": "fi_prices.parquet",
+      "source": "Sahkotin FI spot price",
+      "rows": 35040,
+      "start": "2022-07-16 05:00:00+00:00",
+      "end": "2026-07-15 04:00:00+00:00",
+      "content_sha256": "9bcb68d84c49a0bb",
+      "columns": [
+        "price_eur_mwh"
+      ]
+    },
+    "weather": {
+      "file": "fi_weather.parquet",
+      "source": "Open-Meteo historical-forecast (7 FI sites, weighted)",
+      "rows": 35059,
+      "start": "2022-07-16 05:00:00+00:00",
+      "end": "2026-07-15 23:00:00+00:00",
+      "content_sha256": "b72d93ac9f8e9968",
+      "columns": [
+        "wind_speed_weighted",
+        "solar_irradiance_weighted",
+        "temperature_weighted"
+      ]
+    },
+    "neighbor": {
+      "file": "fi_neighbor_prices.parquet",
+      "source": "elprisetjustnu SE1/SE3 + Elering EE",
+      "rows": 55793,
+      "start": "2022-07-16 05:00:00+00:00",
+      "end": "2026-07-15 21:45:00+00:00",
+      "content_sha256": "ba186851b9ac0616",
+      "columns": [
+        "se1",
+        "se3",
+        "ee"
+      ]
+    },
+    "grid": {
+      "file": "fi_grid_data.parquet",
+      "source": "Fingrid 188/165/246/247/267",
+      "rows": 35040,
+      "start": "2022-07-16 05:00:00+00:00",
+      "end": "2026-07-15 04:00:00+00:00",
+      "content_sha256": "ff8b4c0900e406ee",
+      "columns": [
+        "nuclear_mw",
+        "consumption_mw",
+        "wind_forecast_mw",
+        "solar_forecast_mw",
+        "solar_capacity_mw"
+      ]
+    }
+  },
+  "snapshot_id": "c8a5feece6ecdcc3",
+  "updated_at": "2026-07-15T05:00:00+00:00",
+  "window": {
+    "start": "2022-07-16T05:00:00+00:00",
+    "end": "2026-07-15T05:00:00+00:00",
+    "years": 4
+  }
+}

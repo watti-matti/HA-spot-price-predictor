@@ -192,6 +192,33 @@ grid_sources:
     resolution: "15min"
     update_interval_hours: 1
 
+  # Installed PV capacity envelope (Fingrid dataset 267, "Total solar PV
+  # capacity"). Slow-moving. Combined with Open-Meteo irradiance this
+  # yields a capacity-aware solar GENERATION estimate that (a) is available
+  # for the FULL forecast horizon — dataset 247 above is day-ahead only —
+  # and (b) tracks the PV build-out that raw irradiance is blind to. Feeds
+  # net_load so solar enters price with the correct (downward) sign.
+  - name: "fingrid_solar_capacity"
+    env_key: "FINGRID_API_KEY"
+    url: "https://data.fingrid.fi/api/datasets/267/data"
+    feature_name: "solar_capacity_mw"
+    max_value: 1                       # Keep raw MW (installed capacity)
+    resolution: "1d"
+    update_interval_hours: 24
+
+  # Installed WIND capacity envelope (Fingrid dataset 268, "Total production
+  # capacity used in the wind power forecast"). The wind analogue of 267:
+  # combined with the turbine power-curve term (sigmoid_wind_rho) it makes
+  # wind's price-depression capacity-aware, so it tracks the wind build-out
+  # (and future changes) instead of assuming a fixed fleet.
+  - name: "fingrid_wind_capacity"
+    env_key: "FINGRID_API_KEY"
+    url: "https://data.fingrid.fi/api/datasets/268/data"
+    feature_name: "wind_capacity_mw"
+    max_value: 1                       # Keep raw MW (installed capacity)
+    resolution: "1d"
+    update_interval_hours: 24
+
 # ============================================================================
 # Demand modeling parameters
 # ============================================================================
