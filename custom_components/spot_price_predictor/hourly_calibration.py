@@ -103,6 +103,108 @@ class HourlyBiasCorrector:
         return obj
 
 
+# ── 1b. Per-hour-of-day bias corrector ─────────────────────────────
+
+
+@dataclass
+class PerHourBiasCorrector:
+    """24 independent `OnlineBiasCorrector` instances, one per UTC
+    hour-of-day.
+
+    Rationale (studies/results/phase2_bias_decomposition.md): after a
+    single global bias EMA, the residual bias of the v2.12 pipeline still
+    carries a strong hour-of-day shape (morning +4…+7, night −3…−4,
+    afternoon −2…−4 EUR/MWh) that a global scalar cannot express because
+    it averages to ~0. Binning the EMA by hour-of-day removed it
+    (harness walk-forward: 19.40 → 18.72 MAE vs the global corrector,
+    midday bias +4.6 → +0.4).
+
+    Each bin sees ~1 observation/day, so the inner correctors run at
+    ``cadence_per_day=1`` with the same 14-day halflife and warm up
+    after `warmup_updates` daily observations (default 14). Same 5×
+    winsorisation so single spikes don't poison a bin.
+
+    Migration: `from_dict` accepts a legacy `HourlyBiasCorrector` state
+    dict and seeds every bin with the legacy global bias estimate (and
+    its warm status), so behaviour at switchover matches the old
+    corrector and then specialises per hour.
+    """
+    halflife_days: float = 14.0
+    warmup_updates: int = 14
+    winsor_limit: float | None = 5.0
+    _inner: dict | None = None
+
+    def __post_init__(self) -> None:
+        if self._inner is None:
+            self._inner = {h: self._new_bin() for h in range(24)}
+
+    def _new_bin(self) -> _bias_mod.OnlineBiasCorrector:
+        return _bias_mod.OnlineBiasCorrector(
+            halflife_days=self.halflife_days,
+            warmup_steps=self.warmup_updates,
+            winsor_limit=self.winsor_limit,
+            cadence_per_day=1,
+        )
+
+    def correct(self, forecast: float, hour: int) -> float:
+        return float(self._inner[int(hour) % 24].correct(float(forecast)))
+
+    def update(self, forecast: float, actual: float, hour: int) -> None:
+        self._inner[int(hour) % 24].update(float(forecast), float(actual))
+
+    @property
+    def warm(self) -> bool:
+        """True once ANY hour bin is actively correcting."""
+        return any(b.warm for b in self._inner.values())
+
+    @property
+    def bias_estimate(self) -> float:
+        """Mean bias estimate across warm bins (diagnostic scalar)."""
+        warm = [b.bias_estimate for b in self._inner.values() if b.warm]
+        return float(np.mean(warm)) if warm else 0.0
+
+    @property
+    def bias_by_hour(self) -> dict[int, float]:
+        """Per-hour applied correction (0.0 for bins still warming)."""
+        return {h: (float(b.bias_estimate) if b.warm else 0.0)
+                for h, b in self._inner.items()}
+
+    def to_dict(self) -> dict:
+        return {
+            "kind": "PerHourBiasCorrector",
+            "halflife_days": self.halflife_days,
+            "warmup_updates": self.warmup_updates,
+            "winsor_limit": self.winsor_limit,
+            "inner": {str(h): b.to_dict() for h, b in self._inner.items()},
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "PerHourBiasCorrector":
+        if d.get("kind") == "HourlyBiasCorrector":
+            # Legacy single-EMA state — seed all bins with the global
+            # estimate so switchover is behaviour-preserving.
+            legacy = _bias_mod.OnlineBiasCorrector.from_dict(d["inner"])
+            obj = cls()
+            for b in obj._inner.values():
+                b.bias_estimate = float(legacy.bias_estimate)
+                b.abs_bias_estimate = float(legacy.abs_bias_estimate)
+                b.n_updates = obj.warmup_updates if legacy.warm else 0
+            return obj
+        obj = cls(
+            halflife_days=float(d.get("halflife_days", 14.0)),
+            warmup_updates=int(d.get("warmup_updates", 14)),
+            winsor_limit=d.get("winsor_limit", 5.0),
+            _inner={},
+        )
+        obj._inner = {
+            int(h): _bias_mod.OnlineBiasCorrector.from_dict(ser)
+            for h, ser in d.get("inner", {}).items()
+        }
+        for h in range(24):   # guard against partial state
+            obj._inner.setdefault(h, obj._new_bin())
+        return obj
+
+
 # ── 2. Per-hour fan-chart calibrator ──────────────────────────────
 
 

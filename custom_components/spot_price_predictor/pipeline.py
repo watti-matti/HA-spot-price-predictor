@@ -172,8 +172,8 @@ class Pipeline:
         # Calibrators with persistent state
         self._bias = self._load_calibrator(
             self._storage_dir / "hourly_bias.json",
-            _hc.HourlyBiasCorrector,
-            default_kwargs=dict(halflife_days=14.0, warmup_hours=168),
+            _hc.PerHourBiasCorrector,
+            default_kwargs=dict(halflife_days=14.0, warmup_updates=14),
         )
         self._fan = self._load_calibrator(
             self._storage_dir / "hourly_fan_chart.json",
@@ -476,12 +476,23 @@ class Pipeline:
         # softplus floor
         mean = _pf.apply_floor(mean, floor=_pf.DEFAULT_FLOOR_EUR_MWH)
 
-        # Hourly bias correction (small constant offset, slow-moving)
+        # Per-hour-of-day bias correction (slow-moving EMAs, one per UTC
+        # hour — see PerHourBiasCorrector). Bins still warming pass the
+        # forecast through unchanged.
         bias = self._bias.bias_estimate if self._bias.warm else 0.0
-        mean_corrected = np.array([self._bias.correct(float(v)) for v in mean])
+        hours = (timestamps.astype("datetime64[s]").astype("int64")
+                 // 3600) % 24
+        mean_corrected = np.array([
+            self._bias.correct(float(v), int(h))
+            for v, h in zip(mean, hours)
+        ])
 
         out: dict[str, Any] = {
             "mean_eur_mwh": mean_corrected,
+            # Pre-correction mean — the coordinator records THIS for later
+            # (forecast, actual) reconciliation so the bias EMAs learn on
+            # the raw pipeline output, not on their own corrections.
+            "mean_uncorrected_eur_mwh": mean,
             "bias_eur_mwh": float(bias),
         }
 
@@ -529,15 +540,32 @@ class Pipeline:
 
     def update_with_actuals(
         self, predicted: np.ndarray, actual: np.ndarray,
+        timestamps: np.ndarray | None = None,
     ) -> dict[str, Any]:
         """Feed the calibrators (bias + fan-chart) with realised (pred,
         actual) pairs. Update last_eta for next AR forecast. Returns a
-        diagnostics dict including the refit_recommended flag."""
+        diagnostics dict including the refit_recommended flag.
+
+        `predicted` should be the PRE-correction pipeline mean
+        (``mean_uncorrected_eur_mwh``) so the bias EMAs learn the raw
+        model error rather than chasing their own corrections.
+        `timestamps` (datetime64, UTC) route each pair to its
+        hour-of-day bias bin; when omitted, the bias corrector is
+        skipped (the fan-chart calibrator still updates).
+        """
         predicted = np.asarray(predicted, dtype=float)
         actual    = np.asarray(actual,    dtype=float)
         n = min(len(predicted), len(actual))
+        hours = None
+        if timestamps is not None:
+            ts = np.asarray(timestamps)
+            if ts.shape[0] >= n:
+                hours = (ts.astype("datetime64[s]").astype("int64")
+                         // 3600) % 24
         for i in range(n):
-            self._bias.update(float(predicted[i]), float(actual[i]))
+            if hours is not None:
+                self._bias.update(float(predicted[i]), float(actual[i]),
+                                  int(hours[i]))
             self._fan.update(float(predicted[i]),  float(actual[i]))
         # Track most-recent η = actual − ridge_pred_at_that_time
         # Caller passes those if it can; otherwise we approximate with

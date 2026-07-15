@@ -234,6 +234,13 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
         # Days that have already been fed to the bundle, to avoid
         # double-counting on subsequent coordinator cycles.
         self._dk_reconciled_dates: set[tuple[str, str]] = set()
+        # Rolling hourly RAW pipeline forecasts awaiting reconciliation
+        # against realised spot prices; feeds the per-hour bias corrector
+        # and the fan-chart calibrator. Key: UTC hour "YYYY-MM-DDTHH:00";
+        # value: pre-correction pipeline mean (EUR/MWh). Only hours beyond
+        # the known-price horizon at forecast time are recorded; each is
+        # fed once and removed. Pruned to 14 days.
+        self._bias_forecast_history: dict[str, float] = {}
 
         # v2.14.0 — learned per-lead-time price-forecast uncertainty.
         # Replaces the static `price_rel_std_for_lead` heuristic that
@@ -1181,6 +1188,86 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
         except Exception as err:
             _LOGGER.exception("DtACI: bundle init failed: %s", err)
 
+    @staticmethod
+    def _bias_hour_key(ts: datetime) -> str:
+        """Canonical UTC hour key for the bias reconciliation ledger."""
+        return ts.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:00")
+
+    def _bias_record_forecasts(
+        self,
+        timestamps,          # np.ndarray datetime64 (naive UTC)
+        raw_mean,            # np.ndarray pre-correction pipeline means
+        known_until: datetime | None,
+    ) -> None:
+        """Record raw hourly pipeline forecasts for hours whose spot price
+        was NOT yet published at forecast time, so a later cycle can pair
+        them with the realised price and feed the per-hour bias corrector.
+
+        Re-recording an hour on a subsequent cycle overwrites it — the
+        freshest pre-auction forecast is the one the correction applies
+        to in production. Pruned to the last 14 days.
+        """
+        known_key = (self._bias_hour_key(known_until)
+                     if known_until is not None else "")
+        secs = timestamps.astype("datetime64[s]")
+        for t, p in zip(secs, raw_mean):
+            key = str(t)[:13] + ":00"          # YYYY-MM-DDTHH:00 (UTC)
+            if key > known_key:
+                self._bias_forecast_history[key] = float(p)
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=14)
+                  ).strftime("%Y-%m-%dT%H:00")
+        for old in [k for k in self._bias_forecast_history if k < cutoff]:
+            del self._bias_forecast_history[old]
+
+    def _bias_reconcile_actuals(
+        self, spot_prices: list[dict[str, Any]],
+    ) -> int:
+        """Pair realised hourly spot prices with previously recorded raw
+        pipeline forecasts and feed them to the pipeline calibrators
+        (per-hour bias EMA + DtACI fan-chart). Each hour is fed once.
+        Returns the number of pairs ingested.
+        """
+        if (self._pipeline is None or not spot_prices
+                or not self._bias_forecast_history):
+            return 0
+        import numpy as np
+        preds: list[float] = []
+        acts: list[float] = []
+        keys: list[str] = []
+        for entry in spot_prices:
+            ts_str = entry.get("timestamp") or ""
+            price = entry.get("price_eur_mwh")
+            if not ts_str or price is None:
+                continue
+            try:
+                ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            key = self._bias_hour_key(ts)
+            pred = self._bias_forecast_history.get(key)
+            if pred is None:
+                continue
+            preds.append(float(pred))
+            acts.append(float(price))
+            keys.append(key)
+        if not preds:
+            return 0
+        try:
+            self._pipeline.update_with_actuals(
+                np.asarray(preds), np.asarray(acts),
+                timestamps=np.array([np.datetime64(k + ":00") for k in keys]),
+            )
+        except Exception as exc:
+            _LOGGER.warning("bias corrector: reconcile failed: %s", exc)
+            return 0
+        for k in keys:
+            self._bias_forecast_history.pop(k, None)
+        _LOGGER.info("bias corrector: reconciled %d realised hour(s)",
+                     len(keys))
+        return len(keys)
+
     def _dtaci_record_forecasts(
         self, duration_forecast: list[dict[str, Any]],
     ) -> None:
@@ -1592,9 +1679,16 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
             pipeline_diagnostics: dict[str, Any] = {}
             dk_by_date: dict[str, dict] = {}
             if self._pipeline is not None and forecast:
+                # Feed realised prices to the per-hour bias corrector and
+                # fan-chart calibrator BEFORE forecasting, so this cycle's
+                # forecast benefits from the freshest correction state.
+                try:
+                    self._bias_reconcile_actuals(spot_prices)
+                except Exception as e:
+                    _LOGGER.debug("bias reconcile skipped: %s", e)
                 try:
                     pipeline_diagnostics, dk_by_date = self._apply_pipeline_pre_dk(
-                        forecast, neighbor=neighbor)
+                        forecast, neighbor=neighbor, spot_prices=spot_prices)
                 except Exception as e:
                     _LOGGER.warning("Prediction pipeline overwrite failed: %s", e)
                     pipeline_diagnostics = {"error": str(e)}
@@ -1758,6 +1852,7 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
         self,
         forecast: list[dict[str, Any]],
         neighbor: dict[str, list[dict[str, Any]]] | None = None,
+        spot_prices: list[dict[str, Any]] | None = None,
     ) -> tuple[dict[str, Any], dict[str, dict]]:
         """Run the L1+L2+L3+L4+floor prediction pipeline plus fan-chart
         sampling and write the result into every row of ``forecast``.
@@ -1814,6 +1909,26 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
             enable_fan_chart=True,
         )
         pipeline_mean = out["mean_eur_mwh"]
+
+        # Record the RAW (pre-correction) forecasts for hours beyond the
+        # known-price horizon; a later cycle reconciles them against the
+        # published price and feeds the per-hour bias corrector.
+        try:
+            known_until: datetime | None = None
+            for entry in spot_prices or []:
+                ts_str = entry.get("timestamp") or ""
+                try:
+                    kts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                except ValueError:
+                    continue
+                if kts.tzinfo is None:
+                    kts = kts.replace(tzinfo=timezone.utc)
+                if known_until is None or kts > known_until:
+                    known_until = kts
+            self._bias_record_forecasts(
+                timestamps, out["mean_uncorrected_eur_mwh"], known_until)
+        except Exception as e:
+            _LOGGER.debug("bias forecast recording skipped: %s", e)
 
         # Overwrite each forecast row with the pipeline's spot, consumer,
         # and fan-chart percentiles. Group consumer prices by local date
