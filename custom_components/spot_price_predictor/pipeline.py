@@ -136,6 +136,13 @@ class Pipeline:
         self._spike_artifact = self._load_json(
             self._data_dir / "spike_model_default.json")
 
+        # Seasonal components for the derived physics features
+        # (solar_effective / sigmoid_wind_rho) so the runtime deseasonalises
+        # them the SAME way the trainer did. Previously the pipeline used a
+        # local mean while the trainer fit seasonal components — a
+        # train/inference mismatch. Absent (older artifacts) -> local mean.
+        self._physics_seasonal = self._spike_artifact.get("physics_seasonal") or {}
+
         # Ridge β vector. The artifact carries the feature names it was
         # trained on; the pipeline builds the design matrix in that
         # order. Falls back to RIDGE_FEATURES if the artifact omits the
@@ -165,8 +172,8 @@ class Pipeline:
         # Calibrators with persistent state
         self._bias = self._load_calibrator(
             self._storage_dir / "hourly_bias.json",
-            _hc.HourlyBiasCorrector,
-            default_kwargs=dict(halflife_days=14.0, warmup_hours=168),
+            _hc.PerHourBiasCorrector,
+            default_kwargs=dict(halflife_days=14.0, warmup_updates=14),
         )
         self._fan = self._load_calibrator(
             self._storage_dir / "hourly_fan_chart.json",
@@ -239,6 +246,19 @@ class Pipeline:
         seasonal = _sd.compute_seasonal_part(timestamps, comp)
         return np.asarray(values, dtype=float) - seasonal
 
+    def _deseasonalize_physics(self, name: str,
+                                values: np.ndarray,
+                                timestamps: np.ndarray) -> np.ndarray:
+        """Deseasonalise a derived physics feature (solar_effective /
+        sigmoid_wind_rho) using the components the spike trainer stored, so
+        train and inference match exactly. Falls back to local-mean centering
+        when the artifact predates this (legacy behaviour)."""
+        comp = self._physics_seasonal.get(name)
+        v = np.asarray(values, dtype=float)
+        if not comp:
+            return v - float(np.mean(v))
+        return v - _sd.compute_seasonal_part(timestamps, comp)
+
     # ── L2 Ridge features + prediction ─────────────────────────────
 
     def _build_features(
@@ -260,8 +280,10 @@ class Pipeline:
         # Physics-derived features (intermediate; deseasonalised below).
         wind_rho = _sigmoid_turbine_rho(wind, temp)
         solar_eff = _solar_effective(solar, temp)
-        Y_wind_rho  = wind_rho  - np.mean(wind_rho)   # local centering
-        Y_solar_eff = solar_eff - np.mean(solar_eff)
+        # Deseasonalise with the trainer's stored components (consistent);
+        # legacy artifacts without them fall back to local-mean centering.
+        Y_wind_rho  = self._deseasonalize_physics("sigmoid_wind_rho", wind_rho, timestamps)
+        Y_solar_eff = self._deseasonalize_physics("solar_effective", solar_eff, timestamps)
         Y_temp      = self._deseasonalize_input("temp", temp, timestamps)
 
         # Cross-border zones — deseasonalised raw prices using the
@@ -454,12 +476,23 @@ class Pipeline:
         # softplus floor
         mean = _pf.apply_floor(mean, floor=_pf.DEFAULT_FLOOR_EUR_MWH)
 
-        # Hourly bias correction (small constant offset, slow-moving)
+        # Per-hour-of-day bias correction (slow-moving EMAs, one per UTC
+        # hour — see PerHourBiasCorrector). Bins still warming pass the
+        # forecast through unchanged.
         bias = self._bias.bias_estimate if self._bias.warm else 0.0
-        mean_corrected = np.array([self._bias.correct(float(v)) for v in mean])
+        hours = (timestamps.astype("datetime64[s]").astype("int64")
+                 // 3600) % 24
+        mean_corrected = np.array([
+            self._bias.correct(float(v), int(h))
+            for v, h in zip(mean, hours)
+        ])
 
         out: dict[str, Any] = {
             "mean_eur_mwh": mean_corrected,
+            # Pre-correction mean — the coordinator records THIS for later
+            # (forecast, actual) reconciliation so the bias EMAs learn on
+            # the raw pipeline output, not on their own corrections.
+            "mean_uncorrected_eur_mwh": mean,
             "bias_eur_mwh": float(bias),
         }
 
@@ -507,15 +540,32 @@ class Pipeline:
 
     def update_with_actuals(
         self, predicted: np.ndarray, actual: np.ndarray,
+        timestamps: np.ndarray | None = None,
     ) -> dict[str, Any]:
         """Feed the calibrators (bias + fan-chart) with realised (pred,
         actual) pairs. Update last_eta for next AR forecast. Returns a
-        diagnostics dict including the refit_recommended flag."""
+        diagnostics dict including the refit_recommended flag.
+
+        `predicted` should be the PRE-correction pipeline mean
+        (``mean_uncorrected_eur_mwh``) so the bias EMAs learn the raw
+        model error rather than chasing their own corrections.
+        `timestamps` (datetime64, UTC) route each pair to its
+        hour-of-day bias bin; when omitted, the bias corrector is
+        skipped (the fan-chart calibrator still updates).
+        """
         predicted = np.asarray(predicted, dtype=float)
         actual    = np.asarray(actual,    dtype=float)
         n = min(len(predicted), len(actual))
+        hours = None
+        if timestamps is not None:
+            ts = np.asarray(timestamps)
+            if ts.shape[0] >= n:
+                hours = (ts.astype("datetime64[s]").astype("int64")
+                         // 3600) % 24
         for i in range(n):
-            self._bias.update(float(predicted[i]), float(actual[i]))
+            if hours is not None:
+                self._bias.update(float(predicted[i]), float(actual[i]),
+                                  int(hours[i]))
             self._fan.update(float(predicted[i]),  float(actual[i]))
         # Track most-recent η = actual − ridge_pred_at_that_time
         # Caller passes those if it can; otherwise we approximate with

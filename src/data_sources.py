@@ -10,10 +10,12 @@ Each fetcher reads its configuration from the region YAML and handles
 retries, rate limiting, and unit conversion.
 """
 
+import hashlib
 import logging
 import os
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -21,6 +23,132 @@ import pandas as pd
 import requests
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# HTTP + cache helpers (training-time robustness)
+# ---------------------------------------------------------------------------
+
+def _http_get_json(
+    url: str, params: dict, timeout: int, label: str,
+    attempts: int = 4, base_sleep: float = 5.0,
+) -> dict:
+    """GET JSON with retries and exponential backoff.
+
+    Open-Meteo's historical archive is slow for multi-year ranges and
+    occasionally read-times-out. Dropping the location silently degrades
+    the training set, so retry a few times with growing backoff (5, 10,
+    20, ... seconds) before giving up. Raises requests.RequestException
+    if every attempt fails.
+    """
+    last = "unknown error"
+    for attempt in range(1, attempts + 1):
+        try:
+            r = requests.get(url, params=params, timeout=timeout)
+            if r.status_code == 200:
+                return r.json()
+            last = f"HTTP {r.status_code}"
+        except requests.RequestException as e:
+            last = str(e)
+        logger.warning("  %s -> %s (attempt %d/%d)", label, last, attempt, attempts)
+        if attempt < attempts:
+            sleep_s = base_sleep * (2 ** (attempt - 1))
+            logger.info("  retrying %s in %.0fs", label, sleep_s)
+            time.sleep(sleep_s)
+    raise requests.RequestException(
+        f"{label}: gave up after {attempts} attempts ({last})")
+
+
+def _cache_key(name: str, params: dict) -> str:
+    """Stable short key for a (location, request-params) pair."""
+    raw = name + "|" + "|".join(f"{k}={params[k]}" for k in sorted(params))
+    return hashlib.md5(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _shift_day(date_str: str, days: int) -> str:
+    return (datetime.strptime(date_str, "%Y-%m-%d")
+            + timedelta(days=days)).strftime("%Y-%m-%d")
+
+
+def _get_location_weather(
+    cache_dir, name: str, archive_url: str, base_params: dict,
+    wind_var: str, solar_var: str, temp_var: str,
+    start_date: str, end_date: str,
+):
+    """Return a tz-aware DataFrame (wind/solar/temp) for one location over
+    [start_date, end_date], fetching ONLY the days not already cached.
+
+    Historical weather never changes, so the per-location cache is an
+    append-only parquet keyed by (location, variables) — NOT by date
+    range. A re-run fetches only the new tail (plus any earlier gap if the
+    window was widened), merges, and persists. With no cache_dir it fetches
+    the full range every time (legacy behaviour). Returns None if the
+    location yields nothing usable.
+    """
+    cache_file = None
+    cached = None
+    if cache_dir:
+        cache_file = Path(cache_dir) / f"wx_{_cache_key(name, base_params)}.parquet"
+        if cache_file.exists():
+            try:
+                cached = pd.read_parquet(cache_file)
+            except Exception:
+                cached = None
+
+    # Which date ranges are missing from the cache?
+    ranges: list[tuple[str, str]] = []
+    if cached is None or cached.empty:
+        ranges = [(start_date, end_date)]
+    else:
+        c_start = cached.index.min().strftime("%Y-%m-%d")
+        c_end = cached.index.max().strftime("%Y-%m-%d")
+        if start_date < c_start:
+            ranges.append((start_date, _shift_day(c_start, -1)))
+        if end_date > c_end:
+            ranges.append((_shift_day(c_end, 1), end_date))
+        if not ranges:
+            logger.info("  CACHED %s (%s..%s, nothing new)", name, start_date, end_date)
+
+    parts = [] if cached is None else [cached]
+    new_data = False
+    for (s, e) in ranges:
+        if s > e:
+            continue
+        params = {**base_params, "start_date": s, "end_date": e}
+        try:
+            data = _http_get_json(
+                archive_url, params, timeout=180, label=f"{name} {s}..{e}")
+        except requests.RequestException as ex:
+            logger.warning("  %s [%s..%s] -> %s", name, s, e, ex)
+            if not parts:
+                return None        # nothing usable for this location
+            continue               # keep what is already cached
+        h = data.get("hourly", {})
+        if not h.get("time"):
+            continue
+        idx = pd.to_datetime(h["time"], utc=True)
+        parts.append(pd.DataFrame({
+            "wind":  np.nan_to_num(np.array(h.get(wind_var, [0] * len(idx)), float), 0.0),
+            "solar": np.nan_to_num(np.array(h.get(solar_var, [0] * len(idx)), float), 0.0),
+            "temp":  np.nan_to_num(np.array(h.get(temp_var, [0] * len(idx)), float), 0.0),
+        }, index=idx))
+        new_data = True
+        time.sleep(0.4)  # be polite to the API between live fetches
+
+    if not parts:
+        return None
+    merged = pd.concat(parts)
+    merged = merged[~merged.index.duplicated(keep="last")].sort_index()
+    if cache_file is not None and new_data:
+        try:
+            Path(cache_dir).mkdir(parents=True, exist_ok=True)
+            merged.to_parquet(cache_file)
+        except Exception as e:
+            logger.warning("  weather cache write failed for %s: %s", name, e)
+
+    lo = pd.Timestamp(start_date, tz="UTC")
+    hi = pd.Timestamp(end_date, tz="UTC") + pd.Timedelta(days=1)
+    return merged[(merged.index >= lo) & (merged.index < hi)]
 
 # ---------------------------------------------------------------------------
 # Spot prices (required)
@@ -85,6 +213,7 @@ def fetch_weather(
     config: dict[str, Any],
     start_date: str,
     end_date: str,
+    cache_dir: str | Path | None = None,
 ) -> pd.DataFrame:
     """Fetch weather data from Open-Meteo and compute capacity-weighted averages.
 
@@ -117,35 +246,27 @@ def fetch_weather(
 
     for loc in locations:
         name = loc["name"]
-        params = {
+        base_params = {
             "latitude": loc["lat"],
             "longitude": loc["lon"],
             "tilt": tilt,
             "hourly": f"{wind_var},{solar_var},{temp_var}",
             "wind_speed_unit": "ms",
             "timezone": "UTC",
-            "start_date": start_date,
-            "end_date": end_date,
         }
-        try:
-            r = requests.get(archive_url, params=params, timeout=120)
-            if r.status_code != 200:
-                logger.warning("  %s -> HTTP %d, skipping", name, r.status_code)
-                continue
-        except requests.RequestException as e:
-            logger.warning("  %s -> %s, skipping", name, e)
+        # Incremental per-location cache: fetch only the days not already on
+        # disk (historical weather never changes), merge, and slice.
+        loc_df = _get_location_weather(
+            cache_dir, name, archive_url, base_params,
+            wind_var, solar_var, temp_var, start_date, end_date)
+        if loc_df is None or loc_df.empty:
+            logger.warning("  %s -> no data, skipping", name)
             continue
 
-        h = r.json().get("hourly", {})
-        idx = pd.to_datetime(h["time"], utc=True)
-        w = np.array(h.get(wind_var, [0] * len(idx)), dtype=float)
-        s = np.array(h.get(solar_var, [0] * len(idx)), dtype=float)
-        t = np.array(h.get(temp_var, [0] * len(idx)), dtype=float)
-
-        # Replace NaN with 0
-        w = np.nan_to_num(w, 0.0)
-        s = np.nan_to_num(s, 0.0)
-        t = np.nan_to_num(t, 0.0)
+        idx = loc_df.index
+        w = loc_df["wind"].values
+        s = loc_df["solar"].values
+        t = loc_df["temp"].values
 
         ww = loc.get("wind_weight", 0)
         sw = loc.get("solar_weight", 0)
@@ -168,7 +289,6 @@ def fetch_weather(
             index = index[:n]
 
         logger.info("  OK %s (w=%.2f, s=%.2f, t=%.2f)", name, ww, sw, tw)
-        time.sleep(0.4)
 
     if index is None:
         raise RuntimeError("No weather data fetched from any location")

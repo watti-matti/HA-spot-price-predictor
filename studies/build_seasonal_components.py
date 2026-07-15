@@ -40,7 +40,10 @@ try:
 except Exception:
     pass
 
-OUTPUT_DIR  = REPO / "output"
+# Prefer the canonical incremental data store (src/data_store.py); fall back
+# to the legacy output/ parquets so older checkouts still build.
+_STORE_DIR  = REPO / "data_store"
+OUTPUT_DIR  = _STORE_DIR if (_STORE_DIR / "fi_prices.parquet").exists() else REPO / "output"
 CACHE_DIR   = REPO / "studies" / ".cache"
 RESULTS_DIR = REPO / "studies" / "results"
 ARTIFACT_PATH = (REPO / "custom_components" / "spot_price_predictor"
@@ -51,7 +54,9 @@ ARTIFACT_PATH = (REPO / "custom_components" / "spot_price_predictor"
 # stationary on this timescale) for smoother per-week estimates.
 PRICE_WINDOW_START   = pd.Timestamp("2023-01-01", tz="UTC")
 WEATHER_WINDOW_START = pd.Timestamp("2018-01-01", tz="UTC")
-WINDOW_END = pd.Timestamp("2026-04-28", tz="UTC")
+# Dynamic: train through the freshest data in the store. (Was a hard-coded
+# 2026-04-28, which silently capped the seasonal + spike models.)
+WINDOW_END = pd.Timestamp.now(tz="UTC").floor("D")
 
 # Per-input smoothing applied to P_week (and P_hour for some inputs).
 #
@@ -113,12 +118,86 @@ def _fetch_openmeteo_var_weighted(
     sites: list[dict],
 ) -> pd.Series | None:
     """Fetch any Open-Meteo `variable` for every site weighted by
-    `weight_key` (e.g. `solar_weight`, `wind_weight`, `temp_weight`).
-    Cached per (site, window, variable). No API key required.
+    `weight_key`. INCREMENTAL: cached per (site, variable) as an append-only
+    parquet, seeded once from the legacy per-window JSON cache, so extending
+    the window only fetches the missing tail (not the whole history). No API
+    key required.
     """
     import requests
     import time
     archive_url = "https://historical-forecast-api.open-meteo.com/v1/forecast"
+
+    def _om_get(lat, lon, gs, ge):
+        params = {"latitude": lat, "longitude": lon, "hourly": variable,
+                  "timezone": "UTC", "start_date": gs.strftime("%Y-%m-%d"),
+                  "end_date": ge.strftime("%Y-%m-%d"), "wind_speed_unit": "ms"}
+        if variable.startswith("global_tilted_irradiance"):
+            params["tilt"] = 45
+        for retry in range(3):
+            try:
+                r = requests.get(archive_url, params=params, timeout=240)
+                if r.status_code == 200:
+                    h = r.json().get("hourly") or {}
+                    idx = pd.to_datetime(h.get("time", []), utc=True)
+                    if len(idx):
+                        return pd.Series(np.array(h.get(variable, []), float),
+                                         index=idx)
+                    return None
+            except Exception:
+                pass
+            time.sleep(3.0 * (retry + 1))
+        return None
+
+    def _site_series(name, key, lat, lon):
+        cache = CACHE_DIR / f"wx_{variable}_{key}.parquet"
+        cached = None
+        if cache.exists():
+            try:
+                cached = pd.read_parquet(cache).iloc[:, 0]
+            except Exception:
+                cached = None
+        if cached is None:  # seed from a legacy window-keyed JSON if present
+            for old in sorted(CACHE_DIR.glob(f"openmeteo_{variable}_{key}_*.json")):
+                try:
+                    h = json.loads(old.read_text()).get("hourly") or {}
+                    idx = pd.to_datetime(h.get("time", []), utc=True)
+                    if len(idx):
+                        cached = pd.Series(np.array(h.get(variable, []), float),
+                                           index=idx)
+                        break
+                except Exception:
+                    continue
+        ranges = []
+        if cached is None or cached.empty:
+            ranges = [(start, end)]
+        else:
+            c0, c1 = cached.index.min(), cached.index.max()
+            if start < c0:
+                ranges.append((start, c0 - pd.Timedelta(days=1)))
+            if end > c1:
+                ranges.append((c1 + pd.Timedelta(days=1), end))
+        parts = [] if cached is None else [cached]
+        new = False
+        for gs, ge in ranges:
+            if gs > ge:
+                continue
+            s = _om_get(lat, lon, gs, ge)
+            if s is not None:
+                parts.append(s); new = True
+                print(f"  {variable} {name}: fetched {gs.date()}..{ge.date()}",
+                      flush=True)
+                time.sleep(0.6)
+        if not parts:
+            return None
+        merged = pd.concat(parts)
+        merged = merged[~merged.index.duplicated(keep="last")].sort_index()
+        if new:
+            try:
+                merged.to_frame("v").to_parquet(cache)
+            except Exception:
+                pass
+        return merged.loc[start:end]
+
     by_loc: dict[str, pd.Series] = {}
     weights: dict[str, float] = {}
     for loc in sites:
@@ -127,46 +206,10 @@ def _fetch_openmeteo_var_weighted(
             continue
         name = loc["name"]
         key = name.replace(" ", "_").replace("/", "_")
-        cache_path = (CACHE_DIR / f"openmeteo_{variable}_{key}"
-                      f"_{start.strftime('%Y%m%d')}_{end.strftime('%Y%m%d')}.json")
-        if cache_path.exists():
-            payload = json.loads(cache_path.read_text())
-        else:
-            params = {
-                "latitude":   loc["lat"],
-                "longitude":  loc["lon"],
-                "hourly":     variable,
-                "timezone":   "UTC",
-                "start_date": start.strftime("%Y-%m-%d"),
-                "end_date":   end.strftime("%Y-%m-%d"),
-                # Match the conventions used by src/data_sources.py so
-                # the fitted seasonal vectors are unit-compatible with
-                # the production weather pipeline.
-                "wind_speed_unit": "ms",
-            }
-            if variable.startswith("global_tilted_irradiance"):
-                params["tilt"] = 45
-            # Open-Meteo can throttle very long requests; one retry is enough.
-            for retry in range(2):
-                r = requests.get(archive_url, params=params, timeout=240)
-                if r.status_code == 200:
-                    break
-                print(f"   Open-Meteo {variable} {name}: HTTP {r.status_code} "
-                      f"(retry {retry})", flush=True)
-                time.sleep(2.0 * (retry + 1))
-            else:
-                continue
-            payload = r.json()
-            cache_path.write_text(json.dumps(payload))
-            time.sleep(0.6)
-            print(f"  {variable} {name}: cached "
-                  f"({start.date()} → {end.date()})", flush=True)
-        h = payload.get("hourly") or {}
-        idx = pd.to_datetime(h.get("time", []), utc=True)
-        vals = np.array(h.get(variable, []), dtype=float)
-        if len(idx) == 0:
+        s = _site_series(name, key, loc["lat"], loc["lon"])
+        if s is None or s.empty:
             continue
-        by_loc[name] = pd.Series(np.nan_to_num(vals, nan=0.0), index=idx)
+        by_loc[name] = pd.Series(np.nan_to_num(s.values, nan=0.0), index=s.index)
         weights[name] = w
     if not by_loc:
         return None
@@ -174,9 +217,8 @@ def _fetch_openmeteo_var_weighted(
     for s in by_loc.values():
         common = s.index if common is None else common.intersection(s.index)
     w_total = sum(weights.values())
-    s = sum(by_loc[n].reindex(common) * (weights[n] / w_total)
-            for n in by_loc)
-    return s.loc[start:end]
+    out = sum(by_loc[n].reindex(common) * (weights[n] / w_total) for n in by_loc)
+    return out.loc[start:end]
 
 
 def load_weather_extended(start: pd.Timestamp, end: pd.Timestamp,

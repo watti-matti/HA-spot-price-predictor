@@ -19,9 +19,11 @@ returns metadata; the orchestrator atomically writes the new artifact
 and the integration's Pipeline reloads on the next coordinator cycle.
 
 This module deliberately does NOT depend on Home Assistant — it is
-pure-python so it can be exercised standalone via
-`python -m custom_components.spot_price_predictor.retrain` for
-debugging.
+pure-python so it can be exercised standalone. Run it as a FILE, not
+with ``-m``: ``python custom_components/spot_price_predictor/retrain.py``
+(the ``-m`` form imports the package ``__init__``, which pulls in Home
+Assistant and fails on a training PC). The ``scripts/retrain_model.*``
+helpers wrap this.
 """
 
 from __future__ import annotations

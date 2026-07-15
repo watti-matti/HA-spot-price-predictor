@@ -248,14 +248,68 @@ def test_duration_curves_monotone_per_direction(tmp_path: Path) -> None:
 def test_update_with_actuals_warms_calibrators(tmp_path: Path) -> None:
     p = _make_pipeline(tmp_path)
     rng = np.random.RandomState(0)
-    # Feed 200 updates (well above warmup_hours=168)
-    for _ in range(200):
+    # 480 hourly updates = 20 daily observations per hour-of-day bin,
+    # above the per-bin warmup (14 daily observations).
+    ts = _hourly_timestamps(480)
+    for i in range(480):
         pred = 50.0
         actual = 51.0 + rng.normal(0, 5)
-        p.update_with_actuals(np.array([pred]), np.array([actual]))
+        p.update_with_actuals(np.array([pred]), np.array([actual]),
+                              timestamps=ts[i:i + 1])
     assert p._bias.warm
     # Bias should be ≈ +1 (we systematically forecast 1 too low)
     assert p._bias.bias_estimate == pytest.approx(1.0, abs=1.5)
+
+
+def test_update_with_actuals_without_timestamps_skips_bias(
+        tmp_path: Path) -> None:
+    """No timestamps -> hour bins unknown -> the bias corrector must not
+    update (the fan-chart calibrator still does)."""
+    p = _make_pipeline(tmp_path)
+    for _ in range(480):
+        p.update_with_actuals(np.array([50.0]), np.array([55.0]))
+    assert not p._bias.warm
+    assert p._bias.bias_estimate == 0.0
+
+
+def test_per_hour_bias_specialises_by_hour(tmp_path: Path) -> None:
+    """Opposite systematic errors at different hours must produce
+    opposite per-hour corrections — the property a global EMA lacks
+    (see studies/results/phase2_bias_decomposition.md)."""
+    p = _make_pipeline(tmp_path)
+    # 60 days: the 14-day-halflife EMA converges to ~95 % of the true
+    # per-hour offset (1 - 0.5^(60/14)).
+    ts = _hourly_timestamps(24 * 60)
+    hours = (ts.astype("datetime64[s]").astype("int64") // 3600) % 24
+    pred = np.full(len(ts), 50.0)
+    actual = np.where(hours == 8, 60.0,
+                      np.where(hours == 3, 40.0, 50.0)).astype(float)
+    for i in range(len(ts)):
+        p.update_with_actuals(pred[i:i + 1], actual[i:i + 1],
+                              timestamps=ts[i:i + 1])
+    by_hour = p._bias.bias_by_hour
+    assert by_hour[8] == pytest.approx(+10.0, abs=2.0)
+    assert by_hour[3] == pytest.approx(-10.0, abs=2.0)
+    assert by_hour[12] == pytest.approx(0.0, abs=1.0)
+
+
+def test_per_hour_bias_migrates_legacy_state(tmp_path: Path) -> None:
+    """A persisted legacy HourlyBiasCorrector state file must seed all
+    24 bins with the global estimate (behaviour-preserving switchover)."""
+    legacy = _hc_mod.HourlyBiasCorrector()
+    for _ in range(200):    # warm the legacy corrector at +2 bias
+        legacy.update(50.0, 52.0)
+    storage = tmp_path / "pipeline_state"
+    storage.mkdir(parents=True)
+    (storage / "hourly_bias.json").write_text(
+        json.dumps(legacy.to_dict()), encoding="utf-8")
+    p = _make_pipeline(tmp_path)
+    assert p._bias.warm
+    assert p._bias.bias_estimate == pytest.approx(
+        legacy.bias_estimate, abs=1e-9)
+    for h in (0, 8, 23):
+        assert p._bias.bias_by_hour[h] == pytest.approx(
+            legacy.bias_estimate, abs=1e-9)
 
 
 def test_state_roundtrips_through_storage_dir(tmp_path: Path) -> None:
@@ -263,9 +317,11 @@ def test_state_roundtrips_through_storage_dir(tmp_path: Path) -> None:
     storage dir, and verify it restores the calibrator state."""
     p1 = _make_pipeline(tmp_path)
     rng = np.random.RandomState(0)
-    for _ in range(180):
+    ts = _hourly_timestamps(480)
+    for i in range(480):
         p1.update_with_actuals(np.array([50.0]),
-                                np.array([52.0 + rng.normal(0, 3)]))
+                                np.array([52.0 + rng.normal(0, 3)]),
+                                timestamps=ts[i:i + 1])
     p1.save_state()
     # New instance — should restore from the persisted JSON files
     p2 = _make_pipeline(tmp_path)
