@@ -136,6 +136,13 @@ class Pipeline:
         self._spike_artifact = self._load_json(
             self._data_dir / "spike_model_default.json")
 
+        # Seasonal components for the derived physics features
+        # (solar_effective / sigmoid_wind_rho) so the runtime deseasonalises
+        # them the SAME way the trainer did. Previously the pipeline used a
+        # local mean while the trainer fit seasonal components — a
+        # train/inference mismatch. Absent (older artifacts) -> local mean.
+        self._physics_seasonal = self._spike_artifact.get("physics_seasonal") or {}
+
         # Ridge β vector. The artifact carries the feature names it was
         # trained on; the pipeline builds the design matrix in that
         # order. Falls back to RIDGE_FEATURES if the artifact omits the
@@ -239,6 +246,19 @@ class Pipeline:
         seasonal = _sd.compute_seasonal_part(timestamps, comp)
         return np.asarray(values, dtype=float) - seasonal
 
+    def _deseasonalize_physics(self, name: str,
+                                values: np.ndarray,
+                                timestamps: np.ndarray) -> np.ndarray:
+        """Deseasonalise a derived physics feature (solar_effective /
+        sigmoid_wind_rho) using the components the spike trainer stored, so
+        train and inference match exactly. Falls back to local-mean centering
+        when the artifact predates this (legacy behaviour)."""
+        comp = self._physics_seasonal.get(name)
+        v = np.asarray(values, dtype=float)
+        if not comp:
+            return v - float(np.mean(v))
+        return v - _sd.compute_seasonal_part(timestamps, comp)
+
     # ── L2 Ridge features + prediction ─────────────────────────────
 
     def _build_features(
@@ -260,8 +280,10 @@ class Pipeline:
         # Physics-derived features (intermediate; deseasonalised below).
         wind_rho = _sigmoid_turbine_rho(wind, temp)
         solar_eff = _solar_effective(solar, temp)
-        Y_wind_rho  = wind_rho  - np.mean(wind_rho)   # local centering
-        Y_solar_eff = solar_eff - np.mean(solar_eff)
+        # Deseasonalise with the trainer's stored components (consistent);
+        # legacy artifacts without them fall back to local-mean centering.
+        Y_wind_rho  = self._deseasonalize_physics("sigmoid_wind_rho", wind_rho, timestamps)
+        Y_solar_eff = self._deseasonalize_physics("solar_effective", solar_eff, timestamps)
         Y_temp      = self._deseasonalize_input("temp", temp, timestamps)
 
         # Cross-border zones — deseasonalised raw prices using the
