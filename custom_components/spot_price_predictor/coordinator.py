@@ -1693,6 +1693,14 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                     _LOGGER.warning("Prediction pipeline overwrite failed: %s", e)
                     pipeline_diagnostics = {"error": str(e)}
 
+            # Load the learned price-uncertainty verifier off the event
+            # loop (file read + mkdir) BEFORE the sync forecast build
+            # consumes it. Idempotent — the init is a no-op once loaded.
+            if self._price_verifier is None:
+                await self.hass.async_add_executor_job(
+                    self._price_verifier_init
+                )
+
             # Per-day metadata (date/weekday/source + optional PV-aware
             # effective-price D(k)). The canonical price D(k) arrays are
             # injected from the pipeline below.
@@ -1754,21 +1762,29 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
             # forecast-mode entries, persist state.
             dtaci_diagnostics: dict[str, Any] = {}
             if self.enable_dtaci_dk:
-                self._dtaci_init_bundles()
+                # Bundle load (file read + directory glob) runs in an
+                # executor; record/reconcile/attach/diagnostics are
+                # pure in-memory work; the save (file write) runs in an
+                # executor too. Keeps the event loop unblocked.
+                await self.hass.async_add_executor_job(
+                    self._dtaci_init_bundles
+                )
                 self._dtaci_record_forecasts(duration_forecast)
                 self._dtaci_reconcile_actuals(duration_forecast)
                 self._dtaci_attach_bands(duration_forecast)
-                self._dtaci_save()
+                await self.hass.async_add_executor_job(self._dtaci_save)
                 dtaci_diagnostics = self._dtaci_diagnostics()
 
             # ── Learned lead-time price-uncertainty layer ───────────
             # Reconcile any newly-cleared day against the forecasts the
             # verifier stored for it (recorded during the CVaR build in
-            # `_compute_duration_forecast`), then persist. The learned
-            # profile is consumed on the *next* forecast build.
+            # `_compute_duration_forecast`), then persist. Reconcile is
+            # pure in-memory; the save (file write) runs in an executor.
             if self._price_verifier is not None:
                 self._price_verifier_reconcile(duration_forecast)
-                self._price_verifier_save()
+                await self.hass.async_add_executor_job(
+                    self._price_verifier_save
+                )
 
             # Merge into rolling history (keeps past predictions for charts)
             for f in forecast:
@@ -2045,8 +2061,11 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
         if not self.model.duration_model:
             return []
 
-        # Lazy-load the learned lead-time price-uncertainty profile.
-        self._price_verifier_init()
+        # NOTE: the learned lead-time price-uncertainty profile is
+        # loaded by the async caller (_async_update_data) via an
+        # executor before this runs, so file I/O never blocks the
+        # event loop. Here we only use self._price_verifier (or fall
+        # back to the static prior when it's None).
 
         import math
         dur_model = self.model.duration_model
