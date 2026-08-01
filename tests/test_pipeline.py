@@ -296,22 +296,25 @@ def test_per_hour_bias_specialises_by_hour(tmp_path: Path) -> None:
     assert by_hour[12] == pytest.approx(0.0, abs=1.0)
 
 
-def test_per_hour_bias_migrates_legacy_state(tmp_path: Path) -> None:
-    """A persisted legacy HourlyBiasCorrector state file must seed all
-    24 bins with the global estimate (behaviour-preserving switchover)."""
+def test_per_hour_bias_migrates_legacy_state() -> None:
+    """`PerHourBiasCorrector.from_dict` must accept a legacy single-EMA
+    `HourlyBiasCorrector` state and seed all 24 bins from it.
+
+    Tested at the class level: the Pipeline no longer routes legacy state
+    through this path, because state carrying no model fingerprint was
+    learned by an unknown (older) model and is discarded instead — see
+    test_pre_existing_state_without_fingerprint_is_discarded. The
+    migration is kept for callers that know the model is unchanged.
+    """
     legacy = _hc_mod.HourlyBiasCorrector()
     for _ in range(200):    # warm the legacy corrector at +2 bias
         legacy.update(50.0, 52.0)
-    storage = tmp_path / "pipeline_state"
-    storage.mkdir(parents=True)
-    (storage / "hourly_bias.json").write_text(
-        json.dumps(legacy.to_dict()), encoding="utf-8")
-    p = _make_pipeline(tmp_path)
-    assert p._bias.warm
-    assert p._bias.bias_estimate == pytest.approx(
-        legacy.bias_estimate, abs=1e-9)
+    migrated = _hc_mod.PerHourBiasCorrector.from_dict(legacy.to_dict())
+    assert migrated.warm
+    assert migrated.bias_estimate == pytest.approx(legacy.bias_estimate,
+                                                    abs=1e-9)
     for h in (0, 8, 23):
-        assert p._bias.bias_by_hour[h] == pytest.approx(
+        assert migrated.bias_by_hour[h] == pytest.approx(
             legacy.bias_estimate, abs=1e-9)
 
 
@@ -557,3 +560,73 @@ def test_netload_plumbing_still_accepted(tmp_path: Path) -> None:
         ts, wind=np.full(n, 6.0), solar=np.zeros(n), temp=np.full(n, 5.0),
         netload_lag168=np.full(n, 9000.0), enable_fan_chart=False)
     assert np.isfinite(out["mean_eur_mwh"]).all()
+
+
+# ── Calibrator state must not outlive the model that taught it ────
+#
+# The bias corrector and DtACI fan chart learn THIS model's error. After a
+# retrain those corrections describe a model that no longer exists.
+# Measured across the v2.16 -> v2.17.1 change, carrying the old state over
+# cost ~0.45 % MAE and about +1.5 EUR/MWh of excess bias until the 14-day
+# EMA washed it out.
+
+
+def _warm_bias_state(tmp_path: Path, offset: float = 9.0) -> Path:
+    """Create a storage dir holding a warmed corrector + a fingerprint
+    claiming it belongs to a different model."""
+    storage = tmp_path / "pipeline_state"
+    storage.mkdir(parents=True, exist_ok=True)
+    bc = _hc_mod.PerHourBiasCorrector()
+    for _ in range(60):
+        for h in range(24):
+            bc.update(50.0, 50.0 + offset, h)
+    (storage / "hourly_bias.json").write_text(json.dumps(bc.to_dict()),
+                                              encoding="utf-8")
+    return storage
+
+
+def test_calibrator_state_is_discarded_when_the_model_changes(
+        tmp_path: Path) -> None:
+    storage = _warm_bias_state(tmp_path)
+    (storage / pipeline_mod.FINGERPRINT_FILE).write_text(
+        json.dumps({"model_fingerprint": "a-different-model"}),
+        encoding="utf-8")
+    p = _make_pipeline(tmp_path)
+    assert p.calibrators_cold_started is True
+    assert not p._bias.warm, "stale corrections survived a model change"
+    assert p._bias.bias_estimate == 0.0
+    assert not (storage / "hourly_bias.json").exists()
+
+
+def test_calibrator_state_survives_when_the_model_is_unchanged(
+        tmp_path: Path) -> None:
+    """A restart must NOT throw away hard-won calibration."""
+    p1 = _make_pipeline(tmp_path)
+    ts = _hourly_timestamps(24 * 30)
+    for i in range(len(ts)):
+        p1.update_with_actuals(np.array([50.0]), np.array([57.0]),
+                               timestamps=ts[i:i + 1])
+    p1.save_state()
+    assert p1._bias.warm
+    p2 = _make_pipeline(tmp_path)
+    assert p2.calibrators_cold_started is False
+    assert p2._bias.warm, "restart discarded state despite an unchanged model"
+    assert p2._bias.bias_estimate == pytest.approx(p1._bias.bias_estimate,
+                                                   abs=1e-9)
+
+
+def test_pre_existing_state_without_fingerprint_is_discarded(
+        tmp_path: Path) -> None:
+    """Upgrading from a build that never wrote a fingerprint: the state
+    was learned by an older model, so it must not be trusted."""
+    storage = _warm_bias_state(tmp_path)
+    assert not (storage / pipeline_mod.FINGERPRINT_FILE).exists()
+    p = _make_pipeline(tmp_path)
+    assert p.calibrators_cold_started is True
+    assert not p._bias.warm
+
+
+def test_fresh_install_is_not_reported_as_a_cold_start(tmp_path: Path) -> None:
+    """No prior state at all is a normal first run, not an invalidation."""
+    p = _make_pipeline(tmp_path)
+    assert p.calibrators_cold_started is False
