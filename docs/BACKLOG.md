@@ -60,6 +60,71 @@ so far.
 
 ## Open defects
 
+### D0 — Contemporaneous neighbour prices leak the target  *(supersedes D2; fix first)*
+
+`Y_se1`, `Y_se3`, `Y_ee` are the **same-hour** prices of SE1, SE3 and EE.
+Those zones clear in the **same day-ahead auction as FI, simultaneously**.
+So the neighbour price for hour *t* is never known before the FI price
+for hour *t* — the moment you can observe it, the answer is published
+too. For every hour that genuinely needs forecasting (D+2 onward), the
+feature is unavailable by construction.
+
+`corr(FI(t), SE3(t)) = +0.82` contemporaneous, versus +0.66 at 24 h lag.
+The model is therefore fitted against a near-proxy of its own target.
+
+This is not only an evaluation problem — it distorts the trained
+coefficients. Walk-forward refits, mean coefficient on the wind term:
+
+| variant | wind coefficient | honest-task MAE | bias |
+|---|--:|--:|--:|
+| A — current (contemporaneous neighbours) | **−44.57** | 34.87 | −7.16 |
+| B — neighbour features removed | **−92.98** | **26.81** | −4.36 |
+| C — neighbour features lagged 168 h | −93.01 | 26.90 | −3.98 |
+| D — B + net load (D1) | −5.79 † | **23.70** | **−1.81** |
+
+"Honest task" = hours beyond the day-ahead auction, where neither the
+neighbour price nor the FI price is known — i.e. the hours the forecast
+exists to serve.
+
+† In variant D the separate wind term nearly vanishes because net load
+already contains wind generation (net load = consumption − wind − solar).
+That is physically coherent: the model becomes a supply/demand balance
+rather than a set of loosely related proxies.
+
+Consequences:
+
+1. **The physical driver was suppressed by more than half** (wind −44.6
+   vs −93.0). The leaky feature absorbed explanatory power that belongs
+   to weather. This is the mechanism behind the observation that weather
+   dynamics barely move the forecast.
+2. **The model is mis-specified at inference.** Coefficients were fitted
+   with the neighbour block present; production zeroes it beyond
+   day-ahead. The remaining coefficients are then too small for the
+   information actually available — a systematic error, not just lost
+   information.
+3. **Removing the leak improves the honest task by 23%** (34.87 → 26.81
+   MAE) and cuts bias by 39%. Adding net load reaches 23.70 / −1.81,
+   **32% better than the current model with bias cut by 75%**.
+4. Lagged neighbour prices (variant C) are legitimately knowable and
+   perform the same as removing them entirely — so the neighbour channel
+   can be retained in a leak-free form if desired.
+
+**This invalidates two claims made earlier in this document** (now
+corrected in D2): the "oracle" line in the lead-time study assumed
+knowledge that never exists for the hours being forecast, and the
+"neighbour block supplies 89% of dynamic variance" figure is an artifact
+of the same leak.
+
+Caveat on variant D: net load is itself published day-ahead only, and
+the D row uses actual net load at all horizons, so it is also an upper
+bound. The difference is that net load is a *physical* quantity
+forecastable from weather + calendar (consumption ≈ f(temperature, hour,
+day-type, holiday); wind/solar generation ≈ f(weather, installed
+capacity)), whereas a coupled market price is another auction outcome
+determined jointly with the target. The D gap is closable; the A gap is
+not. **Next measurement: net load modelled from weather + calendar, so
+the whole horizon is served by physically forecastable inputs.**
+
 ### D1 — The pipeline has no demand variable  *(highest value, ready to build)*
 
 The L2 ridge sees `Y_fi_lag168`, `is_workday`, wind, solar, temperature
@@ -117,7 +182,20 @@ so this interacts with D2.
 
 ### D2 — Day-ahead data boundary: measured bias and discontinuity
 
-The neighbour-price block supplies **89% of the forecast's dynamic
+> **Superseded in part by D0.** The study below treats the neighbour
+> block as a legitimate input that merely runs out at the boundary. It
+> does not: it is jointly determined with the target (D0), so the
+> "oracle" column is unachievable in principle, not merely in practice,
+> and the two figures below marked ⚠ are inflated by the same leak. The
+> *shape* of the finding survives — assuming climatology beyond a data
+> horizon does introduce bias and a discontinuity, and that lesson
+> applies to any short-window input, including net load. But the fix is
+> D0/D1 (replace the leaky driver with physically forecastable ones),
+> not a crossfade of the neighbour feed. Retained for the method and for
+> the crossfade statistics, which stay valid for genuinely forecastable
+> short-window inputs.
+
+⚠ The neighbour-price block supplies **89% of the forecast's dynamic
 variance** but covers only ~28% of the horizon:
 
 | driver block | std of contribution | horizon coverage |
@@ -155,11 +233,11 @@ producer: `studies/leadtime_fill_study.py`, 354 daily origins, error in
 
 Three conclusions:
 
-1. **The oracle line is flat.** With perfect neighbour data the model has
-   *no* lead-time degradation at all (MAE 21.4–21.5, bias ≈ 0 from +1d to
-   +7d). The entire +1d → +3d degradation — MAE **21.5 → 35.0 (+63%)** —
-   is caused by the data boundary, not by genuine unpredictability of the
-   further-out days. There is a lot to win here.
+1. ⚠ **The oracle line is flat** (MAE 21.4–21.5, bias ≈ 0 from +1d to
+   +7d) — but per D0 this is *not* an achievable bound: it requires
+   knowing a price that clears simultaneously with the target. Read it as
+   a diagnostic of how strongly the model leans on the leaked feature,
+   not as headroom.
 2. **Zero-fill introduces real bias**, −3.7 €/MWh all-season and −10.0
    €/MWh in winter, against an oracle bias of +0.2 / +1.1. The
    assumption is not neutral.
@@ -292,13 +370,22 @@ harness numbers alone.
 
 ## Suggested order
 
-1. **Production instrumentation** (testing gap 1) — cheap, unblocks D6,
-   and decides whether the field symptom is D2 or something unmodelled.
-2. **D1 — net load into the pipeline** — largest measured gain (−5.1%
-   overall, −8.0% summer weekday peak), data already fetched in
-   production, and it opens the PV path (D5).
-3. **D2 — crossfade at the boundary** — `hl ≈ 48 h` as the starting
-   point, with the bias/variance trade-off decided explicitly rather
-   than by default.
+1. **D0 + D1 together — rebuild the driver set.** Drop the
+   contemporaneous neighbour features (or lag them, variant C), add net
+   load. Measured on the honest task this is 34.87 → 23.70 MAE (−32%)
+   with bias −7.16 → −1.81. These two must be done together: removing
+   the leak alone re-scales the physical coefficients, and net load is
+   the driver that should carry the load the leak was carrying.
+2. **Net load from weather + calendar** — so the whole 170 h horizon is
+   served by physically forecastable inputs rather than a 36 h feed.
+   Closes the D0 caveat and gives PV capacity a path (D5).
+3. **Production instrumentation** (testing gap 1) — settles D6, and
+   should be in place before any release is promoted on harness numbers.
 4. **D4 — price history buffer** — small, self-contained.
 5. **D3** — only after re-measuring with D1 in place.
+6. **D2 crossfade** — now a second-order concern, and applies to
+   whatever short-window inputs remain after step 2.
+
+Note: all harness statistics predating D0 that involve the neighbour
+block should be re-derived on the honest task before being used to
+justify a change.
