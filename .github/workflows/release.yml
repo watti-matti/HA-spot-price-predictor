@@ -1,0 +1,59 @@
+name: Attach HACS zip to release
+
+# hacs.json sets `"zip_release": true` with
+# `"filename": "spot_price_predictor.zip"`, so HACS installs by
+# downloading that asset from the release — NOT by cloning the repo. A
+# release published without the asset fails in HACS with
+# "Could not download, see log for details" (this happened to v2.17.0
+# and v2.17.1, which were created by hand).
+#
+# This workflow builds and attaches the asset automatically whenever a
+# release is published or edited, so the manual step can no longer be
+# forgotten.
+
+on:
+  release:
+    types: [published, edited]
+
+permissions:
+  contents: write
+
+jobs:
+  attach-zip:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the released tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Verify manifest version matches the tag
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event.release.tag_name }}"
+          MANIFEST=$(python -c "import json;print(json.load(open('custom_components/spot_price_predictor/manifest.json'))['version'])")
+          echo "tag=$TAG manifest=$MANIFEST"
+          if [ "${TAG#v}" != "$MANIFEST" ]; then
+            echo "::error::manifest.json version ($MANIFEST) does not match the release tag ($TAG)"
+            exit 1
+          fi
+
+      - name: Build spot_price_predictor.zip
+        run: |
+          set -euo pipefail
+          cd custom_components/spot_price_predictor
+          # Contents at the zip ROOT (manifest.json must not be nested) —
+          # this is the layout HACS expects for zip_release.
+          zip -r "$GITHUB_WORKSPACE/spot_price_predictor.zip" . \
+            -x '*__pycache__*' -x '*.pyc'
+          cd "$GITHUB_WORKSPACE"
+          unzip -l spot_price_predictor.zip | head -20
+          unzip -p spot_price_predictor.zip manifest.json > /dev/null \
+            || { echo "::error::manifest.json is not at the zip root"; exit 1; }
+
+      - name: Upload asset to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" \
+            spot_price_predictor.zip --clobber
