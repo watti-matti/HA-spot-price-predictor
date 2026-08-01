@@ -125,7 +125,21 @@ determined jointly with the target. The D gap is closable; the A gap is
 not. **Next measurement: net load modelled from weather + calendar, so
 the whole horizon is served by physically forecastable inputs.**
 
-### D1 — The pipeline has no demand variable  *(highest value, ready to build)*
+### D1 — The pipeline has no demand variable  *(gain does NOT survive a leak-free test)*
+
+> **Corrected 2026-08-01.** The −5.1% headline below used *actual* net
+> load at every horizon. Fingrid publishes it day-ahead only (~36 h), so
+> that number was contaminated by the same class of error as D0. When net
+> load is honestly forecastable — predicted from weather + calendar over
+> the full horizon — it adds **≈ 0.1%** (27.30 → 27.28 MAE), because a
+> linear net-load model collapses into the weather features the ridge
+> already has. The diagnosis in this section stands (the pipeline has no
+> demand signal, and load explains the weekday/weekend structure); the
+> *remedy* does not pay unless the demand information is something
+> weather cannot reconstruct — e.g. the published Fingrid forecast for
+> D+1 only, or a holiday/industrial calendar. Do not spend effort here
+> before D0.
+
 
 The L2 ridge sees `Y_fi_lag168`, `is_workday`, wind, solar, temperature
 and three neighbour prices. **None of these is a demand signal.**
@@ -368,24 +382,54 @@ harness numbers alone.
 
 ---
 
+## Leak-free reference result
+
+`studies/honest_horizon_study.py` — origins 06:00 UTC daily (before the
+day-ahead auction, so D+1…D+7 are all genuinely unknown); every feature
+available for every forecast hour; walk-forward monthly refits; sign
+constraints retained.
+
+| variant | all MAE | bias | winter MAE | winter bias | summer MAE | summer bias |
+|---|--:|--:|--:|--:|--:|--:|
+| A — shipped v2.16, as it behaves in production | 35.46 | −7.29 | 46.57 | −12.52 | 27.69 | −13.27 |
+| **B — leak-free (neighbours lagged 168 h)** | **27.30** | **−4.15** | **31.54** | **−1.85** | **24.58** | **−10.86** |
+| C — B + net load modelled from weather | 27.28 | −4.14 | 31.52 | −1.84 | 24.55 | −10.83 |
+
+B vs A: **−23.0% MAE overall, −32.3% winter, −11.2% summer**; bias
+−7.29 → −4.15 overall and −12.52 → −1.85 in winter.
+
+Two further findings:
+
+* **The lead-time discontinuity disappears.** Both A and B are flat
+  across +1d…+7d (A 35.28→35.58, B 27.19→27.40). The artificial +2d/+3d
+  step documented in D2 was itself a symptom of the leak: the model was
+  strong inside the auction window and collapsed outside it. With
+  features that cover the whole horizon there is no boundary to cross.
+* **The gain does not depend on D4.** With `Y_fi_lag168` left at zero as
+  production does today, B still scores 27.71 (vs 27.33 with it working)
+  — so fixing the history buffer is worth ~1.4%, independent and
+  optional.
+
+Note the absolute level: the shipped model's honest accuracy is ~35 MAE,
+not the ~20 the old harness reported. That gap is the leak.
+
 ## Suggested order
 
-1. **D0 + D1 together — rebuild the driver set.** Drop the
-   contemporaneous neighbour features (or lag them, variant C), add net
-   load. Measured on the honest task this is 34.87 → 23.70 MAE (−32%)
-   with bias −7.16 → −1.81. These two must be done together: removing
-   the leak alone re-scales the physical coefficients, and net load is
-   the driver that should carry the load the leak was carrying.
-2. **Net load from weather + calendar** — so the whole 170 h horizon is
-   served by physically forecastable inputs rather than a 36 h feed.
-   Closes the D0 caveat and gives PV capacity a path (D5).
-3. **Production instrumentation** (testing gap 1) — settles D6, and
-   should be in place before any release is promoted on harness numbers.
-4. **D4 — price history buffer** — small, self-contained.
-5. **D3** — only after re-measuring with D1 in place.
-6. **D2 crossfade** — now a second-order concern, and applies to
-   whatever short-window inputs remain after step 2.
+1. **D0 — remove the leak.** Replace the same-hour neighbour features
+   with their 168 h lags, retrain, ship. −23% MAE / −43% bias on the
+   honest task, and it removes the D2 discontinuity as a side effect.
+   Production already fetches 8 days of neighbour history, so no new
+   data is required.
+2. **Re-base the harness on the honest regime** — `backtest_harness.py`
+   itself leaks, so it must not be used to justify further changes until
+   corrected.
+3. **Production instrumentation** (testing gap 1) — settles D6; should
+   precede promoting any release on offline numbers.
+4. **D4 — price history buffer** — small, independent, ~1.4%.
+5. **Summer bias** (−10.9 after D0) — the largest remaining error, and
+   still unexplained. Next investigation.
+6. **D3 / D1 / D2** — re-measure only after D0, on the honest task.
 
-Note: all harness statistics predating D0 that involve the neighbour
-block should be re-derived on the honest task before being used to
+Note: every statistic in this document predating D0 that involves the
+neighbour block is inflated and must be re-derived before it is used to
 justify a change.
