@@ -15,6 +15,48 @@ effect that mattered.
 
 ## Resolved
 
+### R5 — Lagged net load removed (v2.17.1)
+
+Shipped in v2.17.0, removed one release later after a cleaner isolation
+on the correct training window:
+
+| variant | MAE | bias | holiday hours |
+|---|--:|--:|--:|
+| plain workday (v2.16 style) | 27.31 | −4.08 | 24.11 |
+| + holiday-aware `is_workday` | 27.22 | −3.96 | 22.06 |
+| **+ `is_holiday` dummy** | **27.06** | −3.94 | **17.65** |
+| + `Y_netload_lag168` | 27.05 | −3.87 | 17.91 |
+
+The holiday features carry the demand win (−0.9 % overall, **−27 % on
+holiday hours**, coefficient −14.8 EUR/MWh). Lagged net load was worth
+−0.04 % and its coefficient was **negative (−1.25)**, which is not a
+demand relationship at all:
+
+| model | net-load coefficient |
+|---|--:|
+| same-hour net load, no lagged price | **+18.92** |
+| lagged net load, no lagged price | +1.58 |
+| lagged net load + lagged price | −0.56 |
+| + lagged neighbours (as shipped in v2.17.0) | −1.15 |
+
+`corr(Y_netload_lag168, Y_fi_lag168) = +0.587` — last week's demand is
+already embedded in last week's *price*, so once the lagged price is in
+the model the demand term degenerates into a correction to it. A
+suppressor coefficient is statistically legal but uninterpretable, and
+this session's whole lesson is that confounded coefficients with
+surprising signs are how the solar inversion survived for years. Removed.
+
+The v2.17.0 figure that justified it (−2.6 %) had been measured on the
+2022-contaminated window and did not survive the window correction.
+
+**Still open, and the real opportunity**: SAME-HOUR net load has
+coefficient **+18.9** (corr +0.587) — a strong, physically correct demand
+driver. Fingrid publishes it day-ahead only, but that is exactly the
+horizon most consumer decisions use. A hybrid that consumes the published
+forecast for D+1 and falls back for later hours is the next demand
+experiment. The pipeline still accepts `netload_lag168`, so no plumbing
+is needed to try it.
+
 ### R4 — Contemporaneous neighbour-price leak + missing demand (fixed in v2.17.0)
 
 Closes D0 and the actionable part of D1. Neighbour features are now built

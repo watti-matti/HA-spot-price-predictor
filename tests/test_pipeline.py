@@ -86,12 +86,12 @@ def test_pipeline_loads_shipped_artifacts(tmp_path: Path) -> None:
     # v2.17.0 — intercept + 10 Ridge features: 5 core, 3 LAGGED neighbour
     # zones (same-hour prices leak the target), plus the two demand
     # inputs (lagged net load, public-holiday flag).
-    assert p._ridge_coef.shape == (11,)
+    assert p._ridge_coef.shape == (10,)
     assert tuple(p._features) == (
         "intercept", "Y_fi_lag168", "is_workday",
         "Y_sigmoid_wind_rho", "Y_solar_effective", "Y_temp",
         "Y_se1_lag168", "Y_se3_lag168", "Y_ee_lag168",
-        "Y_netload_lag168", "is_holiday",
+        "is_holiday",
     )
     assert -1.0 < p._ar1_phi < 1.0
     assert isinstance(p._gpd_right, dict)
@@ -527,16 +527,33 @@ def test_holiday_flag_suppresses_workday_and_moves_forecast(tmp_path: Path) -> N
     )
 
 
-def test_netload_demand_feature_is_wired(tmp_path: Path) -> None:
-    """The demand channel must actually reach the forecast."""
-    p = _make_pipeline(tmp_path)
-    ts = _hourly_timestamps(48)
-    n = len(ts)
-    kw = dict(wind=np.full(n, 6.0), solar=np.zeros(n), temp=np.full(n, 5.0),
-              enable_fan_chart=False)
-    low = p.compute_forecast(ts, netload_lag168=np.full(n, 6000.0), **kw)
-    high = p.compute_forecast(ts, netload_lag168=np.full(n, 11000.0), **kw)
-    assert not np.allclose(low["mean_eur_mwh"], high["mean_eur_mwh"]), (
-        "net load did not influence the forecast — the pipeline would "
-        "again have no demand signal at all"
+def test_shipped_model_does_not_use_lagged_netload() -> None:
+    """`Y_netload_lag168` was shipped in v2.17.0 and removed in v2.17.1.
+
+    On the correct (2023-) training window it was worth -0.04 % MAE and
+    its fitted coefficient was negative (-1.25) — a collinearity artifact
+    against the lagged price (corr +0.587), not a demand relationship.
+    Demand enters via the holiday features instead. Re-adding it needs
+    fresh evidence, not a silent retrain.
+    """
+    art = json.loads(
+        (REPO / "custom_components" / "spot_price_predictor" / "data"
+         / "spike_model_default.json").read_text()
     )
+    assert "Y_netload_lag168" not in art["ridge_features"], (
+        "shipped model re-introduced Y_netload_lag168; it measured as "
+        "noise with an uninterpretable sign. See docs/BACKLOG.md."
+    )
+
+
+def test_netload_plumbing_still_accepted(tmp_path: Path) -> None:
+    """The pipeline must keep accepting `netload_lag168` without error so
+    a future artifact (e.g. the day-ahead hybrid) can use it, even though
+    no shipped model declares it today."""
+    p = _make_pipeline(tmp_path)
+    ts = _hourly_timestamps(24)
+    n = len(ts)
+    out = p.compute_forecast(
+        ts, wind=np.full(n, 6.0), solar=np.zeros(n), temp=np.full(n, 5.0),
+        netload_lag168=np.full(n, 9000.0), enable_fan_chart=False)
+    assert np.isfinite(out["mean_eur_mwh"]).all()

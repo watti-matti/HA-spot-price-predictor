@@ -1,5 +1,5 @@
 {
-  "version": "v2.17.0/leakfree-demand",
+  "version": "v2.17.1/leakfree-holiday",
   "layer": "L4 GPD POT on FI post-AR residual (fresh full-window refit)",
   "ridge_features": [
     "Y_fi_lag168",
@@ -10,31 +10,29 @@
     "Y_se1_lag168",
     "Y_se3_lag168",
     "Y_ee_lag168",
-    "Y_netload_lag168",
     "is_holiday"
   ],
   "ridge_coef": [
-    -0.23972993710617532,
-    0.08329267112795632,
-    3.349229836949176,
-    -98.67462038639917,
-    -0.024217970368298807,
-    -2.4387936841248727,
-    0.06252767908762275,
-    0.05130615862115072,
-    -0.006909531014040287,
-    -1.248298699441893,
-    -15.132684965256937
+    -0.3029421409101859,
+    0.06740385044843657,
+    3.288657156314442,
+    -98.8206792982221,
+    -0.025286668078540565,
+    -2.4120498987671533,
+    0.04579651388915563,
+    0.04742003024799926,
+    -0.004638683076864655,
+    -14.798699301372876
   ],
-  "ar1_phi": 0.9053473127058557,
+  "ar1_phi": 0.905637017692004,
   "gpd_right": {
-    "n": 819,
-    "shape": 0.385646591292682,
-    "scale": 19.024000677614392,
-    "p_exceed": 0.02704130485026579
+    "n": 823,
+    "shape": 0.3925732370221395,
+    "scale": 18.75714692833536,
+    "p_exceed": 0.027173374715224352
   },
-  "hill_right_alpha": 2.3092655910553814,
-  "hill_left_alpha": 2.3092655910553814,
+  "hill_right_alpha": 2.3138181081682414,
+  "hill_left_alpha": 2.3138181081682414,
   "physics_seasonal": {
     "sigmoid_wind_rho": {
       "P_hour": [
@@ -297,15 +295,15 @@
   },
   "stats": {
     "n_train": 30287,
-    "eta_train_mean": -1.7463706794524277e-05,
-    "eta_train_sigma": 20.010491171418117,
-    "eta_train_skew": 3.8165947552494153,
-    "eta_train_excess_kurt": 226.3131258372653
+    "eta_train_mean": -5.128098167898539e-05,
+    "eta_train_sigma": 19.992587717307238,
+    "eta_train_skew": 3.820742662242521,
+    "eta_train_excess_kurt": 226.93566675285845
   },
   "train_window": [
     "2023-01-08 23:00:00+00:00",
     "2026-06-26 21:00:00+00:00"
   ],
   "data_store_snapshot": "c8a5feece6ecdcc3",
-  "notes": "v2.17.0 leak-free + demand-aware refit. Neighbour prices lagged 168h (same-hour values clear in the SAME day-ahead auction as FI and are unknowable at forecast time - the v2.16 leak, which suppressed the wind coefficient to -44.6 and inverted the solar sign). Adds the pipeline's first demand inputs: net load lagged 168h and a public-holiday flag (is_workday now excludes holidays). Leak-free honest evaluation (studies/honest_horizon_study.py): 35.46 -> 26.86 MAE (-24%), winter 46.57 -> 31.08 (-33%), bias -7.29 -> -3.92. Training window starts 2023-01 deliberately: including H2-2022 (gas crisis) measured 32.40 MAE / +11.67 bias."
+  "notes": "v2.17.1 leak-free + holiday-aware refit. Neighbour prices lagged 168h (same-hour values clear in the SAME day-ahead auction as FI). Demand enters via the public-holiday flag and holiday-aware is_workday (-0.9% MAE overall, -27% on holiday hours). Y_netload_lag168 was shipped in v2.17.0 and removed: worth -0.04% on the correct window with a negative, uninterpretable coefficient (collinear with lagged price, corr 0.587). Honest leak-free eval: 35.46 -> 27.06 MAE (-24%), winter -33%. Training window starts 2023-01 deliberately (H2-2022 gas crisis measured worse)."
 }
