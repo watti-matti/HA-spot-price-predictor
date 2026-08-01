@@ -1,5 +1,54 @@
 # Forecast model — backlog and open defects
 
+## Current status (2026-08-01) — the July summer weekday/weekend report
+
+**The original observation was correct.** Weekends *are* forecast more
+accurately than weekdays in summer, and the gap is large. Producer:
+`studies/summer_weekday_status.py` (honest task, local hours, summer
+Jun–Aug):
+
+| | weekday MAE | weekend MAE | gap |
+|---|--:|--:|--:|
+| v2.16 (as production behaved) | 27.35 | 18.02 | **+9.33** |
+| **v2.17.1 (shipped)** | **24.26** | **17.42** | **+6.83** |
+
+v2.17.1 narrows the gap by **27 %** and cuts weekday error by 11 %.
+Per block (summer, local time, bias / MAE):
+
+| block | actual | v2.16 | v2.17.1 |
+|---|--:|--:|--:|
+| weekday morning 07–11 | 62.3 | −7.3 / 31.8 | −4.8 / **25.8** |
+| weekday evening 17–21 | 71.7 | −18.1 / 38.0 | −17.6 / **34.1** |
+| weekday midday 12–16 | 40.4 | −0.1 / 21.1 | −3.2 / **18.6** |
+| weekday night 00–06 | 29.5 | −8.5 / 19.3 | **−0.6** / 18.7 |
+| weekend morning 07–11 | 22.1 | +9.5 / 18.6 | +8.3 / 17.4 |
+| weekend evening 17–21 | 46.6 | −13.4 / 25.5 | −11.2 / 25.8 |
+
+**But the direction still does not match the field report.** The report
+was weekday morning/evening *over*-prediction; every leak-free
+measurement shows weekday **under**-prediction (evening −17.6), while the
+*over*-prediction sits on weekend mornings/middays (+8 … +13).
+
+Most likely explanation, and the next thing to verify: the deployed
+integration at the time of the report was running **pre-v2.15 artifacts**
+whose training window ended **2024-11**. Measured early in this
+investigation, that stale model showed **+11.4 EUR/MWh midday bias** —
+over-prediction, matching the report. v2.15.0 refit L1 + L2/L3/L4 on
+fresh data and cut that to +7.2; v2.17.0/v2.17.1 improved it further. So
+the reported symptom is consistent with model staleness that has since
+been fixed, but **this has not been confirmed against a running
+instance** — see testing gap 1.
+
+**Revised characterisation of the remaining problem.** The dominant
+summer error is no longer a morning over-prediction; it is a **weekday
+evening under-prediction (−17.6 EUR/MWh, MAE 34.1 at 17–21 local)**,
+concentrated at 19:00–22:00 where actual prices peak at 74–87 EUR/MWh.
+That is the next investigation, and it supersedes the original framing.
+
+Overall accuracy against the model as production behaved: **35.46 →
+27.06 EUR/MWh MAE (−24 %)**, winter −33 %.
+
+---
 Working document for the spot-price forecasting pipeline. Every entry is
 backed by a measurement, with the producing script named so it can be
 re-run. Statistics come from the frozen walk-forward harness
