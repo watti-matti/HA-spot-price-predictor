@@ -83,7 +83,7 @@ from .pv_estimate import (
     marginal_effective_eur_kwh,
     net_household_cost_eur,
 )
-from .pipeline import Pipeline
+from .pipeline import Pipeline, NEIGHBOUR_LAG_HOURS
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -321,6 +321,55 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                 pass
         # Fallback: UTC+3 (Finland without DST)
         return (ts_utc.hour + 3) % 24
+
+    @staticmethod
+    def _align_netload_lag(
+        forecast: list[dict[str, Any]],
+        netload_hourly: dict[str, list[dict[str, Any]]] | None,
+        lag_delta: timedelta,
+    ) -> "np.ndarray | None":
+        """Net load (consumption − wind − solar, MW) at t − lag for each
+        forecast hour.
+
+        Fingrid publishes these series day-ahead only, but at a 168 h lag
+        every forecast hour maps to an hour that is already history, so
+        the whole horizon is covered. Returns None when the series are
+        unavailable — the pipeline then contributes zero for the feature.
+        """
+        import numpy as np
+
+        if not netload_hourly or not forecast:
+            return None
+        need = ("consumption_mw", "wind_forecast_mw", "solar_forecast_mw")
+        if not all(k in netload_hourly for k in need):
+            return None
+        maps: dict[str, dict[str, float]] = {}
+        for key in need:
+            m: dict[str, float] = {}
+            for e in netload_hourly.get(key) or []:
+                ts = e.get("timestamp") if isinstance(e, dict) else None
+                v = e.get("value_mw") if isinstance(e, dict) else None
+                if ts is None or v is None:
+                    continue
+                try:
+                    m[str(ts).split("+")[0].split("Z")[0].replace("T", " ")[:13]] = float(v)
+                except (TypeError, ValueError):
+                    continue
+            maps[key] = m
+        out = np.full(len(forecast), np.nan, dtype=float)
+        for i, f in enumerate(forecast):
+            try:
+                t = (_iso_to_naive_ts(f["timestamp"]).replace(tzinfo=timezone.utc)
+                     - lag_delta)
+            except Exception:
+                continue
+            key = t.strftime("%Y-%m-%d %H")
+            c = maps["consumption_mw"].get(key)
+            if c is None:
+                continue
+            out[i] = (c - maps["wind_forecast_mw"].get(key, 0.0)
+                      - maps["solar_forecast_mw"].get(key, 0.0))
+        return out if np.any(np.isfinite(out)) else None
 
     @staticmethod
     def _align_neighbour_prices(
@@ -1890,22 +1939,45 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
         # {timestamp, price_eur_mwh} entries. Missing or short series
         # become zero columns inside Pipeline._build_features (graceful
         # fallback to the v2.8.x no-cross-border behaviour).
-        recent_neighbour_prices: dict[str, np.ndarray] | None = None
+        # v2.17.0: align to t - 168 h, NOT to t. SE1/SE3/EE clear in the
+        # same day-ahead auction as FI, so a same-hour neighbour price is
+        # never known when the forecast is made; the lagged value is. The
+        # 8-day neighbour history the API already fetches covers the whole
+        # 170 h horizon (t - 168 h spans "7 days ago" .. "now + 2 h").
+        lag_delta = timedelta(hours=NEIGHBOUR_LAG_HOURS)
+        neighbour_prices_lag168: dict[str, np.ndarray] | None = None
         if neighbor:
             try:
-                forecast_ts_iso = [f["timestamp"] for f in forecast]
-                recent_neighbour_prices = self._align_neighbour_prices(
-                    forecast_ts_iso, neighbor)
+                lag_ts_iso = [
+                    (_iso_to_naive_ts(f["timestamp"]).replace(tzinfo=timezone.utc)
+                     - lag_delta).isoformat()
+                    for f in forecast
+                ]
+                neighbour_prices_lag168 = self._align_neighbour_prices(
+                    lag_ts_iso, neighbor)
             except Exception as e:
                 _LOGGER.debug(
                     "neighbour-price alignment failed (%s); zero fallback", e,
                 )
 
+        # Net load at t - 168 h from the Fingrid series, and the public
+        # holiday flag — the pipeline's only demand-side inputs.
+        netload_lag168 = self._align_netload_lag(forecast, netload_hourly,
+                                                 lag_delta)
+        is_holiday = np.array([
+            1.0 if self._local_date_str(
+                _iso_to_naive_ts(f["timestamp"]).replace(tzinfo=timezone.utc)
+            ) in self.holidays else 0.0
+            for f in forecast
+        ], dtype=float)
+
         out = self._pipeline.compute_forecast(
             timestamps=timestamps,
             wind=wind, solar=solar, temp=temp,
             recent_fi_residuals={"lag168": lag168},
-            recent_neighbour_prices=recent_neighbour_prices,
+            neighbour_prices_lag168=neighbour_prices_lag168,
+            netload_lag168=netload_lag168,
+            is_holiday=is_holiday,
             enable_fan_chart=True,
         )
         pipeline_mean = out["mean_eur_mwh"]

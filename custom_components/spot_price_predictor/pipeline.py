@@ -69,16 +69,45 @@ RIDGE_FEATURES = (
     "Y_sigmoid_wind_rho",
     "Y_solar_effective",
     "Y_temp",
-    # v2.10.0 — cross-border features accepted under the v2.5.6 hedge
-    # gate (see studies/results/exp_extended_retrain.md). Deseasonalised
-    # SE/EE prices read from the corresponding shipped L1 components.
-    "Y_se1",
-    "Y_se3",
-    "Y_ee",
+    # v2.17.0 — cross-border features, LAGGED 168 h. Through v2.16 these
+    # were same-hour prices, which cannot be known when the forecast is
+    # made: SE1/SE3/EE clear in the SAME day-ahead auction as FI, so
+    # observing them implies the FI price is published too. See
+    # NEIGHBOUR_LAG_HOURS below.
+    "Y_se1_lag168",
+    "Y_se3_lag168",
+    "Y_ee_lag168",
+    # v2.17.0 — demand. The pipeline previously had NO demand signal at
+    # all: wind/solar are supply, temperature is only a heating proxy and
+    # goes silent in summer (corr(temp, net load) = -0.70 winter but
+    # +0.12 summer). Net load lagged 168 h is knowable for the whole
+    # horizon and carries the weekly demand regime (industrial schedules,
+    # holiday shutdowns) that weather cannot reconstruct.
+    "Y_netload_lag168",
+    "is_holiday",
 )
 
+# ── Cross-border look-back (v2.17.0) ───────────────────────────────
+#
+# FI, SE1, SE3 and EE clear simultaneously in the day-ahead auction, so a
+# same-hour neighbour price is never observable before the target it is
+# meant to predict (corr(FI(t), SE3(t)) = +0.82 contemporaneous vs +0.66
+# at 24 h lag). Using it made the model a follower of a market that
+# publishes at the same instant as the answer: it suppressed the physical
+# wind coefficient by more than half (-44.6 vs -93.0) and left the
+# coefficients mis-specified for the hours production must actually
+# forecast, where the feature is necessarily absent.
+#
+# The features are therefore built from prices `NEIGHBOUR_LAG_HOURS` in
+# the past, which are genuinely known at forecast time for the whole
+# horizon. Leak-free evaluation (studies/honest_horizon_study.py):
+# MAE 35.46 -> 27.30 (-23 %), winter 46.57 -> 31.54 (-32 %), bias
+# -7.29 -> -4.15. It also removes the +2 d/+3 d discontinuity, which was
+# a symptom of the same defect.
+NEIGHBOUR_LAG_HOURS: int = 168
+
 # Names of neighbour-price zones consumed by Pipeline.compute_forecast
-# when the caller supplies the optional `recent_neighbour_prices` arg.
+# when the caller supplies the optional `neighbour_prices_lag168` arg.
 _NEIGHBOUR_ZONES: tuple[str, ...] = ("se1", "se3", "ee")
 
 # ── Economic sign invariant (v2.16.0) ──────────────────────────────
@@ -315,18 +344,39 @@ class Pipeline:
         self, timestamps: np.ndarray,
         wind: np.ndarray, solar: np.ndarray, temp: np.ndarray,
         Y_fi_lag168: np.ndarray,
-        neighbour_prices: Mapping[str, np.ndarray] | None = None,
+        neighbour_prices_lag168: Mapping[str, np.ndarray] | None = None,
+        netload_lag168: np.ndarray | None = None,
+        is_holiday: np.ndarray | None = None,
     ) -> np.ndarray:
         """Build the L2 Ridge design matrix in the order declared by
         the artifact's `ridge_features` field (see `__init__`).
 
-        Cross-border zones (`Y_se1`, `Y_se3`, `Y_ee`) are deseasonalised
-        against the shipped per-zone L1 components when raw prices are
-        supplied via `neighbour_prices={"se1": np.ndarray(n), ...}`;
-        missing zones contribute zero (graceful fallback).
+        `neighbour_prices_lag168` must hold, for each forecast hour t, the
+        neighbour zone price at **t − NEIGHBOUR_LAG_HOURS** — a value that
+        is genuinely known when the forecast is made. Passing same-hour
+        prices here would reintroduce the v2.16 leak (see
+        NEIGHBOUR_LAG_HOURS); the parameter is named for the contract so
+        that cannot happen silently. Missing zones contribute zero.
+
+        `netload_lag168` likewise holds net load (consumption − wind −
+        solar, MW) at t − NEIGHBOUR_LAG_HOURS. `is_holiday` is a 0/1 flag
+        per forecast hour. Both are optional; absent, they contribute zero.
         """
         n = len(timestamps)
-        is_workday = self._is_workday(timestamps).astype(float)
+        # Workday excludes public holidays when the caller supplies them —
+        # a weekday holiday has weekend-like demand, and treating it as a
+        # normal working day is a systematic error on ~900 hours/window.
+        wd = self._is_workday(timestamps).astype(float)
+        hol = (np.zeros(n, dtype=float) if is_holiday is None
+               else np.clip(np.asarray(is_holiday, dtype=float), 0.0, 1.0))
+        if hol.shape != (n,):
+            hol = np.zeros(n, dtype=float)
+        is_workday = wd * (1.0 - hol)
+        # Lagged timestamps — the neighbour/net-load features are
+        # deseasonalised against the seasonal profile of the hour they
+        # were actually observed in, not the forecast hour.
+        lag_ts = (timestamps.astype("datetime64[s]")
+                  - np.timedelta64(NEIGHBOUR_LAG_HOURS * 3600, "s"))
         # Physics-derived features (intermediate; deseasonalised below).
         wind_rho = _sigmoid_turbine_rho(wind, temp)
         solar_eff = _solar_effective(solar, temp)
@@ -341,7 +391,7 @@ class Pipeline:
         # (alignment gaps) are filled post-deseasonalisation so the
         # Ridge term contributes zero for that hour.
         Y_zone: dict[str, np.ndarray] = {}
-        np_arr = neighbour_prices or {}
+        np_arr = neighbour_prices_lag168 or {}
         for zone in _NEIGHBOUR_ZONES:
             raw = np_arr.get(zone) if isinstance(np_arr, Mapping) else None
             if raw is None:
@@ -360,10 +410,21 @@ class Pipeline:
             finite = raw_arr[np.isfinite(raw_arr)]
             filled = np.where(np.isfinite(raw_arr), raw_arr,
                               float(np.mean(finite)))
-            y = self._deseasonalize_input(zone, filled, timestamps)
+            y = self._deseasonalize_input(zone, filled, lag_ts)
             # Final guard against any residual NaN.
             y = np.where(np.isfinite(y), y, 0.0)
             Y_zone[zone] = y
+
+        # Net load at t-168 h, deseasonalised against its own stored
+        # components and expressed in GW so the coefficient is readable.
+        Y_netload = np.zeros(n, dtype=float)
+        if netload_lag168 is not None:
+            nl = np.asarray(netload_lag168, dtype=float)
+            if nl.shape == (n,) and np.any(np.isfinite(nl)):
+                finite = nl[np.isfinite(nl)]
+                nl = np.where(np.isfinite(nl), nl, float(np.mean(finite)))
+                yv = self._deseasonalize_physics("netload", nl, lag_ts) / 1000.0
+                Y_netload = np.where(np.isfinite(yv), yv, 0.0)
 
         # Map feature name → column array.
         named: dict[str, np.ndarray] = {
@@ -373,9 +434,11 @@ class Pipeline:
             "Y_sigmoid_wind_rho": Y_wind_rho,
             "Y_solar_effective":  Y_solar_eff,
             "Y_temp":             Y_temp,
-            "Y_se1":              Y_zone["se1"],
-            "Y_se3":              Y_zone["se3"],
-            "Y_ee":               Y_zone["ee"],
+            "Y_se1_lag168":       Y_zone["se1"],
+            "Y_se3_lag168":       Y_zone["se3"],
+            "Y_ee_lag168":        Y_zone["ee"],
+            "Y_netload_lag168":   Y_netload,
+            "is_holiday":         hol,
         }
 
         cols = []
@@ -468,7 +531,9 @@ class Pipeline:
         self, timestamps: np.ndarray,
         wind: np.ndarray, solar: np.ndarray, temp: np.ndarray,
         recent_fi_residuals: dict[str, float] | None = None,
-        recent_neighbour_prices: Mapping[str, np.ndarray] | None = None,
+        neighbour_prices_lag168: Mapping[str, np.ndarray] | None = None,
+        netload_lag168: np.ndarray | None = None,
+        is_holiday: np.ndarray | None = None,
         enable_fan_chart: bool = True,
     ) -> dict[str, np.ndarray]:
         """Compute the hourly forecast.
@@ -480,12 +545,18 @@ class Pipeline:
                 providing Y_fi at t-168 for each forecast hour, AND
                 {"last_eta": float} providing the most-recent observed
                 post-AR residual (for L3 AR(1) propagation).
-            recent_neighbour_prices: optional dict mapping zone name
-                (``"se1"``, ``"se3"``, ``"ee"``) to raw EUR/MWh prices
-                aligned with ``timestamps``. The pipeline deseasonalises
-                them against the shipped per-zone L1 components before
-                applying the Ridge weights. Missing zones contribute
-                zero — equivalent to the v2.8.x behaviour.
+            neighbour_prices_lag168: optional dict mapping zone name
+                (``"se1"``, ``"se3"``, ``"ee"``) to raw EUR/MWh prices at
+                **t − NEIGHBOUR_LAG_HOURS** for each forecast hour t —
+                i.e. prices already published when the forecast is made.
+                Do NOT pass same-hour prices: those clear in the same
+                auction as the FI target and are unknowable at forecast
+                time (this was the v2.16 leak). Missing zones contribute
+                zero.
+            netload_lag168: optional array of net load (consumption −
+                wind − solar, MW) at t − NEIGHBOUR_LAG_HOURS.
+            is_holiday: optional 0/1 array marking public holidays for
+                each forecast hour; also suppresses ``is_workday``.
             enable_fan_chart: if True, also compute P5/P25/P50/P75/P95.
 
         Returns:
@@ -513,8 +584,11 @@ class Pipeline:
             self._last_eta = float(recent_fi_residuals["last_eta"])
 
         # L2 Ridge
-        X = self._build_features(timestamps, wind, solar, temp, lag168,
-                                  neighbour_prices=recent_neighbour_prices)
+        X = self._build_features(
+            timestamps, wind, solar, temp, lag168,
+            neighbour_prices_lag168=neighbour_prices_lag168,
+            netload_lag168=netload_lag168,
+            is_holiday=is_holiday)
         ridge = X @ self._ridge_coef
 
         # L3 AR(1) propagation

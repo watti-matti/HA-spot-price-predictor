@@ -56,8 +56,15 @@ except Exception:
     pass
 
 OUTPUT_DIR = REPO / "output"
+# v2.17.0 leak-free + demand-aware feature set. Neighbour prices are
+# LAGGED 168 h (same-hour values clear in the same auction as the target
+# and are unknowable at forecast time); net load lagged 168 h and the
+# public-holiday flag are the pipeline's first demand-side inputs.
 FEATS = ["Y_fi_lag168", "is_workday", "Y_sigmoid_wind_rho",
-         "Y_solar_effective", "Y_temp", "Y_se1", "Y_se3", "Y_ee"]
+         "Y_solar_effective", "Y_temp",
+         "Y_se1_lag168", "Y_se3_lag168", "Y_ee_lag168",
+         "Y_netload_lag168", "is_holiday"]
+LAG = 168
 # Physics seasonal config — matches exp_extra_features / backtest_harness.
 PHYS_DEPTH = ("P_hour", "P_week")
 PHYS_SMOOTH = {"P_week": 7}
@@ -116,6 +123,28 @@ def main() -> None:
         phys[art_name] = comp
         df[f"Y_{col}"] = df[col].values - sd.compute_seasonal_part(ts, comp)
 
+    # ── leak-free + demand features ──
+    import pandas as _pd
+    from holidays import build_holiday_set  # noqa: E402
+    _g = _pd.read_parquet(REPO / "data_store" / "fi_grid_data.parquet")
+    _nl = (_g.consumption_mw - _g.wind_forecast_mw.fillna(0)
+           - _g.solar_forecast_mw.fillna(0)).reindex(df.index).interpolate(limit=6)
+    _nlc = sd.fit_components(_nl.values, ts, depth=("P_hour", "P_day", "P_week"))
+    phys["netload"] = _nlc
+    _Ynl = (_nl.values - sd.compute_seasonal_part(ts, _nlc)) / 1000.0
+    df["Y_netload_lag168"] = np.nan_to_num(
+        _pd.Series(_Ynl, index=df.index).shift(LAG).values)
+    for _z in ("se1", "se3", "ee"):
+        df[f"Y_{_z}_lag168"] = np.nan_to_num(df[f"Y_{_z}"].shift(LAG).values)
+    _loc = _pd.DatetimeIndex(df.index).tz_convert("Europe/Helsinki")
+    _hol = build_holiday_set(2022, 2028)
+    df["is_holiday"] = np.array(
+        [1.0 if d.strftime("%Y-%m-%d") in _hol else 0.0 for d in _loc])
+    # workday must exclude public holidays (weekday holidays have
+    # weekend-like demand); matches Pipeline._build_features
+    df["is_workday"] = ((_loc.weekday < 5) & (df["is_holiday"].values == 0)).astype(float)
+    print(f"  holiday hours: {int(df['is_holiday'].sum()):,}", flush=True)
+
     y = df["Y_fi"].values
     X = np.column_stack([np.ones(n)] + [df[f].values for f in FEATS])
     ok = np.isfinite(X).all(axis=1) & np.isfinite(y)
@@ -143,7 +172,7 @@ def main() -> None:
           f"sigma(eta) = {eta.std():.2f}", flush=True)
 
     payload = {
-        "version": "v2.15.0/fresh-cons",
+        "version": "v2.17.0/leakfree-demand",
         "layer": "L4 GPD POT on FI post-AR residual (fresh full-window refit)",
         "ridge_features": FEATS,
         "ridge_coef": coef.tolist(),

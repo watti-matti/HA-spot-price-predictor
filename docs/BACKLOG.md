@@ -15,6 +15,37 @@ effect that mattered.
 
 ## Resolved
 
+### R4 — Contemporaneous neighbour-price leak + missing demand (fixed in v2.17.0)
+
+Closes D0 and the actionable part of D1. Neighbour features are now built
+from prices **lagged 168 h** (`NEIGHBOUR_LAG_HOURS`), and the pipeline
+gained its first demand-side inputs: net load lagged 168 h and a public
+holiday flag (`is_workday` now excludes holidays).
+
+Leak-free evaluation (`studies/honest_horizon_study.py`):
+
+| | all MAE | bias | winter MAE | winter bias | summer MAE |
+|---|--:|--:|--:|--:|--:|
+| v2.16 as production behaved | 35.46 | −7.29 | 46.57 | −12.52 | 27.69 |
+| **v2.17.0** | **26.86** | **−3.92** | **31.08** | **−1.85** | **24.01** |
+
+**−24% MAE overall, −33% winter, −13% summer.**
+
+Side effects worth recording:
+
+* **The solar sign fixed itself.** With the leak gone the ridge chooses
+  `Y_solar_effective = −0.0242` unprompted — the R1 sign constraint is no
+  longer binding. The leak *was* the cause of the inversion: the
+  neighbour channel had been transporting the PV signal, leaving solar to
+  fit confounding. The PV channel is now genuinely responsive, so growing
+  capacity (Joroinen) moves the forecast the right way.
+* **The physical drivers recovered.** Wind went −44.6 → −98.7.
+* **The +2 d/+3 d discontinuity disappeared** — it was a symptom of the
+  same defect, not an independent problem.
+* Guards added: the shipped artifact may not declare an un-lagged
+  neighbour feature; a behavioural test asserts a lagged input affects
+  only its own hour; demand and holiday channels are asserted wired.
+
 ### R1 — Inverted solar sign (fixed in v2.16.0)
 
 The shipped model priced irradiance with a **positive** coefficient
@@ -55,6 +86,37 @@ seasonal components while the pipeline mean-centred them per forecast
 batch. Storing the components in the artifact (`physics_seasonal`) and
 applying them at inference was worth −8.9% MAE — the largest single win
 so far.
+
+---
+
+## Considered and rejected (with evidence)
+
+* **Training from 2022** (requested; measured, declined). The store holds
+  ~4 k extra hours from 2022-07, but that is the gas-crisis regime.
+  Identical model, window varied: 2022-06 → MAE 32.40 / bias +11.67;
+  **2023-01 → 26.86 / −3.92**; 2024-01 → 29.83 / −6.85. More data, worse
+  model — the crisis period inflates the climatology and injects an
+  over-prediction bias. Cutoff left at 2023-01; re-test when the crisis
+  ages out of the rolling window.
+* **Net load predicted from weather + calendar** — adds ~0.1%. A linear
+  net-load model collapses into the weather features the ridge already
+  has. The lagged *observed* net load now shipped is the version that
+  pays, because it carries demand regime information weather cannot
+  reconstruct.
+* **24-parameter hour×day-type profile** — rejected in favour of one
+  physical variable. The weekday−weekend price gap tracks the net-load
+  gap at `corr = +0.87` across the 24 hours, so a single coefficient
+  reproduces what 24 parameters were meant to model, without the
+  overfitting risk.
+* **Capacity-aware PV/wind scaling (Fingrid 267/268)** — see D5.
+* **Crossfade at the day-ahead boundary** — see D2; became second-order
+  once the leak was removed and the discontinuity vanished.
+
+Watch item: the shipped `Y_netload_lag168` coefficient is **negative**
+(−1.25). That is not a physical violation — it is a lagged regime signal,
+not a contemporaneous causal driver, so mean-reversion can legitimately
+produce this sign — but it should be re-examined when a contemporaneous
+demand channel becomes available for the full horizon.
 
 ---
 
