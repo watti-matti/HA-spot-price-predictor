@@ -43,6 +43,7 @@ Persistent calibrator state lives under `<config>/.storage/`
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from datetime import datetime, timezone
@@ -57,6 +58,16 @@ from . import price_floor as _pf
 from . import hourly_calibration as _hc
 
 _LOGGER = logging.getLogger(__name__)
+
+# Calibrator state files, and the sidecar recording which model taught
+# them. State is only valid for the model it was learned against — see
+# Pipeline._discard_state_if_model_changed.
+_CALIBRATOR_STATE_FILES: tuple[str, ...] = (
+    "hourly_bias.json",
+    "hourly_fan_chart.json",
+    "refit_monitor.json",
+)
+FINGERPRINT_FILE = "model_fingerprint.json"
 
 # Default Ridge feature ordering. The shipped artifact's
 # `ridge_features` field is authoritative at runtime — the pipeline
@@ -231,6 +242,11 @@ class Pipeline:
         self._eta_mu    = float(stats.get("eta_train_mean", 0.0))
         self._eta_sigma = float(stats.get("eta_train_sigma", 25.0))
 
+        # Persisted calibrator state is only meaningful for the model it
+        # was learned against; drop it when the model has changed.
+        self._model_fingerprint = self._compute_model_fingerprint()
+        self.calibrators_cold_started = self._discard_state_if_model_changed()
+
         # Calibrators with persistent state
         self._bias = self._load_calibrator(
             self._storage_dir / "hourly_bias.json",
@@ -311,8 +327,74 @@ class Pipeline:
                 json.dumps(self._fan.to_dict()), encoding="utf-8")
             (self._storage_dir / "refit_monitor.json").write_text(
                 json.dumps(self._refit.to_dict()), encoding="utf-8")
+            (self._storage_dir / FINGERPRINT_FILE).write_text(
+                json.dumps({"model_fingerprint": self._model_fingerprint}),
+                encoding="utf-8")
         except Exception as e:
             _LOGGER.warning("pipeline:state save failed: %s", e)
+
+    # ── Model-change invalidation ─────────────────────────────────
+
+    def _compute_model_fingerprint(self) -> str:
+        """Stable digest of everything the calibrators are calibrated
+        AGAINST: the L2 feature set and coefficients, the AR(1) term, and
+        the L1 seasonal components."""
+        payload = json.dumps({
+            "features": list(self._features),
+            "coef": [round(float(c), 10) for c in self._ridge_coef],
+            "ar1_phi": round(float(self._spike_artifact.get("ar1_phi", 0.0)), 10),
+            "seasonal": self._seasonal_artifact.get("components"),
+        }, sort_keys=True, default=str)
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+    def _discard_state_if_model_changed(self) -> bool:
+        """Delete persisted calibrator state when it was learned against a
+        DIFFERENT model, and report whether anything was discarded.
+
+        The bias corrector and the DtACI fan chart learn *this* model's
+        error. After a retrain those corrections describe a model that no
+        longer exists: measured across a model change, carrying the old
+        state over cost ~0.45 % MAE and about +1.5 EUR/MWh of excess bias
+        until the 14-day EMA washed it out, because the previous model's
+        learned offsets (+3.4 … +14.4 EUR/MWh) over-corrected the new one.
+
+        Cold-starting instead means no correction is applied until each
+        hour bin re-warms (14 daily observations), which is the honest
+        default: an uncalibrated forecast beats one calibrated against the
+        wrong model.
+        """
+        path = self._storage_dir / FINGERPRINT_FILE
+        previous = None
+        if path.exists():
+            try:
+                previous = json.loads(path.read_text(encoding="utf-8")).get(
+                    "model_fingerprint")
+            except Exception:
+                previous = None
+        elif not any((self._storage_dir / f).exists()
+                     for f in _CALIBRATOR_STATE_FILES):
+            return False          # genuinely fresh install, nothing to discard
+
+        if previous == self._model_fingerprint:
+            return False
+
+        discarded = []
+        for f in _CALIBRATOR_STATE_FILES:
+            p = self._storage_dir / f
+            if p.exists():
+                try:
+                    p.unlink()
+                    discarded.append(f)
+                except OSError as e:
+                    _LOGGER.warning("pipeline:could not discard %s (%s)", p, e)
+        _LOGGER.info(
+            "pipeline:model changed (%s -> %s); cold-starting calibrators, "
+            "discarded %s. Bias correction resumes once each hour bin "
+            "re-warms (~14 days).",
+            previous or "none", self._model_fingerprint,
+            ", ".join(discarded) or "nothing",
+        )
+        return True
 
     # ── L1 seasonal lookup ────────────────────────────────────────
 
