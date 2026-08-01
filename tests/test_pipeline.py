@@ -371,3 +371,86 @@ def test_pipeline_end_to_end_smoke(tmp_path: Path) -> None:
     actuals = pred[:24] + rng.normal(0, 5, size=24)
     diag = p.update_with_actuals(pred[:24], actuals)
     assert "refit_recommended" in diag
+
+
+# ── Economic sign invariant: zero-marginal-cost generation ────────
+#
+# Wind and PV have ~zero marginal cost, so more of either can only push
+# the price down or leave it unchanged — never up. These tests are a
+# permanent guard: they must fail if a retrain, refactor, or hand-edited
+# artifact ever reintroduces the inversion that shipped through v2.15.0
+# (Y_solar_effective had a POSITIVE coefficient, so a sunnier forecast
+# raised the predicted price).
+
+
+def test_shipped_artifact_obeys_zero_marginal_cost_signs() -> None:
+    """The SHIPPED artifact must not price wind/PV with a positive sign."""
+    art = json.loads(
+        (REPO / "custom_components" / "spot_price_predictor" / "data"
+         / "spike_model_default.json").read_text()
+    )
+    feats = ["intercept"] + list(art["ridge_features"])
+    for name in pipeline_mod.NON_POSITIVE_FEATURES:
+        assert name in feats, f"{name} missing from shipped ridge_features"
+        c = float(art["ridge_coef"][feats.index(name)])
+        assert c <= 0.0, (
+            f"{name} coefficient {c:+.6f} > 0 — the shipped model would raise "
+            f"its price forecast when zero-marginal-cost generation rises. "
+            f"Refit with the sign constraint in "
+            f"studies/build_fresh_spike_model.py."
+        )
+
+
+def test_runtime_clamps_a_positive_physics_coefficient(tmp_path: Path) -> None:
+    """Even a violating artifact must be neutralised at load time."""
+    data_dir = REPO / "custom_components" / "spot_price_predictor" / "data"
+    art = json.loads((data_dir / "spike_model_default.json").read_text())
+    feats = ["intercept"] + list(art["ridge_features"])
+    art["ridge_coef"][feats.index("Y_solar_effective")] = +0.5   # inverted
+    bad = tmp_path / "data"
+    bad.mkdir()
+    for f in data_dir.glob("*.json"):
+        (bad / f.name).write_text(f.read_text(), encoding="utf-8")
+    (bad / "spike_model_default.json").write_text(json.dumps(art),
+                                                  encoding="utf-8")
+    p = pipeline_mod.Pipeline(data_dir=bad, storage_dir=tmp_path / "state")
+    assert p._ridge_coef[p._features.index("Y_solar_effective")] == 0.0
+
+
+def test_forecast_never_rises_with_more_irradiance(tmp_path: Path) -> None:
+    """Behavioural invariant: raising irradiance must never raise the
+    forecast at any hour. This is the guard that survives refactors —
+    it constrains the model's response, not just a stored number."""
+    p = _make_pipeline(tmp_path)
+    ts = _hourly_timestamps(48)
+    n = len(ts)
+    wind = np.full(n, 6.0)
+    temp = np.full(n, 18.0)
+    base = p.compute_forecast(ts, wind, np.full(n, 100.0), temp,
+                              enable_fan_chart=False)["mean_eur_mwh"]
+    for extra in (50.0, 200.0, 500.0):
+        sunnier = p.compute_forecast(ts, wind, np.full(n, 100.0 + extra), temp,
+                                     enable_fan_chart=False)["mean_eur_mwh"]
+        assert np.all(sunnier <= base + 1e-9), (
+            f"+{extra:.0f} W/m2 irradiance RAISED the forecast at "
+            f"{int(np.sum(sunnier > base + 1e-9))} hour(s); PV is "
+            f"zero-marginal-cost and can never increase price."
+        )
+
+
+def test_forecast_never_rises_with_more_wind(tmp_path: Path) -> None:
+    """Same invariant for wind (also zero marginal cost)."""
+    p = _make_pipeline(tmp_path)
+    ts = _hourly_timestamps(48)
+    n = len(ts)
+    solar = np.zeros(n)
+    temp = np.full(n, 5.0)
+    base = p.compute_forecast(ts, np.full(n, 5.0), solar, temp,
+                              enable_fan_chart=False)["mean_eur_mwh"]
+    for w in (7.0, 10.0, 15.0):
+        windier = p.compute_forecast(ts, np.full(n, w), solar, temp,
+                                     enable_fan_chart=False)["mean_eur_mwh"]
+        assert np.all(windier <= base + 1e-9), (
+            f"wind {w:.0f} m/s RAISED the forecast vs 5 m/s; wind is "
+            f"zero-marginal-cost and can never increase price."
+        )

@@ -1,5 +1,5 @@
 {
-  "version": "v2.15.0/fresh-cons",
+  "version": "v2.16.0/fresh-cons-signed",
   "layer": "L4 GPD POT on FI post-AR residual (fresh full-window refit)",
   "ridge_features": [
     "Y_fi_lag168",
@@ -12,25 +12,25 @@
     "Y_ee"
   ],
   "ridge_coef": [
-    1.9828035601539324,
-    0.023003721789753375,
-    1.389621432592198,
-    -45.69998078122906,
-    0.02363079681919065,
-    -0.7284156977363566,
-    0.3508125970506867,
-    0.2619976304979145,
-    0.396935765902053
+    1.9218977345503752,
+    0.021668597789298163,
+    1.3702597141862438,
+    -47.873271267531315,
+    -7.067688839800924e-25,
+    -0.6426317312528191,
+    0.35548536475633424,
+    0.2556949795768391,
+    0.38911685094202003
   ],
-  "ar1_phi": 0.8681755415932951,
+  "ar1_phi": 0.8696271606870061,
   "gpd_right": {
-    "n": 732,
-    "shape": 0.3760735138567072,
-    "scale": 13.600694930876978,
-    "p_exceed": 0.024168785287417043
+    "n": 728,
+    "shape": 0.37410470966852666,
+    "scale": 13.745458621990412,
+    "p_exceed": 0.02403671542245848
   },
-  "hill_right_alpha": 2.6801814528028314,
-  "hill_left_alpha": 2.6801814528028314,
+  "hill_right_alpha": 2.669731725778087,
+  "hill_left_alpha": 2.669731725778087,
   "physics_seasonal": {
     "sigmoid_wind_rho": {
       "P_hour": [
@@ -201,15 +201,19 @@
   },
   "stats": {
     "n_train": 30287,
-    "eta_train_mean": 0.00014353117377473697,
-    "eta_train_sigma": 17.310240880217652,
-    "eta_train_skew": 1.0664724469657385,
-    "eta_train_excess_kurt": 94.14473781195058
+    "eta_train_mean": 8.379844147139521e-05,
+    "eta_train_sigma": 17.271324083594553,
+    "eta_train_skew": 1.1425946449392297,
+    "eta_train_excess_kurt": 97.07612455669651
   },
   "train_window": [
     "2023-01-08 23:00:00+00:00",
     "2026-06-26 21:00:00+00:00"
   ],
   "data_store_snapshot": "c8a5feece6ecdcc3",
-  "notes": "FRESH_CONS candidate: full-window refit of L2 ridge + AR(1) + GPD against the fresh L1 seasonal artifact, with physics_seasonal persisted for train/inference-consistent deseasonalisation of the wind/solar physics terms. Validated by studies/backtest_harness.py (walk-forward day-ahead): DEPLOYED 22.15 -> FRESH 21.75 -> FRESH_CONS 19.81 MAE. Requires the pipeline._deseasonalize_physics support and the matching fresh seasonal_components_default.json."
+  "notes": "v2.16.0: full-window refit with the zero-marginal-cost SIGN CONSTRAINT (Y_solar_effective, Y_sigmoid_wind_rho <= 0). Unconstrained fits assign solar a POSITIVE coefficient (+0.020..+0.027 in every walk-forward refit) because it is confounded with temperature and the neighbour-price channel; that made the forecast RISE with irradiance, which is economically indefensible and worsens as PV capacity grows. Constraint cost: harness MAE 19.81 -> 19.86 overall, summer 14.47 -> 14.29. Also carries physics_seasonal for train/inference-consistent deseasonalisation.",
+  "sign_constrained_features": [
+    "Y_solar_effective",
+    "Y_sigmoid_wind_rho"
+  ]
 }

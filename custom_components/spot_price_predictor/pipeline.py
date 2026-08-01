@@ -81,6 +81,27 @@ RIDGE_FEATURES = (
 # when the caller supplies the optional `recent_neighbour_prices` arg.
 _NEIGHBOUR_ZONES: tuple[str, ...] = ("se1", "se3", "ee")
 
+# ── Economic sign invariant (v2.16.0) ──────────────────────────────
+#
+# Wind and PV are zero-marginal-cost generation. More of either shifts
+# the merit order to the right, so their price effect can only be
+# negative or nil — NEVER positive. Any fit that assigns a positive
+# coefficient to these features is describing a confound (in Finland:
+# clear winter skies are cold and expensive; sunny days here are sunny
+# in Sweden too, so the neighbour-price channel already carries the PV
+# signal), not a causal price response.
+#
+# A positive coefficient here is not a tuning question — it makes the
+# model raise its forecast when irradiance rises, which is indefensible
+# and gets structurally worse as PV capacity grows. The trainer fits
+# these features under a <= 0 constraint, and the runtime clamps them
+# defensively so that no artifact, however produced, can reintroduce
+# the inversion in production.
+NON_POSITIVE_FEATURES: tuple[str, ...] = (
+    "Y_solar_effective",
+    "Y_sigmoid_wind_rho",
+)
+
 
 # ── Physics features (vectorised) ──────────────────────────────────
 
@@ -159,6 +180,9 @@ class Pipeline:
             self._features = tuple(feats)
         else:
             self._features = RIDGE_FEATURES[: len(self._ridge_coef)]
+        # Economic sign invariant — clamp any positive zero-marginal-cost
+        # coefficient to zero before it can reach a forecast.
+        self._enforce_physics_signs()
         # AR(1) coefficient on the deseasonalized FI residual
         self._ar1_phi = float(self._spike_artifact.get("ar1_phi", 0.0))
         # L4 GPD POT parameters for fan-chart sampling
@@ -190,6 +214,32 @@ class Pipeline:
         # Cache of the most-recent observed η so AR(1) has a starting
         # point for forecasting. Updated when we see new actuals.
         self._last_eta: float | None = None
+
+    def _enforce_physics_signs(self) -> None:
+        """Clamp zero-marginal-cost coefficients to <= 0 (see
+        `NON_POSITIVE_FEATURES`).
+
+        This is a defensive runtime guard, not the primary fix — the
+        trainer already fits these features under a sign constraint. It
+        exists so that a hand-edited, third-party, or historical artifact
+        can never make the forecast rise when wind or irradiance rises.
+        Clamping to exactly 0.0 removes the feature's influence rather
+        than inventing a magnitude we have not fitted.
+        """
+        for name in NON_POSITIVE_FEATURES:
+            if name not in self._features:
+                continue
+            i = self._features.index(name)
+            if i < len(self._ridge_coef) and self._ridge_coef[i] > 0.0:
+                _LOGGER.error(
+                    "pipeline: artifact violates the zero-marginal-cost sign "
+                    "invariant — %s coefficient %+.6f > 0 would make the "
+                    "forecast RISE with more generation. Clamping to 0. "
+                    "Retrain with the sign constraint (see "
+                    "studies/build_fresh_spike_model.py).",
+                    name, float(self._ridge_coef[i]),
+                )
+                self._ridge_coef[i] = 0.0
 
     # ── Artifact / state I/O ───────────────────────────────────────
 

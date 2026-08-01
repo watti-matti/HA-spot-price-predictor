@@ -35,9 +35,12 @@ sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "studies"))
 sys.path.insert(0, str(REPO / "custom_components" / "spot_price_predictor"))
 
+import numpy as _np  # noqa: E402
+from scipy.optimize import lsq_linear  # noqa: E402
+
 import seasonal_decomposition as sd  # noqa: E402
 from exp_extra_features import build_dataframe  # noqa: E402
-from v2510_layer3_ar_wind import fit_ridge, fit_ar1  # noqa: E402
+from v2510_layer3_ar_wind import fit_ar1  # noqa: E402
 
 import importlib.util as _ilu  # noqa: E402
 _spec = _ilu.spec_from_file_location(
@@ -58,6 +61,34 @@ FEATS = ["Y_fi_lag168", "is_workday", "Y_sigmoid_wind_rho",
 # Physics seasonal config — matches exp_extra_features / backtest_harness.
 PHYS_DEPTH = ("P_hour", "P_week")
 PHYS_SMOOTH = {"P_week": 7}
+
+# Economic sign invariant — wind and PV are zero-marginal-cost, so their
+# price coefficient can never be positive (see pipeline.NON_POSITIVE_FEATURES).
+# Left free, the ridge assigns Y_solar_effective a POSITIVE coefficient in
+# every walk-forward refit (+0.020…+0.027) because it is confounded with
+# temperature (clear Finnish winter skies are cold and expensive) and with
+# the neighbour-price channel (a sunny day here is sunny in Sweden too).
+# Constraining costs ~nothing — harness walk-forward MAE 19.81 -> 19.86
+# overall, and summer IMPROVES 14.47 -> 14.29.
+NON_POSITIVE_FEATURES = ("Y_solar_effective", "Y_sigmoid_wind_rho")
+
+
+def fit_ridge_signed(X: _np.ndarray, y: _np.ndarray, alpha: float = 1.0,
+                     upper: dict[int, float] | None = None) -> _np.ndarray:
+    """Ridge with optional per-coefficient upper bounds (intercept
+    un-penalised), solved as a bounded augmented least-squares problem.
+
+    Equivalent to `v2510_layer3_ar_wind.fit_ridge` when `upper` is empty.
+    """
+    p = X.shape[1]
+    A = _np.vstack([X, _np.sqrt(alpha) * _np.eye(p)])
+    A[len(X), 0] = 0.0                     # intercept un-penalised
+    b = _np.concatenate([y, _np.zeros(p)])
+    lo = _np.full(p, -_np.inf)
+    hi = _np.full(p, _np.inf)
+    for i, u in (upper or {}).items():
+        hi[i] = u
+    return lsq_linear(A, b, bounds=(lo, hi), method="trf").x
 
 
 def _snapshot_id() -> str:
@@ -88,7 +119,14 @@ def main() -> None:
     y = df["Y_fi"].values
     X = np.column_stack([np.ones(n)] + [df[f].values for f in FEATS])
     ok = np.isfinite(X).all(axis=1) & np.isfinite(y)
-    coef = fit_ridge(X[ok], y[ok], alpha=1.0)
+    # Column i of X is FEATS[i-1] (column 0 is the intercept).
+    upper = {FEATS.index(f) + 1: 0.0 for f in NON_POSITIVE_FEATURES
+             if f in FEATS}
+    coef = fit_ridge_signed(X[ok], y[ok], alpha=1.0, upper=upper)
+    for f in NON_POSITIVE_FEATURES:
+        if f in FEATS:
+            print(f"  sign-constrained {f:22s} = {coef[FEATS.index(f) + 1]:+.6f}",
+                  flush=True)
     eps = y[ok] - X[ok] @ coef
     phi, _ = fit_ar1(eps)
     eta = np.empty_like(eps)
