@@ -52,6 +52,19 @@ ARTIFACT_PATH = (REPO / "custom_components" / "spot_price_predictor"
 # Two windows: prices use the recent window only (regime changes),
 # weather uses the long window (no regime changes — climatology is
 # stationary on this timescale) for smoother per-week estimates.
+# Deliberately excludes H2-2022. The store holds ~4 k more hours from
+# 2022-07 onward, but that is the European gas-crisis regime and including
+# it makes the model materially WORSE, not better. Measured on the
+# leak-free honest task (studies/honest_horizon_study.py regime, full
+# demand-aware feature set), identical in every other respect:
+#
+#   train from 2022-06 : MAE 32.40  bias +11.67   (33.7 k train hours)
+#   train from 2023-01 : MAE 26.86  bias  -3.92   (29.9 k train hours)  <-
+#   train from 2024-01 : MAE 29.83  bias  -6.85   (21.1 k train hours)
+#
+# 2022 inflates the seasonal climatology and injects a large positive
+# (over-prediction) bias; 2024-only starves the fit. Re-test this cutoff
+# when the crisis period ages out of the store's rolling window.
 PRICE_WINDOW_START   = pd.Timestamp("2023-01-01", tz="UTC")
 WEATHER_WINDOW_START = pd.Timestamp("2018-01-01", tz="UTC")
 # Dynamic: train through the freshest data in the store. (Was a hard-coded

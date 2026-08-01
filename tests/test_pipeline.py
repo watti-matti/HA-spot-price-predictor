@@ -83,12 +83,15 @@ def test_pipeline_loads_shipped_artifacts(tmp_path: Path) -> None:
     """Construction must succeed against the production artifacts and
     populate Ridge coef / AR(1) phi / L4 GPD params."""
     p = _make_pipeline(tmp_path)
-    # v2.10.0 — intercept + 8 Ridge features (5 core + Y_se1 + Y_se3 + Y_ee)
-    assert p._ridge_coef.shape == (9,)
+    # v2.17.0 — intercept + 10 Ridge features: 5 core, 3 LAGGED neighbour
+    # zones (same-hour prices leak the target), plus the two demand
+    # inputs (lagged net load, public-holiday flag).
+    assert p._ridge_coef.shape == (11,)
     assert tuple(p._features) == (
         "intercept", "Y_fi_lag168", "is_workday",
         "Y_sigmoid_wind_rho", "Y_solar_effective", "Y_temp",
-        "Y_se1", "Y_se3", "Y_ee",
+        "Y_se1_lag168", "Y_se3_lag168", "Y_ee_lag168",
+        "Y_netload_lag168", "is_holiday",
     )
     assert -1.0 < p._ar1_phi < 1.0
     assert isinstance(p._gpd_right, dict)
@@ -142,7 +145,7 @@ def test_compute_forecast_accepts_neighbour_prices(tmp_path: Path) -> None:
     }
     out_high = p.compute_forecast(
         ts, wind, solar, temp,
-        recent_neighbour_prices=neigh,
+        neighbour_prices_lag168=neigh,
         enable_fan_chart=False,
     )
     # The mean response should change. Check at least one hour moves
@@ -166,7 +169,7 @@ def test_compute_forecast_handles_partial_neighbour_data(tmp_path: Path) -> None
     }
     out = p.compute_forecast(
         ts, wind, solar, temp,
-        recent_neighbour_prices=partial,
+        neighbour_prices_lag168=partial,
         enable_fan_chart=False,
     )
     assert np.isfinite(out["mean_eur_mwh"]).all()
@@ -371,3 +374,169 @@ def test_pipeline_end_to_end_smoke(tmp_path: Path) -> None:
     actuals = pred[:24] + rng.normal(0, 5, size=24)
     diag = p.update_with_actuals(pred[:24], actuals)
     assert "refit_recommended" in diag
+
+
+# ── Economic sign invariant: zero-marginal-cost generation ────────
+#
+# Wind and PV have ~zero marginal cost, so more of either can only push
+# the price down or leave it unchanged — never up. These tests are a
+# permanent guard: they must fail if a retrain, refactor, or hand-edited
+# artifact ever reintroduces the inversion that shipped through v2.15.0
+# (Y_solar_effective had a POSITIVE coefficient, so a sunnier forecast
+# raised the predicted price).
+
+
+def test_shipped_artifact_obeys_zero_marginal_cost_signs() -> None:
+    """The SHIPPED artifact must not price wind/PV with a positive sign."""
+    art = json.loads(
+        (REPO / "custom_components" / "spot_price_predictor" / "data"
+         / "spike_model_default.json").read_text()
+    )
+    feats = ["intercept"] + list(art["ridge_features"])
+    for name in pipeline_mod.NON_POSITIVE_FEATURES:
+        assert name in feats, f"{name} missing from shipped ridge_features"
+        c = float(art["ridge_coef"][feats.index(name)])
+        assert c <= 0.0, (
+            f"{name} coefficient {c:+.6f} > 0 — the shipped model would raise "
+            f"its price forecast when zero-marginal-cost generation rises. "
+            f"Refit with the sign constraint in "
+            f"studies/build_fresh_spike_model.py."
+        )
+
+
+def test_runtime_clamps_a_positive_physics_coefficient(tmp_path: Path) -> None:
+    """Even a violating artifact must be neutralised at load time."""
+    data_dir = REPO / "custom_components" / "spot_price_predictor" / "data"
+    art = json.loads((data_dir / "spike_model_default.json").read_text())
+    feats = ["intercept"] + list(art["ridge_features"])
+    art["ridge_coef"][feats.index("Y_solar_effective")] = +0.5   # inverted
+    bad = tmp_path / "data"
+    bad.mkdir()
+    for f in data_dir.glob("*.json"):
+        (bad / f.name).write_text(f.read_text(), encoding="utf-8")
+    (bad / "spike_model_default.json").write_text(json.dumps(art),
+                                                  encoding="utf-8")
+    p = pipeline_mod.Pipeline(data_dir=bad, storage_dir=tmp_path / "state")
+    assert p._ridge_coef[p._features.index("Y_solar_effective")] == 0.0
+
+
+def test_forecast_never_rises_with_more_irradiance(tmp_path: Path) -> None:
+    """Behavioural invariant: raising irradiance must never raise the
+    forecast at any hour. This is the guard that survives refactors —
+    it constrains the model's response, not just a stored number."""
+    p = _make_pipeline(tmp_path)
+    ts = _hourly_timestamps(48)
+    n = len(ts)
+    wind = np.full(n, 6.0)
+    temp = np.full(n, 18.0)
+    base = p.compute_forecast(ts, wind, np.full(n, 100.0), temp,
+                              enable_fan_chart=False)["mean_eur_mwh"]
+    for extra in (50.0, 200.0, 500.0):
+        sunnier = p.compute_forecast(ts, wind, np.full(n, 100.0 + extra), temp,
+                                     enable_fan_chart=False)["mean_eur_mwh"]
+        assert np.all(sunnier <= base + 1e-9), (
+            f"+{extra:.0f} W/m2 irradiance RAISED the forecast at "
+            f"{int(np.sum(sunnier > base + 1e-9))} hour(s); PV is "
+            f"zero-marginal-cost and can never increase price."
+        )
+
+
+def test_forecast_never_rises_with_more_wind(tmp_path: Path) -> None:
+    """Same invariant for wind (also zero marginal cost)."""
+    p = _make_pipeline(tmp_path)
+    ts = _hourly_timestamps(48)
+    n = len(ts)
+    solar = np.zeros(n)
+    temp = np.full(n, 5.0)
+    base = p.compute_forecast(ts, np.full(n, 5.0), solar, temp,
+                              enable_fan_chart=False)["mean_eur_mwh"]
+    for w in (7.0, 10.0, 15.0):
+        windier = p.compute_forecast(ts, np.full(n, w), solar, temp,
+                                     enable_fan_chart=False)["mean_eur_mwh"]
+        assert np.all(windier <= base + 1e-9), (
+            f"wind {w:.0f} m/s RAISED the forecast vs 5 m/s; wind is "
+            f"zero-marginal-cost and can never increase price."
+        )
+
+
+# ── Leak invariant: no same-hour market data (v2.17.0) ────────────
+#
+# FI, SE1, SE3 and EE clear in the SAME day-ahead auction, so a same-hour
+# neighbour price is never observable before the FI price it is meant to
+# predict. Through v2.16 the pipeline consumed same-hour prices, which
+# suppressed the physical wind coefficient (-44.6 vs -93.0), inverted the
+# solar sign, and left the model mis-specified for every hour production
+# must actually forecast. These tests are a permanent guard.
+
+
+def test_artifact_declares_no_same_hour_neighbour_features() -> None:
+    """The shipped artifact must not name an un-lagged neighbour zone."""
+    art = json.loads(
+        (REPO / "custom_components" / "spot_price_predictor" / "data"
+         / "spike_model_default.json").read_text()
+    )
+    for f in art["ridge_features"]:
+        for zone in ("se1", "se3", "ee"):
+            if f in (f"Y_{zone}", zone):
+                raise AssertionError(
+                    f"shipped artifact uses same-hour neighbour feature {f!r}; "
+                    f"SE/EE clear in the same auction as FI, so this value is "
+                    f"unknowable at forecast time. Use Y_{zone}_lag168."
+                )
+
+
+def test_neighbour_features_read_the_lagged_hour(tmp_path: Path) -> None:
+    """A neighbour price supplied for the forecast hours must influence
+    the forecast via the LAGGED slot, not the same-hour slot.
+
+    Feeding a spike whose position corresponds to t-168h must move the
+    forecast at t; the same spike aligned to t must not.
+    """
+    p = _make_pipeline(tmp_path)
+    n = 24 + pipeline_mod.NEIGHBOUR_LAG_HOURS
+    ts = _hourly_timestamps(n)
+    wind = np.full(n, 6.0); solar = np.zeros(n); temp = np.full(n, 5.0)
+    base_kw = dict(wind=wind, solar=solar, temp=temp, enable_fan_chart=False)
+    flat = {z: np.full(n, 40.0) for z in ("se1", "se3", "ee")}
+    base = p.compute_forecast(ts, neighbour_prices_lag168=flat, **base_kw)
+    # Caller contract: element i holds the price at ts[i] - 168 h. So to
+    # perturb the value the model reads for forecast hour i, perturb i.
+    bumped = {z: v.copy() for z, v in flat.items()}
+    for z in bumped:
+        bumped[z][5] = 400.0
+    out = p.compute_forecast(ts, neighbour_prices_lag168=bumped, **base_kw)
+    d = out["mean_eur_mwh"] - base["mean_eur_mwh"]
+    assert abs(d[5]) > 1e-6, "lagged neighbour input had no effect on its hour"
+    others = np.delete(np.abs(d), 5)
+    assert others.max() < 1e-6, "a single lagged input leaked into other hours"
+
+
+def test_holiday_flag_suppresses_workday_and_moves_forecast(tmp_path: Path) -> None:
+    """A weekday marked as a public holiday must not be priced as a
+    normal working day (weekday holidays have weekend-like demand)."""
+    p = _make_pipeline(tmp_path)
+    ts = _hourly_timestamps(48)
+    n = len(ts)
+    kw = dict(wind=np.full(n, 6.0), solar=np.zeros(n), temp=np.full(n, 5.0),
+              enable_fan_chart=False)
+    normal = p.compute_forecast(ts, is_holiday=np.zeros(n), **kw)["mean_eur_mwh"]
+    holiday = p.compute_forecast(ts, is_holiday=np.ones(n), **kw)["mean_eur_mwh"]
+    assert not np.allclose(normal, holiday), (
+        "is_holiday had no effect — weekday holidays would be priced as "
+        "ordinary working days"
+    )
+
+
+def test_netload_demand_feature_is_wired(tmp_path: Path) -> None:
+    """The demand channel must actually reach the forecast."""
+    p = _make_pipeline(tmp_path)
+    ts = _hourly_timestamps(48)
+    n = len(ts)
+    kw = dict(wind=np.full(n, 6.0), solar=np.zeros(n), temp=np.full(n, 5.0),
+              enable_fan_chart=False)
+    low = p.compute_forecast(ts, netload_lag168=np.full(n, 6000.0), **kw)
+    high = p.compute_forecast(ts, netload_lag168=np.full(n, 11000.0), **kw)
+    assert not np.allclose(low["mean_eur_mwh"], high["mean_eur_mwh"]), (
+        "net load did not influence the forecast — the pipeline would "
+        "again have no demand signal at all"
+    )
