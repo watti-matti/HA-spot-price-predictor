@@ -77,13 +77,22 @@ RIDGE_FEATURES = (
     "Y_se1_lag168",
     "Y_se3_lag168",
     "Y_ee_lag168",
-    # v2.17.0 — demand. The pipeline previously had NO demand signal at
-    # all: wind/solar are supply, temperature is only a heating proxy and
-    # goes silent in summer (corr(temp, net load) = -0.70 winter but
-    # +0.12 summer). Net load lagged 168 h is knowable for the whole
-    # horizon and carries the weekly demand regime (industrial schedules,
-    # holiday shutdowns) that weather cannot reconstruct.
-    "Y_netload_lag168",
+    # v2.17.1 — demand. The pipeline previously had NO demand signal at
+    # all: wind/solar are supply, and temperature is only a heating proxy
+    # that goes silent in summer (corr(temp, net load) = -0.70 winter but
+    # +0.12 summer). The holiday flag is the part that pays: public
+    # holidays have weekend-like demand, and `is_workday` alone priced
+    # Midsummer and Christmas as ordinary working days.
+    #
+    # `Y_netload_lag168` was shipped in v2.17.0 and REMOVED in v2.17.1:
+    # on the correct training window it was worth -0.04 % MAE, and its
+    # fitted coefficient was negative (-1.25) — not a demand relationship
+    # but a collinearity artifact, since last week's demand is already
+    # embedded in last week's price (corr = +0.587). The pipeline still
+    # accepts `netload_lag168` so a future artifact can use it, but no
+    # shipped model does. The demand signal that genuinely carries
+    # information is SAME-HOUR net load (coefficient +18.9, corr +0.587),
+    # which Fingrid publishes day-ahead only — see docs/BACKLOG.md.
     "is_holiday",
 )
 

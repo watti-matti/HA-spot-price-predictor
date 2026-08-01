@@ -63,7 +63,7 @@ OUTPUT_DIR = REPO / "output"
 FEATS = ["Y_fi_lag168", "is_workday", "Y_sigmoid_wind_rho",
          "Y_solar_effective", "Y_temp",
          "Y_se1_lag168", "Y_se3_lag168", "Y_ee_lag168",
-         "Y_netload_lag168", "is_holiday"]
+         "is_holiday"]
 LAG = 168
 # Physics seasonal config — matches exp_extra_features / backtest_harness.
 PHYS_DEPTH = ("P_hour", "P_week")
@@ -172,7 +172,7 @@ def main() -> None:
           f"sigma(eta) = {eta.std():.2f}", flush=True)
 
     payload = {
-        "version": "v2.17.0/leakfree-demand",
+        "version": "v2.17.1/leakfree-holiday",
         "layer": "L4 GPD POT on FI post-AR residual (fresh full-window refit)",
         "ridge_features": FEATS,
         "ridge_coef": coef.tolist(),
