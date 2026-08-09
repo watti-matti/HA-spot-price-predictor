@@ -269,6 +269,14 @@ class Pipeline:
         # point for forecasting. Updated when we see new actuals.
         self._last_eta: float | None = None
 
+    @property
+    def model_fingerprint(self) -> str:
+        """Digest identifying the model these calibrators are calibrated
+        against. Other subsystems that learn this model's error (the DtACI
+        D(k) bundle) key their own state on it — see
+        `dtaci_integration.discard_bundles_if_model_changed`."""
+        return self._model_fingerprint
+
     def _enforce_physics_signs(self) -> None:
         """Clamp zero-marginal-cost coefficients to <= 0 (see
         `NON_POSITIVE_FEATURES`).
@@ -362,6 +370,15 @@ class Pipeline:
         hour bin re-warms (14 daily observations), which is the honest
         default: an uncalibrated forecast beats one calibrated against the
         wrong model.
+
+        The fingerprint is recorded HERE, as soon as the decision is made,
+        not in `save_state`. v2.17.2 wrote it last of four files at save
+        time, so any cycle that failed — or never reached — `save_state`
+        left calibrator state on disk with no fingerprint beside it. The
+        next start then read that as "taught by an unknown older model"
+        and wiped it again, and the wipe repeated on every restart,
+        holding the calibrators permanently cold instead of resetting them
+        once.
         """
         path = self._storage_dir / FINGERPRINT_FILE
         previous = None
@@ -373,7 +390,11 @@ class Pipeline:
                 previous = None
         elif not any((self._storage_dir / f).exists()
                      for f in _CALIBRATOR_STATE_FILES):
-            return False          # genuinely fresh install, nothing to discard
+            # Genuinely fresh install — nothing to discard, but record the
+            # fingerprint now so the calibrators this run starts building
+            # are claimed by the model that will teach them.
+            self._write_fingerprint()
+            return False
 
         if previous == self._model_fingerprint:
             return False
@@ -394,7 +415,21 @@ class Pipeline:
             previous or "none", self._model_fingerprint,
             ", ".join(discarded) or "nothing",
         )
+        self._write_fingerprint()
         return True
+
+    def _write_fingerprint(self) -> None:
+        """Record which model owns the calibrators in this directory.
+
+        Best-effort: a failure means the next start re-runs the check (and
+        may cold-start again), never that stale state is trusted."""
+        try:
+            self._storage_dir.mkdir(parents=True, exist_ok=True)
+            (self._storage_dir / FINGERPRINT_FILE).write_text(
+                json.dumps({"model_fingerprint": self._model_fingerprint}),
+                encoding="utf-8")
+        except Exception as e:
+            _LOGGER.warning("pipeline:could not record fingerprint: %s", e)
 
     # ── L1 seasonal lookup ────────────────────────────────────────
 

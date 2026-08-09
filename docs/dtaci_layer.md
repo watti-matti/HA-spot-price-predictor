@@ -244,6 +244,40 @@ When enabled the coordinator:
 
 ---
 
+## State invalidation on model change
+
+Every instance's `OnlineBiasCorrector` holds an EMA of the signed
+residual **of the model that produced the forecasts it was fed**. After a
+retrain those offsets describe a model that no longer exists; applied to
+the new one they over-correct. At the D(k) cadence (one observation per
+day, 21-day half-life) a stale offset takes roughly six weeks to decay to
+a quarter of its size.
+
+So on init the coordinator compares `Pipeline.model_fingerprint` — a
+digest of the L2 feature names and coefficients, the AR(1) term, and the
+L1 seasonal components — against the `model_fingerprint.json` sidecar
+stored next to the bundles in
+`<config>/.storage/spot_price_predictor_dtaci/`. On mismatch it deletes
+every `dtaci_dk_<zone>.json` and records the reset time, so all 48
+instances re-warm against the model actually in use.
+
+* A restart, or a release shipping no new artifact, keeps its
+  calibration — the fingerprint is unchanged.
+* A genuinely fresh install is **not** reported as a cold start.
+* State predating this mechanism carries no sidecar and is discarded
+  once, which is correct: it was taught by an older model.
+* If pipeline init failed the fingerprint is unknown, and nothing is
+  discarded — warm state beats a reset fired on a guess.
+
+`dtaci_cold_started_at` on the duration-forecast sensor carries the ISO
+timestamp of the last such reset (`None` if never), so the diagnostics
+card can distinguish "warming up because the model changed" from "warming
+up because this install is new". The equivalent gate for the hourly
+calibrators lives in `Pipeline._discard_state_if_model_changed`; the two
+subsystems keep separate sidecars and are cold-started independently.
+
+---
+
 ## Validation summary
 
 From `studies/results/DTACI_ANALYSIS.md`:

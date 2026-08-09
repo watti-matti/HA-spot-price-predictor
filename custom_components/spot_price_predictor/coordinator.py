@@ -225,6 +225,10 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
         # `<config_dir>/.storage/spot_price_predictor_dtaci/`.
         self._dtaci_bundles: dict[str, Any] = {}
         self._dtaci_state_dir: Path | None = None
+        # ISO timestamp of the last time the bundles were cold-started
+        # because the model changed under them. None = never. Surfaced on
+        # the duration-forecast sensor as `dtaci_cold_started_at`.
+        self._dtaci_cold_started_at: str | None = None
         # Rolling DK-forecast history per (date, zone) used to reconcile
         # forecasts against actuals once Sähkötin reports the day's
         # complete 24-hour window.
@@ -1206,14 +1210,26 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
         safe to call every cycle. Stale state files for zones no longer in
         DTACI_ZONES (e.g. the removed SE1/SE3/EE neighbour bundles) are
         cleaned up once on init.
+
+        State learned against a previous model is discarded first: the
+        bundles' bias EMAs are only meaningful for the model whose D(k)
+        forecasts taught them (see
+        `dtaci_integration.discard_bundles_if_model_changed`).
         """
         if self._dtaci_bundles:
             return
         try:
-            from .dtaci_integration import load_or_create_bundle
+            from .dtaci_integration import (
+                discard_bundles_if_model_changed,
+                load_or_create_bundle,
+            )
             base = Path(self.hass.config.path()) / ".storage" / f"{DOMAIN}_dtaci"
             base.mkdir(parents=True, exist_ok=True)
             self._dtaci_state_dir = base
+            self._dtaci_cold_started_at = discard_bundles_if_model_changed(
+                base,
+                self._pipeline.model_fingerprint if self._pipeline else None,
+            )
             for zone in DTACI_ZONES:
                 path = base / f"dtaci_dk_{zone}.json"
                 self._dtaci_bundles[zone] = load_or_create_bundle(
@@ -1497,6 +1513,10 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
         out: dict[str, Any] = {
             "enabled": True,
             "target_coverage": DTACI_TARGET_COVERAGE,
+            # Non-null means a model change reset the bundles at this
+            # time; instances warming up since then are expected, not a
+            # fault.
+            "cold_started_at": self._dtaci_cold_started_at,
             "zones": {},
         }
         for zone, bundle in self._dtaci_bundles.items():
@@ -1737,7 +1757,8 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                     _LOGGER.debug("bias reconcile skipped: %s", e)
                 try:
                     pipeline_diagnostics, dk_by_date = self._apply_pipeline_pre_dk(
-                        forecast, neighbor=neighbor, spot_prices=spot_prices)
+                        forecast, neighbor=neighbor, spot_prices=spot_prices,
+                        netload_hourly=netload_hourly)
                 except Exception as e:
                     _LOGGER.warning("Prediction pipeline overwrite failed: %s", e)
                     pipeline_diagnostics = {"error": str(e)}
@@ -1918,6 +1939,7 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
         forecast: list[dict[str, Any]],
         neighbor: dict[str, list[dict[str, Any]]] | None = None,
         spot_prices: list[dict[str, Any]] | None = None,
+        netload_hourly: dict[str, list[dict[str, Any]]] | None = None,
     ) -> tuple[dict[str, Any], dict[str, dict]]:
         """Run the L1+L2+L3+L4+floor prediction pipeline plus fan-chart
         sampling and write the result into every row of ``forecast``.
