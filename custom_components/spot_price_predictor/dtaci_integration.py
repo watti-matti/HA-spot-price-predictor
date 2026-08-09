@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,16 @@ from .dk_dtaci import DkDtACIBundle
 from .dtaci import DtACI
 
 _LOGGER = logging.getLogger(__name__)
+
+BUNDLE_STATE_GLOB = "dtaci_dk_*.json"
+"""Per-zone bundle state files inside the DtACI state directory."""
+
+FINGERPRINT_FILE = "model_fingerprint.json"
+"""Sidecar recording which model taught the bundles in this directory.
+
+Same name and role as `pipeline.FINGERPRINT_FILE`, in a different
+directory — the two subsystems keep their own copy because they are
+cold-started independently."""
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -69,6 +80,99 @@ def load_or_create_bundle(
                 state_path, exc,
             )
     return DkDtACIBundle(target_coverage=target_coverage)
+
+
+def discard_bundles_if_model_changed(
+    state_dir: Path,
+    model_fingerprint: str | None,
+    now: datetime | None = None,
+) -> str | None:
+    """Delete bundle state that was learned against a DIFFERENT model.
+
+    Each of the 48 instances carries an `OnlineBiasCorrector` EMA of the
+    signed D(k) residual — *this* model's error. After a retrain those
+    offsets describe a model that no longer exists, and with a 21-day
+    half-life at one observation per day they take about six weeks to wash
+    out to a quarter of their size. `Pipeline` already applies this rule to
+    the hourly calibrators (`pipeline._discard_state_if_model_changed`);
+    the bundles need it for the same reason.
+
+    Call BEFORE `load_or_create_bundle`, so the discarded files are gone
+    by the time the bundles load.
+
+    Args:
+        state_dir: directory holding `dtaci_dk_<zone>.json`.
+        model_fingerprint: `Pipeline.model_fingerprint`. `None` means the
+            model is unknown (pipeline init failed) — never discard on a
+            guess; warm state is worth more than a speculative reset.
+        now: injectable clock for tests.
+
+    Returns the ISO-8601 timestamp of the most recent cold start (this
+    one, or an earlier one read back from the sidecar), or `None` if the
+    bundles have never been invalidated. The duration-forecast sensor
+    exposes it as `dtaci_cold_started_at` so the diagnostics card can
+    explain why coverage went back to warming up.
+    """
+    if not model_fingerprint:
+        return None
+
+    path = state_dir / FINGERPRINT_FILE
+    previous: str | None = None
+    last_cold_start: str | None = None
+    if path.exists():
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+            previous = record.get("model_fingerprint")
+            last_cold_start = record.get("cold_started_at")
+        except Exception as exc:
+            _LOGGER.warning(
+                "DtACI: fingerprint sidecar %s unreadable (%s); treating the "
+                "model as changed", path, exc,
+            )
+    elif not (state_dir.exists() and any(state_dir.glob(BUNDLE_STATE_GLOB))):
+        # Genuinely fresh install — nothing to discard, and no cold start
+        # to report. Record the fingerprint so the next model change is
+        # detected.
+        _write_fingerprint(path, model_fingerprint, None)
+        return None
+
+    if previous == model_fingerprint:
+        return last_cold_start
+
+    discarded: list[str] = []
+    if state_dir.exists():
+        for state_file in sorted(state_dir.glob(BUNDLE_STATE_GLOB)):
+            try:
+                state_file.unlink()
+                discarded.append(state_file.name)
+            except OSError as exc:
+                _LOGGER.warning(
+                    "DtACI: could not discard %s (%s)", state_file, exc,
+                )
+    stamp = (now or datetime.now(timezone.utc)).isoformat(timespec="seconds")
+    _write_fingerprint(path, model_fingerprint, stamp)
+    _LOGGER.info(
+        "DtACI: model changed (%s -> %s); cold-starting the D(k) bundles, "
+        "discarded %s. Bands and bias correction resume as each instance "
+        "re-warms (~1-3 weeks of daily reconciliations).",
+        previous or "none", model_fingerprint,
+        ", ".join(discarded) or "nothing",
+    )
+    return stamp
+
+
+def _write_fingerprint(path: Path, model_fingerprint: str,
+                        cold_started_at: str | None) -> None:
+    """Persist the fingerprint sidecar. Best-effort — a failure means the
+    next start re-runs the check, never that state is wrongly discarded."""
+    try:
+        _atomic_write_json(path, {
+            "model_fingerprint": model_fingerprint,
+            "cold_started_at": cold_started_at,
+        })
+    except Exception as exc:
+        _LOGGER.warning("DtACI: could not record fingerprint %s: %s",
+                         path, exc)
 
 
 def save_bundle(state_path: Path, bundle: DkDtACIBundle) -> None:

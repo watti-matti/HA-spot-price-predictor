@@ -542,6 +542,11 @@ class DurationForecastSensor(CoordinatorEntity, SensorEntity):
             attrs["dtaci_fi_mean_width_eur_kwh"] = fi.get("mean_width")
             attrs["dtaci_fi_warm_instances"] = fi.get("n_warm_instances")
             attrs["dtaci_fi_total_instances"] = fi.get("n_total_instances")
+            # v2.17.3: ISO timestamp of the last model-change cold start,
+            # or None if the bundles have never been invalidated. Lets the
+            # card distinguish "warming up because the model changed on
+            # <date>" from "warming up because this is a new install".
+            attrs["dtaci_cold_started_at"] = diag.get("cold_started_at")
 
             # v2.1.1: human-readable warmup status string the Lovelace
             # cards can show as a badge. Examples:

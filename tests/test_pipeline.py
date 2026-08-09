@@ -630,3 +630,47 @@ def test_fresh_install_is_not_reported_as_a_cold_start(tmp_path: Path) -> None:
     """No prior state at all is a normal first run, not an invalidation."""
     p = _make_pipeline(tmp_path)
     assert p.calibrators_cold_started is False
+
+
+def test_model_fingerprint_is_exposed_and_tracks_the_coefficients(
+        tmp_path: Path) -> None:
+    """The DtACI D(k) bundles key their own state on this value, so it has
+    to be public and it has to move when the model does."""
+    p = _make_pipeline(tmp_path)
+    assert p.model_fingerprint == p._model_fingerprint
+    assert p.model_fingerprint
+
+    before = p.model_fingerprint
+    p._ridge_coef[1] += 0.5
+    assert p._compute_model_fingerprint() != before
+
+
+def test_fingerprint_is_recorded_at_init_not_only_at_save(
+        tmp_path: Path) -> None:
+    """v2.17.2 wrote the fingerprint last of four files in `save_state`.
+    A cycle that failed — or never reached — the save left state with no
+    fingerprint beside it, so the NEXT start wiped it again, and every
+    start after that. The calibrators never got to warm up at all."""
+    p = _make_pipeline(tmp_path)          # fresh install, no save_state call
+    assert (p._storage_dir / pipeline_mod.FINGERPRINT_FILE).exists()
+
+
+def test_a_cold_start_is_not_repeated_on_every_restart(
+        tmp_path: Path) -> None:
+    """The reset must happen once per model change, not once per restart."""
+    storage = _warm_bias_state(tmp_path)
+    (storage / pipeline_mod.FINGERPRINT_FILE).write_text(
+        json.dumps({"model_fingerprint": "a-different-model"}),
+        encoding="utf-8")
+
+    p1 = _make_pipeline(tmp_path)
+    assert p1.calibrators_cold_started is True
+
+    # Deliberately never call save_state — this is the cycle that failed,
+    # or was cut short by a restart, before reaching the persist step.
+    p2 = _make_pipeline(tmp_path)
+
+    assert p2.calibrators_cold_started is False, (
+        "the model has not changed again; a second wipe on the next start "
+        "holds the calibrators permanently cold"
+    )

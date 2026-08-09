@@ -36,6 +36,8 @@
 #   dtaci_fi_mean_width_eur_kwh
 #   dtaci_fi_warm_instances    n_updates >= min_warmup
 #   dtaci_fi_total_instances   48   (24 cheap + 24 peak — schema since v2.5.1)
+#   dtaci_cold_started_at      ISO timestamp of the last model-change reset,
+#                              or None if the bundles were never invalidated
 #
 # Per-zone breakdown lives at
 #   dtaci_diagnostics.zones.<zone>.per_k.<direction>.<k>.<param>
@@ -324,8 +326,16 @@ views:
               {% set cov = state_attr(ent, "dtaci_fi_mean_coverage") %}
               {% set warm = state_attr(ent, "dtaci_fi_warm_instances") %}
               {% set total = state_attr(ent, "dtaci_fi_total_instances") %}
+              {% set cold = state_attr(ent, "dtaci_cold_started_at") %}
               {% if status %}
               **{{ status }}**
+              {% if cold %}
+
+              ⟳ The calibration was reset on **{{ cold[:10] }}** because the
+              forecast model changed. Corrections learned against the old
+              model would over-correct the new one, so each statistic
+              re-learns from scratch. Warming up since then is expected.
+              {% endif %}
 
               The price-band calibration (FI) learns from each day's realised
               prices, targeting **90 %** coverage — the true daily cost should

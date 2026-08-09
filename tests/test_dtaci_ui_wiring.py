@@ -205,3 +205,139 @@ def test_full_year_reconciliation_warms_bundle_and_produces_bands():
                 f"{direction}[{k}] coverage proxy {r['coverage']} "
                 "outside plausible range"
             )
+
+
+# ── Model-change invalidation of the D(k) bundles ────────────────
+#
+# Each of the 48 instances carries a bias EMA of *this* model's D(k)
+# residual. v2.17.2 gave the hourly calibrators a fingerprint gate but
+# left the bundles loading blindly, so a retrain's stale offsets survived
+# every upgrade. These tests pin the bundle-side gate.
+
+
+def _warm_bundle_state(state_dir: Path, bias: float = 0.02) -> Path:
+    """A saved FI bundle carrying a warm, biased corrector."""
+    state_dir.mkdir(parents=True, exist_ok=True)
+    rng = random.Random(7)
+    bundle = DkDtACIBundle()
+    for _ in range(40):
+        a_c, a_p = _synth_dk(rng)
+        f_c = [v - bias for v in a_c]      # forecast reads low every day
+        f_p = [v - bias for v in a_p]
+        bundle.update(f_c, f_p, a_c, a_p)
+    path = state_dir / "dtaci_dk_fi.json"
+    integration.save_bundle(path, bundle)
+    assert bundle.instances["cheap_4"].bias_corrector.warm
+    return path
+
+
+def test_bundle_state_is_discarded_when_the_model_changes(tmp_path: Path):
+    state_dir = tmp_path / "dtaci"
+    path = _warm_bundle_state(state_dir)
+    (state_dir / integration.FINGERPRINT_FILE).write_text(
+        json.dumps({"model_fingerprint": "the-previous-model"}),
+        encoding="utf-8",
+    )
+
+    stamp = integration.discard_bundles_if_model_changed(
+        state_dir, "a-retrained-model")
+
+    assert stamp is not None, "a cold start must be reported"
+    assert not path.exists(), "stale per-model state survived a retrain"
+    fresh = integration.load_or_create_bundle(path)
+    assert fresh.instances["cheap_4"].n_updates == 0
+    assert not fresh.instances["cheap_4"].bias_corrector.warm
+
+
+def test_bundle_state_survives_when_the_model_is_unchanged(tmp_path: Path):
+    """A restart, or a release that ships no new artifact, must NOT throw
+    away weeks of accumulated calibration."""
+    # Natural order: the gate runs on a fresh install and records the
+    # fingerprint, THEN the bundle accumulates state under that model.
+    state_dir = tmp_path / "dtaci"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    integration.discard_bundles_if_model_changed(state_dir, "model-abc")
+    path = _warm_bundle_state(state_dir)
+
+    stamp = integration.discard_bundles_if_model_changed(state_dir, "model-abc")
+
+    assert path.exists(), "restart discarded state despite an unchanged model"
+    bundle = integration.load_or_create_bundle(path)
+    assert bundle.instances["cheap_4"].n_updates == 40
+    assert stamp is None
+
+
+def test_pre_existing_bundle_state_without_fingerprint_is_discarded(
+        tmp_path: Path):
+    """Upgrading from a build that never wrote a fingerprint: the bundles
+    were taught by an older model, so they must not be trusted."""
+    state_dir = tmp_path / "dtaci"
+    path = _warm_bundle_state(state_dir)
+    assert not (state_dir / integration.FINGERPRINT_FILE).exists()
+
+    stamp = integration.discard_bundles_if_model_changed(state_dir, "model-abc")
+
+    assert stamp is not None
+    assert not path.exists()
+
+
+def test_fresh_install_is_not_reported_as_a_cold_start(tmp_path: Path):
+    """No prior state at all is a normal first run, not an invalidation —
+    the card must not tell a new user their model just changed."""
+    state_dir = tmp_path / "dtaci"
+    state_dir.mkdir(parents=True, exist_ok=True)
+
+    assert integration.discard_bundles_if_model_changed(
+        state_dir, "model-abc") is None
+    # ...and the fingerprint is recorded, so the NEXT change is caught.
+    path = _warm_bundle_state(state_dir)
+    assert integration.discard_bundles_if_model_changed(
+        state_dir, "model-xyz") is not None
+    assert not path.exists()
+
+
+def test_missing_state_dir_is_treated_as_a_fresh_install(tmp_path: Path):
+    """The gate runs before the coordinator's mkdir in some call orders."""
+    state_dir = tmp_path / "never-created"
+    assert integration.discard_bundles_if_model_changed(
+        state_dir, "model-abc") is None
+    assert (state_dir / integration.FINGERPRINT_FILE).exists()
+
+
+def test_unknown_model_never_discards(tmp_path: Path):
+    """Pipeline init failed, so the fingerprint is unknown. Warm state is
+    worth more than a reset fired on a guess."""
+    state_dir = tmp_path / "dtaci"
+    path = _warm_bundle_state(state_dir)
+
+    assert integration.discard_bundles_if_model_changed(state_dir, None) is None
+
+    assert path.exists()
+    assert not (state_dir / integration.FINGERPRINT_FILE).exists()
+
+
+def test_cold_start_timestamp_survives_a_restart(tmp_path: Path):
+    """The UI must keep showing *when* the reset happened for as long as
+    the bundles are re-warming, not just on the cycle that reset them."""
+    state_dir = tmp_path / "dtaci"
+    _warm_bundle_state(state_dir)
+    (state_dir / integration.FINGERPRINT_FILE).write_text(
+        json.dumps({"model_fingerprint": "old"}), encoding="utf-8")
+
+    first = integration.discard_bundles_if_model_changed(state_dir, "new")
+    later = integration.discard_bundles_if_model_changed(state_dir, "new")
+
+    assert first is not None
+    assert later == first
+
+
+def test_corrupt_fingerprint_sidecar_forces_a_cold_start(tmp_path: Path):
+    """An unreadable sidecar cannot vouch for the state beside it."""
+    state_dir = tmp_path / "dtaci"
+    path = _warm_bundle_state(state_dir)
+    (state_dir / integration.FINGERPRINT_FILE).write_text(
+        "{not json", encoding="utf-8")
+
+    assert integration.discard_bundles_if_model_changed(
+        state_dir, "model-abc") is not None
+    assert not path.exists()
