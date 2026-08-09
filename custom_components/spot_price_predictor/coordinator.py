@@ -1757,7 +1757,8 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                     _LOGGER.debug("bias reconcile skipped: %s", e)
                 try:
                     pipeline_diagnostics, dk_by_date = self._apply_pipeline_pre_dk(
-                        forecast, neighbor=neighbor, spot_prices=spot_prices)
+                        forecast, neighbor=neighbor, spot_prices=spot_prices,
+                        netload_hourly=netload_hourly)
                 except Exception as e:
                     _LOGGER.warning("Prediction pipeline overwrite failed: %s", e)
                     pipeline_diagnostics = {"error": str(e)}
@@ -1938,6 +1939,7 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
         forecast: list[dict[str, Any]],
         neighbor: dict[str, list[dict[str, Any]]] | None = None,
         spot_prices: list[dict[str, Any]] | None = None,
+        netload_hourly: dict[str, list[dict[str, Any]]] | None = None,
     ) -> tuple[dict[str, Any], dict[str, dict]]:
         """Run the L1+L2+L3+L4+floor prediction pipeline plus fan-chart
         sampling and write the result into every row of ``forecast``.
