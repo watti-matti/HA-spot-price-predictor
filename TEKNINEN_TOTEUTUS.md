@@ -1,5 +1,29 @@
 # Tekninen toteutus — HA Spot Price Predictor (v2.11.0)
 
+> ## ⚠️ TÄMÄ DOKUMENTTI ON VANHENTUNUT (päivitetty viimeksi v2.11.0, 2026-05-20)
+>
+> Toimitettava koodi on edennyt yhdeksän julkaisua eteenpäin. Tämä
+> dokumentti kuvaa mallin **ennen** kahta merkittävintä korjausta, eikä
+> sen kuvausta pidä käyttää:
+>
+> - **L2-piirteet.** Tässä kuvatut `Y_se1` / `Y_se3` / `Y_ee` ovat
+>   *saman tunnin* naapurihintoja. FI, SE1, SE3 ja EE selviävät samassa
+>   day-ahead-huutokaupassa, joten niitä ei voi havaita ennen ennustettavaa
+>   kohdetta. Tämä vuoto poistettiin v2.17.0:ssa — piirteet ovat nyt
+>   `Y_se1_lag168` / `Y_se3_lag168` / `Y_ee_lag168`, ja mukana on myös
+>   `is_holiday`. Piirteitä on yhdeksän, ei kahdeksaa.
+> - **Auringon etumerkki.** v2.16.0 asetti nollarajakustannuspakotteen:
+>   tuulen ja auringon kertoimet ovat aina ≤ 0.
+> - **Fysiikkapiirteiden kausitasoitus.** v2.15.0 korvasi paikallisen
+>   keskiarvokeskityksen artefaktin `physics_seasonal`-komponenteilla.
+> - **Skriptien nimet ja rivinumerot** viittaavat poistettuihin
+>   tiedostoihin (esim. `studies/v253_solar_submodel.py`).
+>
+> **Käytä toistaiseksi englanninkielistä [TECHNICAL_GUIDE.md](TECHNICAL_GUIDE.md):ta**,
+> joka on ajan tasalla. Tämän dokumentin päivitys on kirjattu
+> jatkotyöksi (docs/BACKLOG.md).
+
+
 Suomalaisen kuluttajan sähkön spot- ja kuluttajahinnan sekä D(k)-kestokäyrien ennustaminen Home Assistantiin. Tuottaa 170 tunnin spot/kuluttajahinnan pisteen ennusteen, P5/P25/P50/P75/P95-viuhkavyöt ja 7 vrk:n halpa/kallis-kestokäyrät nelitasoisesta ennustusputkesta. Tämä opas kuvaa vain sen mitä toimitettava koodi todella tekee.
 
 ## Arkkitehtuuri
@@ -49,29 +73,29 @@ P{5,25,50,75,95}_eur_mwh(h) ← 500 näytettä sekoituksesta (Normaalirunko + GP
 
 ### L1 — Kausivaihteludekompositio
 
-`Pipeline._seasonal_fi` ja `Pipeline._deseasonalize_input` ([`pipeline.py:200-216`](custom_components/spot_price_predictor/pipeline.py:200)) lukevat additiiviset tunti + päivä + viikko -komponentit tiedostosta `seasonal_components_default.json` ja vähentävät ne FI-hinnasta ja lämpötilasta tuottaen kausitasoittuneet residuaalit. Tuulta ja aurinkoa ei kausitasoiteta L1:n kautta — ne keskitetään paikallisesti (keskiarvon vähennys) ennen Ridgeen menoa.
+`Pipeline._seasonal_fi` ja `Pipeline._deseasonalize_input` ([`pipeline.py:200-216`](custom_components/spot_price_predictor/pipeline.py:200)) lukevat additiiviset tunti + päivä + viikko -komponentit tiedostosta `seasonal_components_default.json` ja vähentävät ne FI-hinnasta ja lämpötilasta tuottaen kausitasoitetut residuaalit. Tuulta ja aurinkoa ei kausitasoiteta L1:n kautta — ne keskitetään paikallisesti (keskiarvon vähennys) ennen Ridge-regressioon syöttämistä.
 
-### L2 — Ei-kausi-osan Ridge-regressio (kahdeksan piirrettä)
+### L2 — Kausivaihtelusta puhdistetun osan Ridge-regressio
 
 Toimitettava `data/spike_model_default.json` sisältää kanonisen
 piirrejärjestyksen `ridge_features`-kentässään; putki lukee sen
 rakennusvaiheessa ja muodostaa suunnittelumatriisin tässä
-järjestyksessä. Varatakenttänä on `RIDGE_FEATURES`-vakio
+järjestyksessä. Varakenttänä on `RIDGE_FEATURES`-vakio
 ([`pipeline.py:62-77`](custom_components/spot_price_predictor/pipeline.py:62)).
 
 | # | Piirre | Rakennetaan `_build_features`:ssä ([`pipeline.py:220-275`](custom_components/spot_price_predictor/pipeline.py:220)) | Määritelmä |
 |---|---|---|---|
 | 1 | `intercept` | `np.ones(n)` | vakio 1 |
-| 2 | `Y_fi_lag168` | välitetään kutsujalta `recent_fi_residuals["lag168"]`-avaimella | Kausitasoittunut FI-residuaali 7 päivää aiemmin. Koordinaattori välittää tällä hetkellä nollia (kylmäkäynnistys), koska liukuva ennustushistoria on alle 7 päivää syvä. |
+| 2 | `Y_fi_lag168` | välitetään kutsujalta `recent_fi_residuals["lag168"]`-avaimella | Kausitasoitettu FI-residuaali 7 päivää aiemmin. Koordinaattori välittää tällä hetkellä nollia (kylmäkäynnistys), koska liukuva ennustushistoria on alle 7 päivää syvä. |
 | 3 | `is_workday` | `Pipeline._is_workday` — `weekday < 5` | binaari {0, 1} |
 | 4 | `Y_sigmoid_wind_rho` | `_sigmoid_turbine_rho` ([`pipeline.py:81-87`](custom_components/spot_price_predictor/pipeline.py:81)), sitten keskitetään paikallisesti | `σ((tuuli − 7,5) / 1,5) × ρ(T) / 1,225` |
 | 5 | `Y_solar_effective` | `_solar_effective` ([`pipeline.py:90-96`](custom_components/spot_price_predictor/pipeline.py:90)), sitten keskitetään paikallisesti | `GHI × (1 − 0,004 · max(0, T_cell − 25))`, `T_cell = T + 0,03 · GHI` |
-| 6 | `Y_temp` | `_deseasonalize_input("temp", …)` | Kausitasoittunut lämpötila |
-| 7 | `Y_se1` | `_deseasonalize_input("se1", …)` naapurihinta-argumentista | Kausitasoittunut SE1-spot. **v2.10.0:n lisäys** — hyväksytty v2.5.6:n NPK-CVaR-hedge-portin alla. |
-| 8 | `Y_se3` | `_deseasonalize_input("se3", …)` | Kausitasoittunut SE3-spot (FennoSkan-kaapeleiden Ruotsin pää). |
-| 9 | `Y_ee` | `_deseasonalize_input("ee", …)` | Kausitasoittunut EE-spot (Estlink-kaapeleiden Viron pää). |
+| 6 | `Y_temp` | `_deseasonalize_input("temp", …)` | Kausitasoitettu lämpötila |
+| 7 | `Y_se1` | `_deseasonalize_input("se1", …)` naapurihinta-argumentista | Kausitasoitettu SE1-spot. **v2.10.0:n lisäys** — läpäisi v2.5.6:n NPK-CVaR-hedge-portin. |
+| 8 | `Y_se3` | `_deseasonalize_input("se3", …)` | Kausitasoitettu SE3-spot (FennoSkan-kaapeleiden Ruotsin pää). |
+| 9 | `Y_ee` | `_deseasonalize_input("ee", …)` | Kausitasoitettu EE-spot (Estlink-kaapeleiden Viron pää). |
 
-Ridge-ennuste lasketaan kaavalla `ridge = X @ self._ridge_coef`. Kutsuja toimittaa raa'at naapurihinnat parametrillä `compute_forecast(..., recent_neighbour_prices={"se1": np.ndarray(n), "se3": …, "ee": …})`; puuttuvat tai NaN-arvot palautuvat nollasarakkeeksi kyseiselle tunnille — vastaa v2.8.x:n rajat-ylittävä-tonttoman käyttäytymisen.
+Ridge-ennuste lasketaan kaavalla `ridge = X @ self._ridge_coef`. Kutsuja toimittaa raa'at naapurihinnat parametrillä `compute_forecast(..., recent_neighbour_prices={"se1": np.ndarray(n), "se3": …, "ee": …})`; puuttuvat tai NaN-arvot palautuvat nollasarakkeeksi kyseiselle tunnille — vastaa v2.8.x:n käyttäytymistä ilman rajasiirtohintoja.
 
 ### L3 — AR(1)-momentum
 

@@ -28,6 +28,33 @@ with a 2-observation guard and a CMA→EMA warm-up. Producer:
 Post-install (three weeks after a state wipe): bias −5.20 → −0.39,
 MAE 22.41 → 21.00.
 
+### Documentation debt found in the v2.18.0 doc audit
+
+Tracked, not fixed in this release:
+
+1. **`TEKNINEN_TOTEUTUS.md` needs a content rewrite, not just a banner.**
+   It is nine releases stale and documents the pre-v2.17 leaky model
+   (same-hour `Y_se1`/`Y_se3`/`Y_ee`, eight features, local-mean
+   centering of the physics terms) plus a script that no longer exists
+   (`studies/v253_solar_submodel.py`) and line references into a file
+   that has since grown by ~550 lines. A staleness banner and the
+   outright language errors were fixed; the technical content was not.
+2. **Finnish translation quality.** Fixed: `rajat-ylittävä-tonttoman`
+   (not a word, and `vastata` takes the partitive), `Varatakenttänä`
+   (typo), `Kausitasoittunut` → `Kausitasoitettu` (active vs passive
+   participle — "deseasonalized" is something done *to* the series),
+   `Ei-kausi-osan` and `hedge-portin alla` (English calques). Remaining:
+   `putki` vs `ennusteputki` is used inconsistently for "pipeline".
+3. **All seven diagrams in `docs/diagrams/` are superseded and
+   orphaned** — none is referenced by any document, three have no
+   rendered PNG, and `architecture-overview.drawio` describes a
+   Jinja2-template implementation that no longer exists. Marked with
+   `docs/diagrams/README.md`; they need redrawing against the current
+   pipeline.
+4. **Six screenshots are unreferenced**: `evaluation-{features,full,
+   metrics,timeseries}.png`, `install-05-operator_{1,2}.png`,
+   `install-08-device-created.png`.
+
 ### Corrections to claims made earlier in this document
 
 1. **D6 is the root cause of the offline/field contradiction.** The

@@ -215,8 +215,11 @@ The synthetic fallback is NOT derived from any individual user's data — the pr
 
 Empirical accuracy (12-month held-out back-test on cached prices + weather, see [studies/results/exp_spot_price_forecast_accuracy.md](studies/results/exp_spot_price_forecast_accuracy.md)):
 
-- **Cold-start floor** (fresh install, no calibrator history): MAE 22.5 EUR/MWh on a mean realised price of 51.8 EUR/MWh; R² +0.71; 50 % band coverage 49 % (target 50 %); 90 % band coverage 74 % (under-dispersive at cold-start).
-- **Warm-state target** (after 30–60 days, calibrators warm): MAE ≈ 10 EUR/MWh, R² ≈ 0.91, 90 % band coverage ≈ 92 %. Numbers from the v2.10.1 release back-test under same-data train/test conditions.
+- **Fresh install, no calibrator history**: MAE 25.8 EUR/MWh on a mean realised price of 50.5 EUR/MWh; bias +2.1; R² 0.47.
+- **Calibrators warm (v2.18.0)**: MAE 24.1 EUR/MWh, bias −0.5, R² 0.51. Producer: `studies/bias_corrector_warmup_study.py`, replaying the deployed pipeline over 2023-01 → 2026-07 (30 989 h).
+- **Leak-free out-of-sample**: MAE 27.1 EUR/MWh (`studies/honest_horizon_study.py`, scoring only hours the day-ahead auction has not published). Prefer this number — the two above overlap the artifacts' training window.
+
+> Superseded claim: releases before v2.18.0 documented a warm-state MAE of ≈ 10 EUR/MWh and R² ≈ 0.91. That came from an in-sample train/test fit on a back-test whose cross-border features leaked the target (the v2.16 defect fixed in v2.17.0). Warming the calibrators is worth ~1.7 EUR/MWh and removes the standing bias, not 12 EUR/MWh.
 
 ### Price forecast sensor — forecast row keys
 

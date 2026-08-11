@@ -1,5 +1,16 @@
 # spot_price_forecast_fi — accuracy on historical data
 
+> **SUPERSEDED (v2.18.0).** The numbers below were measured on a model
+> whose cross-border features leaked the target — `Y_se1`/`Y_se3`/`Y_ee`
+> were same-hour prices of zones that clear in the same day-ahead auction
+> as FI (defect fixed in v2.17.0). The "warm-state 10.5 EUR/MWh" figure
+> additionally came from a single in-sample train/test fit. Current
+> honest numbers: 24.1 EUR/MWh warm on a mean price of 50.5
+> (`studies/bias_corrector_warmup_study.py`), 27.1 EUR/MWh on the
+> strictly leak-free evaluation (`studies/honest_horizon_study.py`).
+> Retained for provenance only — do not quote.
+
+
 Branch: `PV_adjusted_price`. Script:
 [`studies/exp_spot_price_forecast_accuracy.py`](../exp_spot_price_forecast_accuracy.py).
 
