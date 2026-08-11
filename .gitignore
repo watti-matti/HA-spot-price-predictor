@@ -18,6 +18,12 @@ output/*.parquet
 output/*.json
 output/*.html
 output/_*.txt
+# Retrain staging area. `output/*.json` does not match subdirectories, so
+# without this the artifacts staged for a manual HA copy sit untracked but
+# committable — and a stale one committed by accident silently replaces the
+# shipped model. See docs/BACKLOG.md.
+output/ha_deploy/
+studies/install_figures/
 
 # DtACI validation price cache (large, regenerable)
 studies/_dtaci_*_prices_cache.json
