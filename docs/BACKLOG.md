@@ -1,6 +1,78 @@
 # Forecast model — backlog and open defects
 
-## Current status (2026-08-01) — the July summer weekday/weekend report
+## Current status (2026-08-11) — root cause found, and corrections below
+
+The July weekday over-prediction is real and reproduces offline once the
+harness is made to behave like production. Reproducing the deployed
+pipeline against the data store (frozen L1 + L2, `Y_fi_lag168` zeroed,
+neighbours lagged, no bias correction):
+
+| 2026-07 weekday | actual | model | bias |
+|---|--:|--:|--:|
+| hourly mean | 21.56 | 41.07 | **+19.52 (+90 %)** |
+| daily peak | 29.85 | 62.81 | **+32.96 (+110 %)** |
+
+**Shipped in v2.18.0** — the bias corrector was mistuned. A 14-day
+half-life behind a 14-update warm-up gate disabled the correction for
+exactly one half-life, then applied it at 50 % strength (a
+zero-initialised EMA reaches `1−(1−λ)ⁿ`). Retuned to a 3-day half-life
+with a 2-observation guard and a CMA→EMA warm-up. Producer:
+`studies/bias_corrector_warmup_study.py`.
+
+| configuration | MAE | weekday | wd peak | \|mth bias\| | 2026-07 wd peak bias |
+|---|--:|--:|--:|--:|--:|
+| no correction | 25.76 | 28.22 | 35.55 | 9.54 | +29.36 |
+| v2.17.3 | 24.91 | 26.83 | 33.91 | 7.21 | +27.17 |
+| **v2.18.0** | **24.13** | **25.76** | **32.36** | **3.30** | **+13.66** |
+
+Post-install (three weeks after a state wipe): bias −5.20 → −0.39,
+MAE 22.41 → 21.00.
+
+### Corrections to claims made earlier in this document
+
+1. **D6 is the root cause of the offline/field contradiction.** The
+   harness and `summer_weekday_status.py` refit L1 monthly; production
+   runs the frozen artifact. Refitting averages the week-bin noise away;
+   production applies one bin deterministically. Fix the harness before
+   trusting any further offline number — the "most likely explanation:
+   stale pre-v2.15 artifacts" hypothesis below is probably wrong.
+2. **D1's diagnosis needs amending.** Net load's informative half is
+   **wind, not consumption**. Measured with Fingrid day-ahead series:
+   oracle wind/PV is worth +3.8 % summer, oracle consumption −1.0 %.
+   Every consumption specification tried in the price mean (plain,
+   ×peak-hour, ×workday, peak-only, ×wind-scarcity) scored −0.4 % to
+   −1.3 %. Consumption does help the *daily-spread* model (+7 % on top
+   of wind/PV/nuclear), where sensitivity saturates at ~3.6 % MAPE —
+   so a focused consumption model has no headroom to buy.
+3. **The nuclear result is not safe.** `nuclear_mw` (188) is *realised*
+   production — the only realised series used in any of this work, and
+   the only variable that failed every test. Nord Pool prices *planned*
+   availability from the UMM outage schedule, which
+   `api_client.fetch_nuclear_outage_schedule` already fetches but which
+   feeds only the legacy base model. Re-run before concluding.
+4. **Information-set principle.** Datasets 246/247/165 are Fingrid
+   **day-ahead forecasts** — market-available at gate closure, and
+   therefore the correct regressors. Realised production is endogenous
+   (price and consumption are simultaneously determined) and must not
+   become a fitting target for the price model.
+
+### Largest unshipped opportunity (measured, not yet built)
+
+Fingrid's day-ahead wind/PV forecasts are only 85 % / 75 % reconstructible
+from our weather proxies. Adding the **orthogonal remainder** on top of
+the retained proxies is worth **+8.5 % MAE, +8.0 % summer** — the largest
+single effect measured. It must be *added to*, not substituted for, the
+weather proxy (substituting regresses summer), and it covers D+1 only.
+
+**Sequencing constraint:** the structural stack (capacity scaling,
+Fingrid channel, wind nonlinearity, amplitude recalibration) improves
+aggregate MAE 5.7 % but pushes the 2026-07 weekday-peak bias from +26.5
+to **+37.2**. It must not ship before the bias-corrector fix, which
+v2.18.0 delivers.
+
+---
+
+## Historical status (2026-08-01) — the July summer weekday/weekend report
 
 **The original observation was correct.** Weekends *are* forecast more
 accurately than weekdays in summer, and the gap is large. Producer:

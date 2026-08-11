@@ -563,3 +563,61 @@ def test_validator_catches_missing_pv_dk_horizon() -> None:
     broken.pop("dk_peak_pv_eur_kwh")
     viol = validate_duration_day(broken, require_pv=True)
     assert any("PV D(k) missing" in m for m in viol)
+
+
+# ── Weather-site parity (v2.18.0) ─────────────────────────────────
+#
+# `FINLAND_LOCATIONS` in const.py is what the RUNTIME queries Open-Meteo
+# with; `data/finland.yaml` is what the TRAINER uses. Through v2.17.3
+# the Kolari entry disagreed (67.85/24.15 vs 67.30/23.80, ~62 km), so
+# production and training saw different weather at that site. The
+# duplication is the real defect — this test is the guard.
+
+
+def _region_sites() -> list[dict]:
+    import yaml
+    region = yaml.safe_load(
+        (REPO / "custom_components" / "spot_price_predictor" / "data"
+         / "finland.yaml").read_text(encoding="utf-8"))
+    return region["weather_source"]["locations"]
+
+
+def _const_sites() -> list[dict]:
+    src = (REPO / "custom_components" / "spot_price_predictor"
+           / "const.py").read_text(encoding="utf-8")
+    ns: dict = {}
+    block = re.search(r"FINLAND_LOCATIONS = (\[.*?\n\])", src, re.S)
+    assert block, "FINLAND_LOCATIONS not found in const.py"
+    exec("FINLAND_LOCATIONS = " + block.group(1), ns)
+    return ns["FINLAND_LOCATIONS"]
+
+
+def test_runtime_weather_sites_match_the_shipped_region_file() -> None:
+    const_sites = _const_sites()
+    region_sites = _region_sites()
+    assert len(const_sites) == len(region_sites), (
+        f"const.py has {len(const_sites)} weather sites, "
+        f"data/finland.yaml has {len(region_sites)}"
+    )
+    for c, r in zip(const_sites, region_sites):
+        for key in ("lat", "lon", "wind_weight", "solar_weight", "temp_weight"):
+            assert c[key] == pytest.approx(float(r[key]), abs=1e-9), (
+                f"weather site mismatch on {key!r}: const.py {c['name']!r} "
+                f"has {c[key]}, data/finland.yaml {r['name']!r} has {r[key]}. "
+                f"Training and production must query the same points."
+            )
+
+
+def test_shipped_region_file_matches_the_training_config() -> None:
+    """data/finland.yaml is a copy of config/regions/finland.yaml; drift
+    between them reintroduces the same class of bug one level up."""
+    import yaml
+    shipped = yaml.safe_load(
+        (REPO / "custom_components" / "spot_price_predictor" / "data"
+         / "finland.yaml").read_text(encoding="utf-8"))
+    training = yaml.safe_load(
+        (REPO / "config" / "regions" / "finland.yaml").read_text(encoding="utf-8"))
+    assert (shipped["weather_source"]["locations"]
+            == training["weather_source"]["locations"])
+    assert (shipped["weather_source"]["variables"]
+            == training["weather_source"]["variables"])

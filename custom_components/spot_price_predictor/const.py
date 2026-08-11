@@ -247,7 +247,13 @@ FINLAND_LOCATIONS = [
      "wind_weight": 0.04, "solar_weight": 0.24, "temp_weight": 0.38},
     {"name": "Lapua", "lat": 62.97, "lon": 23.00,
      "wind_weight": 0.10, "solar_weight": 0.12, "temp_weight": 0.12},
-    {"name": "Kolari", "lat": 67.85, "lon": 24.15,
+    # 67.30 / 23.80, matching data/finland.yaml. Through v2.17.3 this
+    # entry read 67.85 / 24.15 — ~62 km away — so production fetched
+    # weather from a different point than the trainer used. Measured on
+    # Open-Meteo for Jun–Jul 2026: +0.19 m/s wind and −1.12 °C at the
+    # runtime point. `test_release_data_consistency` now asserts parity
+    # with the shipped region file, which is the authoritative source.
+    {"name": "Kolari", "lat": 67.30, "lon": 23.80,
      "wind_weight": 0.08, "solar_weight": 0.04, "temp_weight": 0.05},
 ]
 

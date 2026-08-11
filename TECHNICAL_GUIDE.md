@@ -75,7 +75,9 @@ The Ridge prediction is `ridge = X @ self._ridge_coef`. The caller supplies the 
 
 ### Softplus floor and hourly bias EMA
 
-Before the fan-chart is sampled, the mean is floored at −5 EUR/MWh via a softplus (`price_floor.apply_floor`, default `_pf.DEFAULT_FLOOR_EUR_MWH`). A slowly-moving bias estimate is then subtracted by the `HourlyBiasCorrector` (`hourly_calibration.py`, half-life 14 days, warmup 168 hours). The corrected mean is the `spot_eur_mwh` value on each forecast row.
+Before the fan-chart is sampled, the mean is floored at −5 EUR/MWh via a softplus (`price_floor.apply_floor`, default `_pf.DEFAULT_FLOOR_EUR_MWH`). A bias estimate is then subtracted by the `PerHourBiasCorrector` (`hourly_calibration.py`): 24 independent EMAs, one per UTC hour-of-day, each seeing ~1 observation/day. The corrected mean is the `spot_eur_mwh` value on each forecast row.
+
+Since v2.18.0 the corrector runs at a **3-day half-life** with a 2-observation guard and a CMA→EMA warm-up (`adaptive_init`). The previous 14-day half-life behind a 14-update gate disabled the correction for exactly one half-life and then applied it at 50 % strength, because a zero-initialised EMA reaches only `1−(1−λ)ⁿ` of the true bias. With the decaying gain `α_n = max(1/n, λ)` the estimate is unbiased at every `n`. Producer: `studies/bias_corrector_warmup_study.py`.
 
 ### L4 — GPD POT spike model
 
@@ -87,7 +89,7 @@ Three calibrators serialise their state on every coordinator cycle (`Pipeline.sa
 
 | State file | Class | Configured defaults |
 |---|---|---|
-| `hourly_bias.json` | `HourlyBiasCorrector` | halflife_days = 14, warmup_hours = 168 |
+| `hourly_bias.json` | `PerHourBiasCorrector` | halflife_days = 3, warmup_updates = 2, adaptive_init = true (24 bins, cadence 1/day) |
 | `hourly_fan_chart.json` | `HourlyFanChartCalibrator` | target_coverages = (0.5, 0.9), window = 720, min_warmup = 24 |
 | `refit_monitor.json` | `RefitMonitor` | target_coverage = 0.9, drift_pp = 0.05, persistence_steps = 14 × 24 |
 
