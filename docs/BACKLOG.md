@@ -52,9 +52,12 @@ Tracked, not fixed in this release:
    **28–38** against an actual **nine**; `data-flow.drawio` itemised
    them ("Supply (3), Time cycles (4), Demand patterns (8), Thermal
    demand (6), Physics supply (3), Scarcity indicators (4) = 28").
-   Recoverable from git history. The accurate, compact data-flow diagram
-   in TECHNICAL_GUIDE.md is now the single architecture picture — a
-   second representation is what let these drift unnoticed.
+   Recoverable from git history (`git show 2c5b4c1:docs/diagrams/...`).
+   Replaced by two Mermaid diagrams inline in TECHNICAL_GUIDE.md and
+   its Finnish translation — a system data-flow and the four-layer
+   pipeline. Mermaid renders natively on GitHub and is plain text, so
+   it diffs in review and cannot rot into a stale binary the way the
+   .drawio/.png pairs did.
 4. **Six screenshots are unreferenced**: `evaluation-{features,full,
    metrics,timeseries}.png`, `install-05-operator_{1,2}.png`,
    `install-08-device-created.png`.

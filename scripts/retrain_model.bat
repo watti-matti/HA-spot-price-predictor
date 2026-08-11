@@ -19,7 +19,7 @@ REM ======================= EDIT ME ===========================
 REM Fingrid API key (free, https://data.fingrid.fi). OPTIONAL:
 REM leave BLANK to train without nuclear features and skip the
 REM solar sub-model. The model still works fully without it.
-set "FINGRID_API_KEY="
+set "FINGRID_API_KEY=39f0d633f8e74fc8bdff79537e559d8c"
 
 REM Region config file under config\regions\<REGION>.yaml
 set "REGION=finland"

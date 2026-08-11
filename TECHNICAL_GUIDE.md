@@ -9,17 +9,31 @@ The integration has two phases:
 - **Inference** runs inside Home Assistant. The `SpotPriceCoordinator` ([`coordinator.py`](custom_components/spot_price_predictor/coordinator.py)) drives a periodic update cycle that fetches weather and price data, calls the `Pipeline` ([`pipeline.py`](custom_components/spot_price_predictor/pipeline.py)) for the four-layer forecast, builds per-hour and per-day attributes, and pushes them to the sensor entities ([`sensor.py`](custom_components/spot_price_predictor/sensor.py)).
 - **Retraining** is an on-demand refit of the three JSON artifacts under `data/`, exposed as the `spot_price_predictor.retrain_models` service. The refit scripts (`studies/build_seasonal_components.py`, `studies/build_fresh_spike_model.py`, `studies/solar_clear_sky_submodel.py`) read cached parquets and write the artifacts atomically; the coordinator auto-reloads them on the next update.
 
-```
-Open-Meteo  ──┐
-Sahkotin    ──┼──> SpotPriceCoordinator
-Elpriset    ──┤      ├── builds 170 forecast rows
-Elering     ──┤      ├── calls Pipeline.compute_forecast → spot, consumer, P5..P95 per row
-Fingrid     ──┤      ├── computes per-day D(k) curves (4 × 24 arrays per day)
-Nord Pool UMM ┘      ├── (optional) PV-aware augmentation per row + PV D(k) per day
-                     └── (optional) DtACI calibrator wraps the D(k) curves with bands
-                            │
-                            ▼
-                  sensor.spot_price_predictor_*
+```mermaid
+flowchart LR
+  subgraph SRC["Data sources (all free)"]
+    S["Sahkotin<br/>FI spot"]
+    OM["Open-Meteo<br/>7 sites, capacity-weighted<br/>wind / GHI / temp"]
+    NB["elprisetjustnu.se SE1+SE3<br/>Elering EE"]
+    FG["Fingrid 188/165/246/247<br/>267/268 capacity"]
+    UMM["Nord Pool UMM<br/>outage schedule"]
+  end
+
+  subgraph CO["SpotPriceCoordinator"]
+    P["Pipeline.compute_forecast<br/>170 hourly rows"]
+    DK["D(k) duration curves<br/>4 x 24 arrays per day"]
+    PV["PV-aware augmentation<br/>(optional)"]
+    DT["DtACI bands on D(k)<br/>(optional)"]
+  end
+
+  OUT["sensor.spot_price_predictor_*<br/>sensor.spot_price_forecast_fi"]
+
+  S --> P
+  OM --> P
+  NB -- "lagged 168 h" --> P
+  FG -.->|"legacy duration model<br/>+ diagnostics only"| DK
+  UMM -.-> DK
+  P --> DK --> PV --> DT --> OUT
 ```
 
 The pipeline reads three frozen artifacts under `custom_components/spot_price_predictor/data/`:
@@ -45,6 +59,25 @@ mean(h) -= per_hour_bias_corrector.bias_estimate[hour]
 
 P{5,25,50,75,95}_eur_mwh(h) ← 500-sample mixture (Normal body + GPD tails)
                               centered on mean(h)
+```
+
+```mermaid
+flowchart TB
+  L1["<b>L1</b> seasonal_fi(h)<br/>P_hour[24] + P_day[7] + P_week[53]"]
+  L2["<b>L2</b> Ridge, 9 features<br/>lagged FI - workday - wind - solar - temp<br/>SE1/SE3/EE lagged 168 h - holiday"]
+  L3["<b>L3</b> AR(1)<br/>phi^h * eta(t0-1)"]
+  SUM(["+"])
+  FL["softplus floor at -5 EUR/MWh"]
+  BC["PerHourBiasCorrector<br/>24 bins - half-life 3 d - CMA to EMA warm-up"]
+  PT["<b>spot_eur_mwh</b> point forecast"]
+  L4["<b>L4</b> GPD POT<br/>500 paths, Normal body + Pareto tails"]
+  FAN["P5 / P25 / P50 / P75 / P95"]
+
+  L1 --> SUM
+  L2 --> SUM
+  L3 --> SUM
+  SUM --> FL --> BC --> PT
+  PT --> L4 --> FAN
 ```
 
 ### L1 — Seasonal decomposition

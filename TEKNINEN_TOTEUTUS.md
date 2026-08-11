@@ -21,6 +21,33 @@ Ennusteputki lukee kolme jäädytettyä artefaktia kansiosta `custom_components/
 
 Kalibraattoreiden pysyvä tila sijaitsee polussa `<config>/.storage/spot_price_predictor_pipeline/`.
 
+```mermaid
+flowchart LR
+  subgraph SRC["Tietolähteet (kaikki maksuttomia)"]
+    S["Sahkotin<br/>FI spot"]
+    OM["Open-Meteo<br/>7 sites, kapasiteettipainotettu<br/>wind / GHI / temp"]
+    NB["elprisetjustnu.se SE1+SE3<br/>Elering EE"]
+    FG["Fingrid 188/165/246/247<br/>267/268 capacity"]
+    UMM["Nord Pool UMM<br/>huoltokatkoaikataulu"]
+  end
+
+  subgraph CO["SpotPriceCoordinator"]
+    P["Pipeline.compute_forecast<br/>170 tuntiriviä"]
+    DK["D(k) kestokäyrät<br/>4 x 24 taulukkoa/vrk"]
+    PV["PV-aware augmentation<br/>(valinnainen)"]
+    DT["DtACI bands on D(k)<br/>(valinnainen)"]
+  end
+
+  OUT["sensor.spot_price_predictor_*<br/>sensor.spot_price_forecast_fi"]
+
+  S --> P
+  OM --> P
+  NB -- "168 h viiveellä" --> P
+  FG -.->|"vanha kestomalli<br/>+ vain diagnostiikka"| DK
+  UMM -.-> DK
+  P --> DK --> PV --> DT --> OUT
+```
+
 ## Nelitasoinen ennusteputki
 
 Julkinen sisääntulo: `Pipeline.compute_forecast(timestamps, wind, solar, temp, recent_fi_residuals=None, neighbour_prices_lag168=None, netload_lag168=None, is_holiday=None, enable_fan_chart=True)`. Jokaisella ennustetunnilla h:
@@ -33,6 +60,25 @@ mean(h)  = softplus_floor(mean(h), lattia = −5 EUR/MWh)
 mean(h) -= per_hour_bias_corrector.bias_estimate[tunti]
 
 P{5,25,50,75,95}_eur_mwh(h) ← 500 näytteen sekoitus (normaalirunko + GPD-hännät)
+```
+
+```mermaid
+flowchart TB
+  L1["<b>L1</b> seasonal_fi(h)<br/>P_hour[24] + P_day[7] + P_week[53]"]
+  L2["<b>L2</b> Ridge, 9 piirrettä<br/>viivästetty FI - arkipäivä - tuuli - aurinko - lämpötila<br/>SE1/SE3/EE 168 h viiveellä - pyhäpäivä"]
+  L3["<b>L3</b> AR(1)<br/>phi^h * eta(t0-1)"]
+  SUM(["+"])
+  FL["softplus lattia -5 EUR/MWh"]
+  BC["PerHourBiasCorrector<br/>24 lokeroa - puoliintumisaika 3 vrk - CMA to EMA lämmittely"]
+  PT["<b>spot_eur_mwh</b> pisteennuste"]
+  L4["<b>L4</b> GPD POT<br/>500 polkua, normaalirunko + Pareto-hännät"]
+  FAN["P5 / P25 / P50 / P75 / P95"]
+
+  L1 --> SUM
+  L2 --> SUM
+  L3 --> SUM
+  SUM --> FL --> BC --> PT
+  PT --> L4 --> FAN
 ```
 
 ### L1 — Kausivaihtelun hajotelma
