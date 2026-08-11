@@ -41,12 +41,20 @@ Tracked, not fixed in this release:
    cited a script that no longer exists. Pure attribute reference tables
    now point to the English document rather than being duplicated, so
    the two cannot drift apart again.
-3. **All seven diagrams in `docs/diagrams/` are superseded and
-   orphaned** — none is referenced by any document, three have no
-   rendered PNG, and `architecture-overview.drawio` describes a
-   Jinja2-template implementation that no longer exists. Marked with
-   `docs/diagrams/README.md`; they need redrawing against the current
-   pipeline.
+3. **All seven files in `docs/diagrams/` deleted.** None was referenced
+   by any document, three had no rendered PNG so could not be viewed on
+   GitHub at all, and every one described the pre-integration
+   architecture: "Jinja2 inference", "Two-Stage Ridge Regression +
+   Piecewise Calibration", "REST Sensors", `mgrey.se` (the code uses
+   elprisetjustnu.se), Fingrid capacity `#24/27/115` (the config uses
+   267/268), and sensor names `price_forecast` / `meteo_7day_forecast`
+   that do not exist. Four of the five carried a feature-count claim of
+   **28–38** against an actual **nine**; `data-flow.drawio` itemised
+   them ("Supply (3), Time cycles (4), Demand patterns (8), Thermal
+   demand (6), Physics supply (3), Scarcity indicators (4) = 28").
+   Recoverable from git history. The accurate, compact data-flow diagram
+   in TECHNICAL_GUIDE.md is now the single architecture picture — a
+   second representation is what let these drift unnoticed.
 4. **Six screenshots are unreferenced**: `evaluation-{features,full,
    metrics,timeseries}.png`, `install-05-operator_{1,2}.png`,
    `install-08-device-created.png`.
