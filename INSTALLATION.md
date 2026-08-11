@@ -107,7 +107,11 @@ With PV enabled, the integration produces:
 
 ## Step 8 — Verify
 
-The integration creates a device named **Spot Price Predictor** with sensor entities. Open **Settings → Devices & Services → Spot Price Predictor → Sensors** to verify:
+The integration creates a device named **Spot Price Predictor** with sensor entities.
+
+![Device created](docs/screenshots/install-08-device-created.png)
+
+Open **Settings → Devices & Services → Spot Price Predictor → Sensors** to verify:
 
 | Sensor | Always created |
 |---|:-:|
