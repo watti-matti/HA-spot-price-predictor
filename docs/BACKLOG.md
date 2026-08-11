@@ -32,19 +32,15 @@ MAE 22.41 → 21.00.
 
 Tracked, not fixed in this release:
 
-1. **`TEKNINEN_TOTEUTUS.md` needs a content rewrite, not just a banner.**
-   It is nine releases stale and documents the pre-v2.17 leaky model
-   (same-hour `Y_se1`/`Y_se3`/`Y_ee`, eight features, local-mean
-   centering of the physics terms) plus a script that no longer exists
-   (`studies/v253_solar_submodel.py`) and line references into a file
-   that has since grown by ~550 lines. A staleness banner and the
-   outright language errors were fixed; the technical content was not.
-2. **Finnish translation quality.** Fixed: `rajat-ylittävä-tonttoman`
-   (not a word, and `vastata` takes the partitive), `Varatakenttänä`
-   (typo), `Kausitasoittunut` → `Kausitasoitettu` (active vs passive
-   participle — "deseasonalized" is something done *to* the series),
-   `Ei-kausi-osan` and `hedge-portin alla` (English calques). Remaining:
-   `putki` vs `ennusteputki` is used inconsistently for "pipeline".
+1. **Version archaeology removed from the docs.** References like "new in
+   v2.11.0" / "added in v2.10.0" / "passes the v2.5.6 hedge gate" told a
+   reader nothing about current behaviour and several had become false.
+   Stripped from README.md and TECHNICAL_GUIDE.md outside the changelog.
+2. **`TEKNINEN_TOTEUTUS.md` rewritten** as a current translation of
+   TECHNICAL_GUIDE.md. It had documented the pre-v2.17 leaky model and
+   cited a script that no longer exists. Pure attribute reference tables
+   now point to the English document rather than being duplicated, so
+   the two cannot drift apart again.
 3. **All seven diagrams in `docs/diagrams/` are superseded and
    orphaned** — none is referenced by any document, three have no
    rendered PNG, and `architecture-overview.drawio` describes a

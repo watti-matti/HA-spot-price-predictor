@@ -1,4 +1,4 @@
-# Technical Guide — HA Spot Price Predictor (v2.11.8)
+# Technical Guide — HA Spot Price Predictor
 
 Finnish consumer-electricity price and D(k) duration cost forecasting for Home Assistant. Produces a 170-hour spot/consumer point forecast, P5/P25/P50/P75/P95 fan-chart bands, and 7-day cheap/peak duration curves driven by a four-layer prediction pipeline. This guide describes only what the shipping code actually does.
 
@@ -7,7 +7,7 @@ Finnish consumer-electricity price and D(k) duration cost forecasting for Home A
 The integration has two phases:
 
 - **Inference** runs inside Home Assistant. The `SpotPriceCoordinator` ([`coordinator.py`](custom_components/spot_price_predictor/coordinator.py)) drives a periodic update cycle that fetches weather and price data, calls the `Pipeline` ([`pipeline.py`](custom_components/spot_price_predictor/pipeline.py)) for the four-layer forecast, builds per-hour and per-day attributes, and pushes them to the sensor entities ([`sensor.py`](custom_components/spot_price_predictor/sensor.py)).
-- **Retraining** is an on-demand refit of the three JSON artifacts under `data/`, exposed as the `spot_price_predictor.retrain_models` service. The refit scripts (`studies/build_seasonal_components.py`, `studies/v2513_layer4_spike_model.py`, `studies/v253_solar_submodel.py`) read cached parquets and write the artifacts atomically; the coordinator auto-reloads them on the next update.
+- **Retraining** is an on-demand refit of the three JSON artifacts under `data/`, exposed as the `spot_price_predictor.retrain_models` service. The refit scripts (`studies/build_seasonal_components.py`, `studies/build_fresh_spike_model.py`, `studies/solar_clear_sky_submodel.py`) read cached parquets and write the artifacts atomically; the coordinator auto-reloads them on the next update.
 
 ```
 Open-Meteo  ──┐
@@ -34,14 +34,14 @@ Persistent calibrator state lives under `<config>/.storage/spot_price_predictor_
 
 ## The four-layer prediction pipeline
 
-Public entry point: `Pipeline.compute_forecast(timestamps, wind, solar, temp, recent_fi_residuals=None, enable_fan_chart=True)` ([`pipeline.py:318`](custom_components/spot_price_predictor/pipeline.py:318)). At each forecast hour h:
+Public entry point: `Pipeline.compute_forecast(timestamps, wind, solar, temp, recent_fi_residuals=None, neighbour_prices_lag168=None, netload_lag168=None, is_holiday=None, enable_fan_chart=True)`. At each forecast hour h:
 
 ```
 mean(h)  = L1 seasonal_fi(h)
          + L2 ridge(h)
          + L3 φ^h · η(t₀−1)
 mean(h)  = softplus_floor(mean(h), floor = −5 EUR/MWh)
-mean(h) -= hourly_bias_corrector.bias_estimate   # only when warmed up
+mean(h) -= per_hour_bias_corrector.bias_estimate[hour]
 
 P{5,25,50,75,95}_eur_mwh(h) ← 500-sample mixture (Normal body + GPD tails)
                               centered on mean(h)
@@ -49,35 +49,43 @@ P{5,25,50,75,95}_eur_mwh(h) ← 500-sample mixture (Normal body + GPD tails)
 
 ### L1 — Seasonal decomposition
 
-`Pipeline._seasonal_fi` and `Pipeline._deseasonalize_input` ([`pipeline.py:200-216`](custom_components/spot_price_predictor/pipeline.py:200)) read additive hour + day + week components from `seasonal_components_default.json` and subtract them from FI price and temperature to produce deseasonalized residuals. Wind and solar are not deseasonalized via L1 — they are locally centered (mean-subtracted) before entering the Ridge.
+`Pipeline._seasonal_fi` and `Pipeline._deseasonalize_input` read additive hour + day + week components from `seasonal_components_default.json` and subtract them from FI price and temperature to produce deseasonalized residuals. Wind and solar use their own components from the spike artifact's `physics_seasonal` block, so training and inference deseasonalize them identically. Artifacts predating that block fall back to local mean-centering.
 
-### L2 — Non-seasonal Ridge regression (eight features)
+### L2 — Non-seasonal Ridge regression (nine features)
 
-The shipped `data/spike_model_default.json` carries the canonical feature ordering in its `ridge_features` field; the pipeline reads it at construction and builds the design matrix in that order. The fallback list is `RIDGE_FEATURES` in [`pipeline.py:62-77`](custom_components/spot_price_predictor/pipeline.py:62).
+The shipped `data/spike_model_default.json` carries the canonical feature ordering in its `ridge_features` field; the pipeline reads it at construction and builds the design matrix in that order. The fallback list is `RIDGE_FEATURES` in [`pipeline.py`](custom_components/spot_price_predictor/pipeline.py).
 
-| # | Feature | Built in `_build_features` ([`pipeline.py:220-275`](custom_components/spot_price_predictor/pipeline.py:220)) | Definition |
+| # | Feature | Built in `_build_features` | Definition |
 |---|---|---|---|
 | 1 | `intercept` | `np.ones(n)` | constant 1 |
 | 2 | `Y_fi_lag168` | passed by caller via `recent_fi_residuals["lag168"]` | Deseasonalized FI residual 7 days prior. Coordinator currently passes zeros (cold-start prior) because the rolling forecast history is shorter than 7 days. |
-| 3 | `is_workday` | `Pipeline._is_workday` — `weekday < 5` | binary {0, 1} |
-| 4 | `Y_sigmoid_wind_rho` | `_sigmoid_turbine_rho` ([`pipeline.py:81-87`](custom_components/spot_price_predictor/pipeline.py:81)), then locally centered | `σ((wind − 7.5) / 1.5) × ρ(T) / 1.225` |
-| 5 | `Y_solar_effective` | `_solar_effective` ([`pipeline.py:90-96`](custom_components/spot_price_predictor/pipeline.py:90)), then locally centered | `GHI × (1 − 0.004 · max(0, T_cell − 25))`, `T_cell = T + 0.03 · GHI` |
+| 3 | `is_workday` | `Pipeline._is_workday` — `weekday < 5` on the **local** (Europe/Helsinki) calendar, minus holidays | binary {0, 1} |
+| 4 | `Y_sigmoid_wind_rho` | `_sigmoid_turbine_rho`, deseasonalized with the artifact's `physics_seasonal` block | `σ((wind − 7.5) / 1.5) × ρ(T) / 1.225` |
+| 5 | `Y_solar_effective` | `_solar_effective`, deseasonalized with `physics_seasonal` | `GHI × (1 − 0.004 · max(0, T_cell − 25))`, `T_cell = T + 0.03 · GHI` |
 | 6 | `Y_temp` | `_deseasonalize_input("temp", …)` | Deseasonalized temperature |
-| 7 | `Y_se1` | `_deseasonalize_input("se1", …)` over neighbour-price arg | Deseasonalized SE1 spot. **v2.10.0 addition** — accepted under the v2.5.6 NPK-CVaR hedge gate. |
-| 8 | `Y_se3` | `_deseasonalize_input("se3", …)` | Deseasonalized SE3 spot (FennoSkan terminus). |
-| 9 | `Y_ee` | `_deseasonalize_input("ee", …)` | Deseasonalized EE spot (Estlink terminus). |
+| 7 | `Y_se1_lag168` | `_deseasonalize_input("se1", …)` on the value **168 h earlier** | Deseasonalized SE1 spot, lagged |
+| 8 | `Y_se3_lag168` | same, lagged 168 h | Deseasonalized SE3 spot (FennoSkan terminus), lagged |
+| 9 | `Y_ee_lag168` | same, lagged 168 h | Deseasonalized EE spot (Estlink terminus), lagged |
+| 10 | `is_holiday` | local-date public-holiday flag from the coordinator | binary {0, 1} |
 
-The Ridge prediction is `ridge = X @ self._ridge_coef`. The caller supplies the raw neighbour prices via `compute_forecast(..., recent_neighbour_prices={"se1": np.ndarray(n), "se3": …, "ee": …})`; missing or NaN entries fall back to a zero column for that hour, equivalent to the v2.8.x no-cross-border behaviour.
+The Ridge prediction is `ridge = X @ self._ridge_coef`. `ridge_coef` has 10 entries and the **intercept is first**, while the artifact's `ridge_features` omits it — read them misaligned and the wind coefficient looks like solar.
+
+Neighbour prices arrive via `compute_forecast(..., neighbour_prices_lag168={"se1": …, "se3": …, "ee": …})`, where element *i* is the price at `t − 168 h`. **Never pass same-hour prices**: FI, SE1, SE3 and EE clear in the same day-ahead auction, so a same-hour neighbour price is not observable before the target it predicts. Missing or NaN entries fall back to a zero column for that hour.
+
+Two invariants the runtime enforces:
+
+- **168 h neighbour lag** — `test_artifact_declares_no_same_hour_neighbour_features` rejects an artifact naming an un-lagged zone.
+- **Wind and PV coefficients ≤ 0** — zero-marginal-cost generation cannot raise the price. The trainer fits under the constraint; `Pipeline._enforce_physics_signs` clamps any positive coefficient at load.
 
 ### L3 — AR(1) momentum
 
-`Pipeline._ar_contribution` ([`pipeline.py:254-266`](custom_components/spot_price_predictor/pipeline.py:254)) returns `φ^h · last_eta` for h = 1..n. `φ` is loaded from `spike_model_default.json` (`ar1_phi`); `last_eta` is the most-recent observed post-AR residual, updated via `Pipeline.update_with_actuals` ([`pipeline.py:423`](custom_components/spot_price_predictor/pipeline.py:423)). When `last_eta` is unknown (cold start), L3 contributes zero.
+`Pipeline._ar_contribution` returns `φ^h · last_eta` for h = 1..n. `φ` is loaded from `spike_model_default.json` (`ar1_phi`); `last_eta` is the most-recent observed post-AR residual, updated via `Pipeline.update_with_actuals`. When `last_eta` is unknown (cold start), L3 contributes zero.
 
 ### Softplus floor and hourly bias EMA
 
 Before the fan-chart is sampled, the mean is floored at −5 EUR/MWh via a softplus (`price_floor.apply_floor`, default `_pf.DEFAULT_FLOOR_EUR_MWH`). A bias estimate is then subtracted by the `PerHourBiasCorrector` (`hourly_calibration.py`): 24 independent EMAs, one per UTC hour-of-day, each seeing ~1 observation/day. The corrected mean is the `spot_eur_mwh` value on each forecast row.
 
-Since v2.18.0 the corrector runs at a **3-day half-life** with a 2-observation guard and a CMA→EMA warm-up (`adaptive_init`). The previous 14-day half-life behind a 14-update gate disabled the correction for exactly one half-life and then applied it at 50 % strength, because a zero-initialised EMA reaches only `1−(1−λ)ⁿ` of the true bias. With the decaying gain `α_n = max(1/n, λ)` the estimate is unbiased at every `n`. Producer: `studies/bias_corrector_warmup_study.py`.
+The corrector runs at a **3-day half-life** with a 2-observation guard and a CMA→EMA warm-up (`adaptive_init`). The previous 14-day half-life behind a 14-update gate disabled the correction for exactly one half-life and then applied it at 50 % strength, because a zero-initialised EMA reaches only `1−(1−λ)ⁿ` of the true bias. With the decaying gain `α_n = max(1/n, λ)` the estimate is unbiased at every `n`. Producer: `studies/bias_corrector_warmup_study.py`.
 
 ### L4 — GPD POT spike model
 
@@ -112,7 +120,7 @@ Implemented in `SpotPriceCoordinator._apply_pipeline_pre_dk` and `_compute_durat
 
 For each local day with 24 complete hours in the forecast window:
 
-1. **Spot side** — `Pipeline.compute_duration_curves` ([`pipeline.py:388-421`](custom_components/spot_price_predictor/pipeline.py:388)) sorts the 24 hourly `mean_eur_mwh` values ascending and descending, then takes cumulative means. Result: `dk_cheap_eur_mwh[24]` (mean of (i+1) cheapest hours) and `dk_peak_eur_mwh[24]` (mean of (i+1) priciest hours), each monotone in i.
+1. **Spot side** — `Pipeline.compute_duration_curves` sorts the 24 hourly `mean_eur_mwh` values ascending and descending, then takes cumulative means. Result: `dk_cheap_eur_mwh[24]` (mean of (i+1) cheapest hours) and `dk_peak_eur_mwh[24]` (mean of (i+1) priciest hours), each monotone in i.
 2. **Consumer side** — each hourly spot is first converted to consumer EUR/kWh using the per-hour tariff (`day_rate` for hours 07–22, `night_rate` for hours 22–07), then the same sort + cumulative-mean step yields `dk_cheap_eur_kwh[24]` / `dk_peak_eur_kwh[24]`.
 
 All four arrays are 0-indexed; `dk_cheap_eur_mwh[3]` is the mean of the four cheapest hours of that day (and similarly for the consumer arrays). The full-day mean is recovered at index 23 in either direction: `dk_cheap_eur_mwh[23] == dk_peak_eur_mwh[23] == daily_average_spot`.
@@ -156,7 +164,7 @@ Two configuration fields drive the baseload `c_h` used in the PV calculation:
 
 When `enable_dtaci_dk = true` the coordinator wraps the D(k) curves with adaptive conformal bands. Implementation: [`dk_dtaci.py`](custom_components/spot_price_predictor/dk_dtaci.py) (`DkDtACIBundle`) + [`dtaci_integration.py`](custom_components/spot_price_predictor/dtaci_integration.py).
 
-- **48 DtACI instances (FI zone only, since v2.11.8)** — one per `(direction, k)` for direction ∈ {cheap, peak} and k = 1..24. Each instance tracks its own residual distribution, alpha, dominant gamma, weight entropy, and per-instance bias EMA. (The SE1/SE3/EE bundles were removed in v2.11.8: they were never fed and provided no benefit; neighbour prices still feed the FI model as `Y_se*` / `ar_se*` features.)
+- **48 DtACI instances (FI zone only)** — one per `(direction, k)` for direction ∈ {cheap, peak} and k = 1..24. Each instance tracks its own residual distribution, alpha, dominant gamma, weight entropy, and per-instance bias EMA. There are no SE1/SE3/EE bundles — they were never fed and provided no benefit; neighbour prices feed the FI model as lagged `Y_se*_lag168` features.
 - **Bands written back** as 24-element arrays `dk_cheap_lower_eur_kwh`, `dk_cheap_upper_eur_kwh`, `dk_peak_lower_eur_kwh`, `dk_peak_upper_eur_kwh` per day entry once instances have warmed up. Before warmup, bands collapse to the point forecast (deliberate — no spurious confidence).
 - **Diagnostics** surface on the duration sensor as `dtaci_diagnostics`, `dtaci_warmup_status`, `dtaci_target_coverage`, `dtaci_fi_mean_coverage`, `dtaci_fi_mean_width_eur_kwh`, `dtaci_fi_warm_instances`, `dtaci_fi_total_instances`, `dtaci_min_n_updates`.
 
@@ -164,7 +172,7 @@ State is persisted to `<config>/.storage/spot_price_predictor_dtaci_dk_fi.json`.
 
 See [docs/dtaci_layer.md](docs/dtaci_layer.md) for the algorithm details (Gibbs & Candès JMLR 2024) and troubleshooting.
 
-## PV-aware risk (v2.11.0)
+## PV-aware risk
 
 Each `daily_forecast[i]` entry carries — when PV is enabled — a four-field PV-aware risk block produced by the per-day CVaR module:
 
@@ -196,8 +204,7 @@ The synthetic fallback is NOT derived from any individual user's data — the pr
 
 ## Sensor attribute reference
 
-### Spot price forecast sensor (Nordpool-compatible) — v2.11.0
-
+### Spot price forecast sensor (Nordpool-compatible)
 `sensor.spot_price_forecast_fi` exposes the pipeline's L1+L2+L3+L4 output in Nordpool integration schema.
 
 | Attribute | Type | Description |
@@ -246,15 +253,14 @@ Each entry in `daily_forecast[]` (up to 7):
 | `dk_cheap_eur_mwh`, `dk_peak_eur_mwh` | float[24] | Spot EUR/MWh, 0-indexed, monotone in i |
 | `dk_cheap_eur_kwh`, `dk_peak_eur_kwh` | float[24] | Consumer EUR/kWh, per-hour tariff applied |
 | `dk_cheap_pv_eur_kwh`, `dk_peak_pv_eur_kwh` | float[24] | PV-aware variants (single-baseload "flexible kWh" approximation). Present only when PV is enabled. Dashboards-only; per-load optimisers compose their own α from per-hour buy/sell. |
-| `pv_aware_cvar95_eur_kwh` | float | **v2.11.0.** Tail-mean of effective cost in the worst 5 % of joint price+PV scenarios. EUR/kWh. Present only when PV is enabled. The CVaR's spread is driven by **PV-production uncertainty** (prices are deterministic in the kernel). |
-| `pv_aware_mean_eur_kwh`, `pv_aware_p5_eur_kwh`, `pv_aware_p95_eur_kwh` | float | **v2.11.9.** Expected cost and 5 %/95 % fan-chart quantiles for the day (EUR/kWh). For expected-vs-worst-case dashboards. Present only when PV is enabled. |
-| `grid_cost_eur_kwh` | float | **v2.11.9.** Deterministic no-PV daily cost (consumption-weighted consumer price). The with-vs-without-PV baseline. Present only when PV is enabled. |
-| `pv_aware_self_consumed_kwh`, `pv_aware_exported_kwh` | float | **v2.11.0.** Expected PV self-consumed / exported this day, mean across scenarios. Present only when PV is enabled. |
-| `pv_aware_data_provenance` | string | **v2.11.0.** `"synthetic_cold_start"` / `"ema_blended"` / `"ema_warm"` / `"coordinator_baseload"` — confidence flag for the consumption profile underlying the CVaR. |
+| `pv_aware_cvar95_eur_kwh` | float | Tail-mean of effective cost in the worst 5 % of joint price+PV scenarios. EUR/kWh. Present only when PV is enabled. The CVaR's spread is driven by **PV-production uncertainty** (prices are deterministic in the kernel). |
+| `pv_aware_mean_eur_kwh`, `pv_aware_p5_eur_kwh`, `pv_aware_p95_eur_kwh` | float | Expected cost and 5 %/95 % fan-chart quantiles for the day (EUR/kWh). For expected-vs-worst-case dashboards. Present only when PV is enabled. |
+| `grid_cost_eur_kwh` | float | Deterministic no-PV daily cost (consumption-weighted consumer price). The with-vs-without-PV baseline. Present only when PV is enabled. |
+| `pv_aware_self_consumed_kwh`, `pv_aware_exported_kwh` | float | Expected PV self-consumed / exported this day, mean across scenarios. Present only when PV is enabled. |
+| `pv_aware_data_provenance` | string | `"synthetic_cold_start"` / `"ema_blended"` / `"ema_warm"` / `"coordinator_baseload"` — confidence flag for the consumption profile underlying the CVaR. |
 | `dk_cheap_lower_eur_kwh`, `dk_cheap_upper_eur_kwh`, `dk_peak_lower_eur_kwh`, `dk_peak_upper_eur_kwh` | float[24] | DtACI bands. Present only when DtACI is enabled and instances are warm. |
 
-### Effective wind speed sensor — v2.11.9
-
+### Effective wind speed sensor
 `sensor.spot_price_predictor_effective_wind_speed` surfaces the model's internal capacity-weighted wind input so downstream consumers don't re-fetch Open-Meteo. **This is `wind_speed_120m` (turbine hub height) weighted across the Finnish wind regions — a price-model feature, NOT local surface wind.**
 
 | Attribute | Type | Description |
@@ -291,7 +297,7 @@ The integration emits the event `spot_price_predictor_models_retrained` after a 
 
 ## Update cadence
 
-Defined in [`const.py:155-161`](custom_components/spot_price_predictor/const.py:155):
+Defined in [`const.py`](custom_components/spot_price_predictor/const.py):
 
 | Constant | Value | Used for |
 |---|---|---|
@@ -343,5 +349,5 @@ HA-spot-price-predictor/
 │       ├── solar_submodel_default.json
 │       └── finland.yaml
 ├── studies/                        # retrain scripts + historical analyses
-└── tests/                          # pytest suite (471 passed at v2.11.0)
+└── tests/                          # pytest suite
 ```
