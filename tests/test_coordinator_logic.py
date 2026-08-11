@@ -728,3 +728,63 @@ class TestDurationForecastSensorLogic:
         # D(1) = index 0, D(24) = index 23
         assert dk_vec[0] == 1
         assert dk_vec[23] == 24
+
+
+# ---------------------------------------------------------------------------
+# Neighbour-price alignment (v2.18.0): 15-minute series must be averaged
+# ---------------------------------------------------------------------------
+#
+# coordinator.py cannot be imported without a running Home Assistant, so
+# the real staticmethod is extracted from source and executed. That keeps
+# this a test of the shipped code rather than of a copy: reverting the
+# fix in coordinator.py fails this test.
+
+
+def _extract_align_neighbour_prices():
+    import re
+    import textwrap
+
+    src = (Path(__file__).resolve().parent.parent / "custom_components"
+           / "spot_price_predictor" / "coordinator.py").read_text(encoding="utf-8")
+    m = re.search(
+        r"\n    @staticmethod\n    def _align_neighbour_prices\(.*?"
+        r"(?=\n    def |\n    @staticmethod\n)",
+        src, re.S)
+    assert m, "_align_neighbour_prices not found in coordinator.py"
+    body = textwrap.dedent(m.group(0)).replace("@staticmethod\n", "", 1)
+    # coordinator.py has `from __future__ import annotations`; the
+    # extracted fragment does not, so its annotations are evaluated.
+    ns: dict = {}
+    exec("from __future__ import annotations\n" + body, ns)
+    return ns["_align_neighbour_prices"]
+
+
+def test_neighbour_alignment_averages_quarter_hours():
+    """SE1/SE3 went 15-minute on 2025-09-30. Four sub-hour entries share
+    one 'YYYY-MM-DD HH' key; the aligner must return their mean, not
+    whichever happened to be written last (the :45 quarter)."""
+    align = _extract_align_neighbour_prices()
+    entries = [
+        {"timestamp": "2026-07-01T10:00:00Z", "price_eur_mwh": 10.0},
+        {"timestamp": "2026-07-01T10:15:00Z", "price_eur_mwh": 20.0},
+        {"timestamp": "2026-07-01T10:30:00Z", "price_eur_mwh": 30.0},
+        {"timestamp": "2026-07-01T10:45:00Z", "price_eur_mwh": 60.0},
+    ]
+    out = align(["2026-07-01T10:00:00Z"], {"se3": entries})
+    assert out["se3"][0] == pytest.approx(30.0), (
+        "expected the hourly mean (10+20+30+60)/4 = 30; got "
+        f"{out['se3'][0]} — a value of 60 means last-write-wins is back"
+    )
+
+
+def test_neighbour_alignment_hourly_series_is_unchanged():
+    align = _extract_align_neighbour_prices()
+    entries = [{"timestamp": "2026-07-01T10:00:00Z", "price_eur_mwh": 42.5}]
+    out = align(["2026-07-01T10:00:00Z"], {"se1": entries})
+    assert out["se1"][0] == pytest.approx(42.5)
+
+
+def test_neighbour_alignment_missing_hour_is_nan():
+    align = _extract_align_neighbour_prices()
+    out = align(["2026-07-01T10:00:00Z"], {"ee": []})
+    assert math.isnan(out["ee"][0])

@@ -396,7 +396,14 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
         for zone, entries in (neighbor or {}).items():
             if not isinstance(entries, list):
                 continue
-            zone_map: dict[str, float] = {}
+            # Accumulate sum/count per hour, not last-write-wins. SE1 and
+            # SE3 switched to 15-minute resolution on 2025-09-30, so four
+            # entries now collapse onto one `YYYY-MM-DD HH` key; assigning
+            # kept whichever arrived last (the :45 quarter) while the
+            # trainer's hourly join uses :00. sd(:45 − :00) is 17–23
+            # EUR/MWh, so that mismatch injected pure noise into the
+            # cross-border features. Take the hourly mean instead.
+            acc: dict[str, list[float]] = {}
             for e in entries:
                 ts = e.get("timestamp") if isinstance(e, dict) else None
                 p  = e.get("price_eur_mwh") if isinstance(e, dict) else None
@@ -405,9 +412,10 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
                 key = str(ts).split("+")[0].split("Z")[0]
                 key = key.replace("T", " ")[:13]  # YYYY-MM-DD HH
                 try:
-                    zone_map[key] = float(p)
+                    acc.setdefault(key, []).append(float(p))
                 except (TypeError, ValueError):
                     continue
+            zone_map = {k: sum(v) / len(v) for k, v in acc.items() if v}
             if zone_map:
                 lookup[zone] = zone_map
 

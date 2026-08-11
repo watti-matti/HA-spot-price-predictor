@@ -56,7 +56,9 @@ prices see [`studies/results/DTACI_ANALYSIS.md`](../studies/results/DTACI_ANALYS
                             ▼
 ┌──────────────────────────────────────────────────────────────────┐
 │  OnlineBiasCorrector  (bias_corrector.py)                        │
-│    EMA half-life 20 days, warm-up 168 steps, winsor 5x           │
+│    class defaults: half-life 20 d, warm-up 168, winsor 5x        │
+│    as constructed by DkDtACIBundle: half-life 21 d, warm-up 7,   │
+│    cadence 1/day (one D(k) observation per day)                  │
 └──────────────────────────────────────────────────────────────────┘
                             │ debiased forecast (point)
                             ▼
@@ -84,10 +86,11 @@ component runtime constraint of no extra dependencies.
 | `window`          | 720     | `DtACI`           | Rolling buffer (≈30 days hourly).               |
 | `min_warmup`      | 24      | `DtACI`           | Steps before non-trivial intervals are returned.|
 | `eta`             | 0.1     | `DtACI`           | Expert-weight learning rate.                    |
-| `halflife_days`   | 20      | `OnlineBiasCorrector` | EMA half-life of signed residuals.          |
-| `warmup_steps`    | 168     | `OnlineBiasCorrector` | Steps before bias correction is applied.    |
+| `halflife_days`   | 20 (class) / **21** as built by `DkDtACIBundle` | `OnlineBiasCorrector` | EMA half-life of signed residuals. |
+| `warmup_steps`    | 168 (class) / **7** as built by `DkDtACIBundle` | `OnlineBiasCorrector` | Steps before bias correction is applied. |
 | `winsor_limit`    | 5.0     | `OnlineBiasCorrector` | Per-step residual cap (× running abs mean). |
-| `cadence_per_day` | 24      | `OnlineBiasCorrector` | Steps per day (hourly cadence).             |
+| `cadence_per_day` | 24 (class) / **1** as built by `DkDtACIBundle` | `OnlineBiasCorrector` | Steps per day. D(k) statistics get one observation per day. |
+| `adaptive_init`   | `False` | `OnlineBiasCorrector` | Decaying gain `α_n = max(1/n, λ)` (CMA → EMA hand-over) instead of a zero start. Off here — the D(k) bundles keep their measured behaviour; only `PerHourBiasCorrector` opts in. |
 
 The defaults are suitable for hourly EUR/MWh-scale data and were used
 for all reported validation runs.
@@ -173,11 +176,12 @@ Schema (see `DtACI.to_dict`):
   "score_window": [...],    // up to `window` floats
   "n_updates": 4521,
   "bias_corrector": {
-    "version": 1,
-    "halflife_days": 20.0,
-    "warmup_steps": 168,
+    "version": 2,
+    "halflife_days": 21.0,
+    "warmup_steps": 7,
     "winsor_limit": 5.0,
-    "cadence_per_day": 24,
+    "cadence_per_day": 1,
+    "adaptive_init": false,
     "bias_estimate": -2.34,
     "abs_bias_estimate": 8.71,
     "n_updates": 4521

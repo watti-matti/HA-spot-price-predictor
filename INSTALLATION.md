@@ -122,7 +122,7 @@ The integration creates a device named **Spot Price Predictor** with sensor enti
 
 Install [ApexCharts Card](https://github.com/RomRider/apexcharts-card) via HACS → Frontend first. Then pick a ready-made dashboard:
 
-- **[`docs/yaml_examples/forecast_v2_11_dashboard.yaml`](docs/yaml_examples/forecast_v2_11_dashboard.yaml)** — **recommended**, current (v2.11). Fan-chart bands, consumer/PV-aware effective price, today's cheap/peak D(k) curves (grid + PV-aware), and the 7-day PV-aware CVaR₉₅ risk strip.
+- **[`docs/yaml_examples/forecast_v2_11_dashboard.yaml`](docs/yaml_examples/forecast_v2_11_dashboard.yaml)** — **recommended**. Fan-chart bands, consumer/PV-aware effective price, today's cheap/peak D(k) curves (grid + PV-aware), and the 7-day PV-aware CVaR₉₅ risk strip.
 - [`ha_dashboard.yaml`](ha_dashboard.yaml) — lightweight Mushroom + ApexCharts starter (price trend + grid D(k) only; no PV-aware/CVaR cards).
 - [`docs/yaml_examples/dtaci_diagnostics_card.yaml`](docs/yaml_examples/dtaci_diagnostics_card.yaml) — optional DtACI calibration monitor (only useful when `enable_dtaci_dk` is on).
 

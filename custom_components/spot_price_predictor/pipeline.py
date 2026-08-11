@@ -126,6 +126,11 @@ RIDGE_FEATURES = (
 # a symptom of the same defect.
 NEIGHBOUR_LAG_HOURS: int = 168
 
+# Calendar the demand-side flags are built on. Must match the trainer
+# (studies/build_fresh_spike_model.py uses tz_convert("Europe/Helsinki"))
+# and the coordinator's `_local_date_str` holiday lookup.
+LOCAL_TZ: str = "Europe/Helsinki"
+
 # Names of neighbour-price zones consumed by Pipeline.compute_forecast
 # when the caller supplies the optional `neighbour_prices_lag168` arg.
 _NEIGHBOUR_ZONES: tuple[str, ...] = ("se1", "se3", "ee")
@@ -581,11 +586,33 @@ class Pipeline:
 
     @staticmethod
     def _is_workday(timestamps: np.ndarray) -> np.ndarray:
+        """Weekday flag on the **local** calendar.
+
+        The trainer builds `is_workday` from `tz_convert("Europe/Helsinki")`
+        (studies/build_fresh_spike_model.py), so the runtime must use the
+        same calendar or the +3.29 EUR/MWh coefficient is applied with the
+        wrong sign on the hours where the UTC and local dates disagree —
+        21:00–23:00 UTC, i.e. 2.93 % of all hours, concentrated at the
+        Fri/Sat and Sun/Mon boundaries where the workday effect is largest.
+
+        `is_holiday` is already built from the local date by the
+        coordinator, so a UTC weekday here also made one feature vector
+        mix two calendars.
+        """
         secs = timestamps.astype("datetime64[s]").astype("int64")
-        days = secs // 86400
-        # 1970-01-01 = Thursday (weekday 3)
-        weekday = (days + 3) % 7
-        return weekday < 5
+        try:
+            from zoneinfo import ZoneInfo
+            tz = ZoneInfo(LOCAL_TZ)
+            wd = np.array([
+                datetime.fromtimestamp(int(s), tz=timezone.utc)
+                .astimezone(tz).weekday()
+                for s in secs
+            ], dtype=np.int64)
+        except Exception:   # pragma: no cover - zoneinfo/tzdata missing
+            # Finland is UTC+2/+3; +2 is the conservative constant offset.
+            days = (secs + 2 * 3600) // 86400
+            wd = (days + 3) % 7          # 1970-01-01 was a Thursday (3)
+        return wd < 5
 
     # ── L3 AR(1) per-horizon decay ─────────────────────────────────
 

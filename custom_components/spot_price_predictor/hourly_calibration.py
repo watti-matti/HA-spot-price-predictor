@@ -120,17 +120,41 @@ class PerHourBiasCorrector:
     midday bias +4.6 → +0.4).
 
     Each bin sees ~1 observation/day, so the inner correctors run at
-    ``cadence_per_day=1`` with the same 14-day halflife and warm up
-    after `warmup_updates` daily observations (default 14). Same 5×
-    winsorisation so single spikes don't poison a bin.
+    ``cadence_per_day=1``. Same 5× winsorisation so single spikes don't
+    poison a bin.
+
+    Tuning (v2.18.0, measured — see docs/BACKLOG.md "bias corrector"):
+    the previous 14-day half-life behind a 14-update warm-up gate was
+    close to the worst available setting. It disabled the corrector for
+    exactly one half-life and then switched it on at 50 % of the true
+    bias, because a zero-initialised EMA reaches only `1-(1-λ)^n`.
+    Walk-forward over 2024-01…2026-07 (per-hour bins, cadence 1/day):
+
+        half-life   MAE   |monthly bias|   2026-07 bias
+        none      25.78            9.54         +13.17
+        2 days    25.05            3.62          +5.76
+        3 days    24.88            4.12          +6.81
+        14 days   25.07            7.70         +15.39   <- previous
+        28 days   25.16            9.13         +18.64
+
+    and over the three weeks following a state wipe (the post-install
+    case), mean bias −5.14 EUR/MWh previously vs +0.09 now.
+
+    Three changes: half-life 14 → 3 days; the warm-up gate drops to a
+    2-observation guard (so one residual cannot set a bin's correction);
+    and `adaptive_init` replaces the zero start with the CMA → EMA
+    hand-over `α_n = max(1/n, λ)`, which is unbiased at every n.
 
     Migration: `from_dict` accepts a legacy `HourlyBiasCorrector` state
     dict and seeds every bin with the legacy global bias estimate (and
     its warm status), so behaviour at switchover matches the old
-    corrector and then specialises per hour.
+    corrector and then specialises per hour. It also deliberately
+    ignores any persisted `halflife_days` / `warmup_updates`, so an
+    upgrade adopts the retuned values instead of resurrecting the old
+    ones from disk.
     """
-    halflife_days: float = 14.0
-    warmup_updates: int = 14
+    halflife_days: float = 3.0
+    warmup_updates: int = 2
     winsor_limit: float | None = 5.0
     _inner: dict | None = None
 
@@ -144,6 +168,7 @@ class PerHourBiasCorrector:
             warmup_steps=self.warmup_updates,
             winsor_limit=self.winsor_limit,
             cadence_per_day=1,
+            adaptive_init=True,
         )
 
     def correct(self, forecast: float, hour: int) -> float:
@@ -190,16 +215,16 @@ class PerHourBiasCorrector:
                 b.abs_bias_estimate = float(legacy.abs_bias_estimate)
                 b.n_updates = obj.warmup_updates if legacy.warm else 0
             return obj
-        obj = cls(
-            halflife_days=float(d.get("halflife_days", 14.0)),
-            warmup_updates=int(d.get("warmup_updates", 14)),
-            winsor_limit=d.get("winsor_limit", 5.0),
-            _inner={},
-        )
-        obj._inner = {
-            int(h): _bias_mod.OnlineBiasCorrector.from_dict(ser)
-            for h, ser in d.get("inner", {}).items()
-        }
+        # Configuration comes from the CURRENT code, not from disk: a
+        # persisted 14-day half-life must not survive the v2.18.0
+        # retune. Only the learned state (bias, abs-bias, n_updates) is
+        # restored, so a warm corrector stays warm across the upgrade.
+        obj = cls(winsor_limit=d.get("winsor_limit", 5.0), _inner={})
+        obj._inner = {}
+        for h, ser in (d.get("inner") or {}).items():
+            b = obj._new_bin()
+            b.load_state(ser)
+            obj._inner[int(h)] = b
         for h in range(24):   # guard against partial state
             obj._inner.setdefault(h, obj._new_bin())
         return obj

@@ -2,7 +2,7 @@
 
 [![HACS Integration](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-2.11.8-blue.svg)](https://github.com/watti-matti/HA-spot-price-predictor/releases/latest)
+[![Version](https://img.shields.io/badge/version-2.18.0-blue.svg)](https://github.com/watti-matti/HA-spot-price-predictor/releases/latest)
 
 **Forecast Finnish electricity prices for the next 170 hours**, in both spot (EUR/MWh) and consumer (EUR/kWh) terms, with calibrated probabilistic bands and 7-day duration curves for cost-aware load scheduling.
 
@@ -12,16 +12,26 @@
 
 - **170-hour point forecast** in spot EUR/MWh and consumer EUR/kWh (transfer tariff, energy tax, seller margin, and VAT applied per hour).
 - **Probabilistic fan chart** — per-hour P5 / P25 / P50 / P75 / P95 bands sampled from a Normal-body + Generalized Pareto tail mixture (heavy-tail spike model).
-- **Nordpool-compatible spot-price-forecast sensor** (new in v2.11.0) — `sensor.spot_price_forecast_fi` exposes the L1+L2+L3+L4 forecast as a drop-in for the [Nordpool integration](https://github.com/custom-components/nordpool) schema (`state` in EUR/kWh, `raw_today` / `raw_tomorrow` / `raw_extended` lists of `{start, end, value}`). EMHASS, ApexCharts, and any Nordpool-aware automation consume it without code changes; the new `raw_extended` field extends the forecast horizon from today+tomorrow to the full 170 hours.
+- **Nordpool-compatible spot-price-forecast sensor** — `sensor.spot_price_forecast_fi` exposes the L1+L2+L3+L4 forecast as a drop-in for the [Nordpool integration](https://github.com/custom-components/nordpool) schema (`state` in EUR/kWh, `raw_today` / `raw_tomorrow` / `raw_extended` lists of `{start, end, value}`). EMHASS, ApexCharts, and any Nordpool-aware automation consume it without code changes; the new `raw_extended` field extends the forecast horizon from today+tomorrow to the full 170 hours.
 - **D(k) cheap/peak duration curves** — 7 days × 4 arrays per day, each 24-entry and 0-indexed: `dk_cheap_eur_mwh[i]` / `dk_peak_eur_mwh[i]` (spot) and `dk_cheap_eur_kwh[i]` / `dk_peak_eur_kwh[i]` (consumer). Each `[i]` is the mean of the (i+1) cheapest / priciest hours of the day. Equivalent to CVaR at α=(i+1)/24 in both tails.
-- **Optional PV-aware effective price** — when a `pv_capacity_kwp > 0` (or an external PV-forecast entity) is configured, each forecast hour gains `effective_eur_kwh` (marginal cost of running one extra kWh given PV self-consumption) and parallel `dk_cheap_pv_eur_kwh[24]` / `dk_peak_pv_eur_kwh[24]` curves. **Self-consumed PV is valued as free** (no spot, transmission, or tax): `effective_eur_kwh` floors at `0` when surplus PV can serve the extra load, and only goes negative during negative export prices (since v2.11.4).
-- **PV-aware risk metric** (new in v2.11.0) — daily `pv_aware_cvar95_eur_kwh` reports the expected effective cost in the worst 5 % of joint price+PV scenarios for each forecast day. The headline number a risk-averse scheduler reads to decide which day this week is safest for a discretionary load. Computed via a shared `pv_cost_kernel` library that the downstream thermal optimiser can call with its own per-load schedule for an "achieved" CVaR comparison.
-- **Optional online calibration (DtACI)** — adaptive conformal prediction intervals on the **FI** consumer-price D(k) curves, with per-(direction, k) bias correction. Targets 90 % marginal coverage; warms up over ≈ 5–7 days of reconciled daily updates. (Cross-border SE1/SE3/EE DtACI bundles were removed in v2.11.8 as redundant — neighbour prices still feed the FI model as features.)
-- **External EMA-profile integration point** (new in v2.11.0) — `consumption_profile_entity` reads an external HA-consumption-profiler module's published profile sensor; when unconfigured the integration falls back to a synthetic Finnish-typical baseload calibrated to `annual_consumption_kwh`. Profile provenance (`synthetic_cold_start` / `ema_warm` / `ema_blended`) propagates to the PV-aware CVaR attributes so dashboards can flag low-confidence numbers.
+- **Optional PV-aware effective price** — when a `pv_capacity_kwp > 0` (or an external PV-forecast entity) is configured, each forecast hour gains `effective_eur_kwh` (marginal cost of running one extra kWh given PV self-consumption) and parallel `dk_cheap_pv_eur_kwh[24]` / `dk_peak_pv_eur_kwh[24]` curves. **Self-consumed PV is valued as free** (no spot, transmission, or tax): `effective_eur_kwh` floors at `0` when surplus PV can serve the extra load, and only goes negative during negative export prices.
+- **PV-aware risk metric** — daily `pv_aware_cvar95_eur_kwh` reports the expected effective cost in the worst 5 % of joint price+PV scenarios for each forecast day. The headline number a risk-averse scheduler reads to decide which day this week is safest for a discretionary load. Computed via a shared `pv_cost_kernel` library that the downstream thermal optimiser can call with its own per-load schedule for an "achieved" CVaR comparison.
+- **Optional online calibration (DtACI)** — adaptive conformal prediction intervals on the **FI** consumer-price D(k) curves, with per-(direction, k) bias correction. Targets 90 % marginal coverage; warms up over ≈ 5–7 days of reconciled daily updates. Neighbour prices feed the FI model as features; there are no separate cross-border DtACI bundles.
+- **External EMA-profile integration point** — `consumption_profile_entity` reads an external HA-consumption-profiler module's published profile sensor; when unconfigured the integration falls back to a synthetic Finnish-typical baseload calibrated to `annual_consumption_kwh`. Profile provenance (`synthetic_cold_start` / `ema_warm` / `ema_blended`) propagates to the PV-aware CVaR attributes so dashboards can flag low-confidence numbers.
 - **Refit on demand** — the `spot_price_predictor.retrain_models` Home Assistant service refits the L1 seasonal, L2/L3/L4 spike, and (optionally) solar sub-model artifacts and reloads the pipeline without a Home Assistant restart.
 - **All data sources are free.** The integration ships pre-trained artifacts and works out of the box after picking your distribution operator.
 
-## Recent changes (v2.11.3 → v2.11.8)
+## Recent changes (v2.12 → v2.18)
+
+- **v2.18.0** — the hourly bias corrector was mistuned: a 14-day half-life behind a 14-update warm-up gate disabled correction for one half-life and then applied it at 50 % strength. Retuned to a 3-day half-life with a CMA→EMA warm-up; monthly bias −54 %. Also three train/inference mismatches (UTC-vs-local workday flag, 15-minute neighbour prices keeping the `:45` quarter, a Kolari weather site 62 km from the one the model was trained on).
+- **v2.17.3** — fixed a `NameError` that had silently killed the whole prediction pipeline on every install since v2.17.0; DtACI D(k) bundles now cold-start on model change.
+- **v2.17.0/.1** — **removed the day-ahead auction leak.** `Y_se1`/`Y_se3`/`Y_ee` were same-hour prices of zones that clear in the *same* auction as FI, so they could never be observed before the target. Now lagged 168 h. Honest leak-free accuracy improved 35.5 → 27.1 MAE (−24 %); the wind coefficient recovered from −44.6 to −98.7 and the solar sign corrected itself. Added a public-holiday flag.
+- **v2.16.0** — enforced the zero-marginal-cost sign invariant: the shipped model had priced irradiance with a *positive* coefficient, so a sunnier forecast raised the predicted price. Trainer constraint + runtime clamp + behavioural tests.
+- **v2.15.0** — fresh full-window retrain, physics-deseasonalization train/inference consistency fix, per-hour bias correction, and the actuals-reconciliation loop the coordinator had never called (bias correction had been dormant since v2.5.15).
+- **v2.12–v2.14** — intraday PV nowcast correction, learned per-lead-time price uncertainty, CVaR cliff fix at the day-ahead boundary.
+
+<details><summary>Older changes (v2.11.3 → v2.11.8)</summary>
+
 
 - **v2.11.8** — DtACI de-scoped to FI only; the redundant SE1/SE3/EE per-D(i) bundles were removed (neighbour prices still feed the FI model as features).
 - **v2.11.6** — fixed a spurious 12/13 discontinuity in the DtACI per-k bias/coverage (stale 12-level calibration state is now reset on upgrade).
@@ -29,13 +39,15 @@
 - **v2.11.4** — self-consumed PV is now valued as **free**; `effective_eur_kwh` floors at `0` when surplus PV can serve the load (was previously charged the export opportunity cost).
 - **v2.11.3** — fixed `effective_eur_kwh` / `net_household_cost_eur` / `sell_eur_kwh` going stale after the L1–L4 pipeline overwrote spot/consumer; PV-aware D(k) now also covers *today*.
 
+</details>
+
 ## How It Works
 
 The point forecast is produced by a four-layer pipeline implemented in [`custom_components/spot_price_predictor/pipeline.py`](custom_components/spot_price_predictor/pipeline.py) (class `Pipeline`). At each forecast hour h the pipeline computes:
 
 ```
 spot_eur_mwh(h) =  L1 seasonal_fi(h)         # additive hour+day+week pattern
-                 + L2 ridge(h)                # 8-feature physics + cross-border Ridge
+                 + L2 ridge(h)                # 9-feature physics + lagged cross-border Ridge
                  + L3 φ^h · η(t₀−1)           # AR(1) momentum on the last residual
                  - softplus_floor(−5)         # clamps deep negatives
                  - hourly_bias_ema(h)         # DtACI bias corrector
@@ -43,23 +55,29 @@ spot_eur_mwh(h) =  L1 seasonal_fi(h)         # additive hour+day+week pattern
 
 The same point forecast is then passed through the **L4 GPD POT spike model**, which samples 500 paths from a Normal body + Generalized Pareto right/left tails to produce the per-hour `P5_eur_mwh` … `P95_eur_mwh` fan-chart bands.
 
-### L2 Ridge — the eight features
+### L2 Ridge — the nine features
 
-Defined as `RIDGE_FEATURES` in [`pipeline.py:62-77`](custom_components/spot_price_predictor/pipeline.py:62). The shipped `data/spike_model_default.json` lists the same order in its `ridge_features` field; the pipeline is feature-list-driven and always reads from the artifact.
+Defined as `RIDGE_FEATURES` in [`pipeline.py`](custom_components/spot_price_predictor/pipeline.py). The shipped `data/spike_model_default.json` lists the same order in its `ridge_features` field; the pipeline is feature-list-driven and always reads from the artifact.
 
 | # | Feature | Definition |
 |---|---|---|
 | 1 | `intercept` | constant 1 |
 | 2 | `Y_fi_lag168` | deseasonalized FI spot residual 7 days ago — own-lag memory of the local market regime |
-| 3 | `is_workday` | `weekday < 5` (calendar) |
+| 3 | `is_workday` | `weekday < 5` on the **local** (Europe/Helsinki) calendar, excluding public holidays |
 | 4 | `Y_sigmoid_wind_rho` | sigmoid wind-power curve scaled by relative air density: `σ((wind − 7.5) / 1.5) × ρ(T) / 1.225` |
 | 5 | `Y_solar_effective` | temperature-derated GHI: `GHI × (1 − 0.004 · max(0, T_cell − 25))` with `T_cell = T + 0.03 · GHI` |
 | 6 | `Y_temp` | deseasonalized temperature |
-| 7 | `Y_se1` | deseasonalized SE1 spot — Sweden zone 1 (added in v2.10.0; passes the v2.5.6 hedge gate) |
-| 8 | `Y_se3` | deseasonalized SE3 spot — Sweden zone 3, the FennoSkan cable terminus |
-| 9 | `Y_ee` | deseasonalized EE spot — Estonia, the Estlink terminus |
+| 7 | `Y_se1_lag168` | deseasonalized SE1 spot **168 h earlier** — Sweden zone 1 |
+| 8 | `Y_se3_lag168` | deseasonalized SE3 spot 168 h earlier — Sweden zone 3, the FennoSkan cable terminus |
+| 9 | `Y_ee_lag168` | deseasonalized EE spot 168 h earlier — Estonia, the Estlink terminus |
+| 10 | `is_holiday` | public-holiday flag on the local date |
 
-Coefficients live in `data/spike_model_default.json` under `ridge_coef`.
+Two invariants the runtime enforces:
+
+- **Cross-border prices are lagged 168 h, never same-hour.** FI, SE1, SE3 and EE clear in the *same* day-ahead auction, so a same-hour neighbour price is never observable before the target it predicts. Guarded by `test_artifact_declares_no_same_hour_neighbour_features`.
+- **Wind and PV coefficients are constrained ≤ 0.** Zero-marginal-cost generation can only lower the price. The trainer fits under the constraint; `Pipeline._enforce_physics_signs` clamps any positive coefficient at load.
+
+Coefficients live in `data/spike_model_default.json` under `ridge_coef` (10 values — the intercept is **first**, and the artifact's `ridge_features` omits it).
 
 ### Inputs the pipeline consumes
 
@@ -73,7 +91,7 @@ Coefficients live in `data/spike_model_default.json` under `ridge_coef`.
 
 ### Inputs fetched but not currently consumed by the spot model
 
-The integration also fetches Fingrid datasets #188 / #165 / #246 / #247 and Nord Pool UMM nuclear-outage schedules. These streams feed the legacy duration model and some auxiliary diagnostics, but the canonical user-facing forecast is driven by the eight L2 features above. Re-introducing nuclear-deficit-related signals is treated as experimental work; the `experiment/extra-l2-features` branch documents the test results (nuclear features, even capacity-aware and as multiplicative coupling coefficients, did not pass the hedge gate on the 2023-2026 data window).
+The integration also fetches Fingrid datasets #188 / #165 / #246 / #247 and Nord Pool UMM nuclear-outage schedules. These streams feed the legacy duration model and some auxiliary diagnostics, but the canonical user-facing forecast is driven by the nine L2 features above. Re-introducing nuclear-deficit-related signals is treated as experimental work; the `experiment/extra-l2-features` branch documents the test results (nuclear features, even capacity-aware and as multiplicative coupling coefficients, did not pass the hedge gate on the 2023-2026 data window. Caveat recorded in docs/BACKLOG.md: those tests used Fingrid #188, which is *realised* production. Nord Pool prices *planned* availability from the UMM outage schedule, so the negative result is not conclusive).
 
 ## Sensors Created
 
@@ -124,10 +142,18 @@ All sensors share the device "Spot Price Predictor" and the domain prefix `spot_
 | `confidence_band` | dict `{p5: [...], p95: [...]}` | L4 fan-chart bands per hour, in EUR/kWh. Risk-aware consumers can use these directly. |
 | `last_updated` | ISO timestamp | Coordinator cycle that produced this forecast. |
 
-**Empirical accuracy** (held-out 12-month back-test, see [studies/results/exp_spot_price_forecast_accuracy.md](studies/results/exp_spot_price_forecast_accuracy.md)):
+**Empirical accuracy.** Replaying the deployed pipeline against the data store over 2023-01 → 2026-07 (30 989 hours, mean realised price **50.5 EUR/MWh**), producer [`studies/bias_corrector_warmup_study.py`](studies/bias_corrector_warmup_study.py):
 
-- **Cold-start floor** (fresh install, no calibrator history): MAE **22.5 EUR/MWh**, R² **+0.71**, 50 % band coverage **49 %** (target 50 %).
-- **Warm-state target** after ~30–60 days of operation (calibrators warmed): MAE **~10 EUR/MWh**, R² **~0.91**, 90 % band coverage **~92 %**.
+| state | MAE | bias | R² |
+|---|--:|--:|--:|
+| fresh install, no calibrator history | 25.8 EUR/MWh | +2.1 | 0.47 |
+| calibrators warm (v2.18.0) | **24.1 EUR/MWh** | −0.5 | 0.51 |
+
+On a strictly leak-free evaluation — only hours the day-ahead auction has not yet published, every feature genuinely available ([`studies/honest_horizon_study.py`](studies/honest_horizon_study.py)) — the figure is **27.1 EUR/MWh**. Treat that as the honest out-of-sample number; the table above overlaps the artifacts' training window and is therefore optimistic.
+
+> **Earlier releases of this README claimed a warm-state MAE of ~10 EUR/MWh and R² ~0.91.** That number came from a single in-sample train/test fit with full residual history available, and from a back-test whose cross-border features leaked the target (fixed in v2.17.0). It overstated accuracy by roughly 2.4×. Warming the calibrators is worth ~1.7 EUR/MWh of MAE and removes the standing bias — not 12 EUR/MWh.
+
+What the forecast is good for follows from those numbers: MAE ~24 on a mean price of ~50 is a **ranking** tool, not a price oracle. The intra-day spread is routinely 50+ EUR/MWh, so the cheap-hour/expensive-hour ordering that drives EV-charging and deferrable-load decisions is reliable well before the absolute level is.
 
 A sample-week illustration of forecast vs realised is in [studies/results/figures/spot_price_forecast_sample_week.png](studies/results/figures/spot_price_forecast_sample_week.png).
 
@@ -156,10 +182,10 @@ A sample-week illustration of forecast vs realised is in [studies/results/figure
 | `dk_cheap_eur_kwh` | float[24] | EUR/kWh | Same cheapest-end curve in consumer price (per-hour day/night tariff applied) |
 | `dk_peak_eur_kwh` | float[24] | EUR/kWh | Same priciest-end curve in consumer price |
 | `dk_cheap_pv_eur_kwh`, `dk_peak_pv_eur_kwh` | float[24] | EUR/kWh | PV-aware variants (single-baseload "flexible kWh" approximation). Present only when PV is enabled. Dashboards-only — per-load optimisers should compose their own α using per-hour `forecast[h]["consumer_eur_kwh"]` and `forecast[h]["sell_eur_kwh"]`. |
-| `pv_aware_cvar95_eur_kwh` | float | EUR/kWh | **New in v2.11.0.** Tail-mean of effective cost in the worst 5 % of joint price+PV scenarios for this day. The headline risk number. Present only when PV is enabled. |
-| `pv_aware_self_consumed_kwh` | float | kWh | **New in v2.11.0.** Expected PV used on-site this day across scenarios. Present only when PV is enabled. |
-| `pv_aware_exported_kwh` | float | kWh | **New in v2.11.0.** Expected PV exported to grid this day. Surplus available for diversion to deferrable loads. Present only when PV is enabled. |
-| `pv_aware_data_provenance` | string | — | **New in v2.11.0.** `"synthetic_cold_start"` / `"ema_blended"` / `"ema_warm"` / `"coordinator_baseload"`. Confidence flag for the consumption profile underlying the CVaR computation. |
+| `pv_aware_cvar95_eur_kwh` | float | EUR/kWh | Tail-mean of effective cost in the worst 5 % of joint price+PV scenarios for this day. The headline risk number. Present only when PV is enabled. |
+| `pv_aware_self_consumed_kwh` | float | kWh | Expected PV used on-site this day across scenarios. Present only when PV is enabled. |
+| `pv_aware_exported_kwh` | float | kWh | Expected PV exported to grid this day. Surplus available for diversion to deferrable loads. Present only when PV is enabled. |
+| `pv_aware_data_provenance` | string | — | `"synthetic_cold_start"` / `"ema_blended"` / `"ema_warm"` / `"coordinator_baseload"`. Confidence flag for the consumption profile underlying the CVaR computation. |
 | `dk_cheap_lower_eur_kwh`, `dk_cheap_upper_eur_kwh`, `dk_peak_lower_eur_kwh`, `dk_peak_upper_eur_kwh` | float[24] | EUR/kWh | DtACI band endpoints. Present only when DtACI is enabled and warmed up. |
 
 **Identity** — the full-day mean is direction-invariant: `dk_cheap_eur_mwh[23] == dk_peak_eur_mwh[23] == daily_average_spot` (and the same for the `_eur_kwh` arrays in consumer space).
@@ -277,7 +303,7 @@ The system is driven by `config/regions/finland.yaml`. To support a new region, 
 - [INSTALLATION.md](INSTALLATION.md) — Step-by-step setup with screenshots.
 - [docs/dk_cheap_peak_migration.md](docs/dk_cheap_peak_migration.md) — Canonical duration-sensor schema reference.
 - [docs/dtaci_layer.md](docs/dtaci_layer.md) — DtACI online calibration: algorithm details, state persistence, troubleshooting.
-- `studies/results/` — Supporting analyses and the v2.8.1 release notes.
+- `studies/results/` — Supporting analyses and release notes.
 
 ## License
 

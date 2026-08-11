@@ -82,6 +82,138 @@ def test_bias_corrector_roundtrips_through_dict() -> None:
     assert bc2.correct(100.0) == pytest.approx(bc.correct(100.0), abs=1e-9)
 
 
+# ── Warm-up: CMA -> EMA hand-over (v2.18.0) ───────────────────────
+
+
+def test_zero_init_reaches_only_half_the_bias_at_one_halflife() -> None:
+    """Documents the defect the adaptive init fixes.
+
+    A constant-gain EMA started at zero has expectation
+    `1 - (1 - lambda)^n` of the truth, so at n = halflife it is at
+    exactly 50 %. This is why a 14-day half-life behind a 14-update
+    warm-up gate switched on at half strength.
+    """
+    bc = _bias_mod.OnlineBiasCorrector(halflife_days=14.0, warmup_steps=0,
+                                       cadence_per_day=1, winsor_limit=None,
+                                       adaptive_init=False)
+    for _ in range(14):
+        bc.update(forecast=10.0, actual=30.0)     # true bias +20
+    assert bc.bias_estimate == pytest.approx(10.0, rel=1e-6)
+
+
+def test_adaptive_init_is_exact_after_a_single_observation() -> None:
+    """CMA property: with gain 1/n the first update sets m_1 = x_1."""
+    bc = _bias_mod.OnlineBiasCorrector(halflife_days=14.0, warmup_steps=0,
+                                       cadence_per_day=1, winsor_limit=None,
+                                       adaptive_init=True)
+    bc.update(forecast=10.0, actual=30.0)
+    assert bc.bias_estimate == pytest.approx(20.0, rel=1e-9)
+
+
+def test_adaptive_init_tracks_the_truth_where_zero_init_lags() -> None:
+    """Same data, same half-life — only the gain schedule differs."""
+    kw = dict(halflife_days=14.0, warmup_steps=0, cadence_per_day=1,
+              winsor_limit=None)
+    fast = _bias_mod.OnlineBiasCorrector(adaptive_init=True, **kw)
+    slow = _bias_mod.OnlineBiasCorrector(adaptive_init=False, **kw)
+    for _ in range(14):
+        fast.update(10.0, 30.0)
+        slow.update(10.0, 30.0)
+    assert fast.bias_estimate == pytest.approx(20.0, rel=1e-6)
+    assert slow.bias_estimate < 0.6 * fast.bias_estimate
+
+
+def test_adaptive_gain_hands_over_to_lambda_at_one_over_lambda() -> None:
+    """Gain is `max(1/n, lambda)`; the hand-over must be at n* = 1/lambda
+    and continuous (no step change in the applied gain)."""
+    bc = _bias_mod.OnlineBiasCorrector(halflife_days=3.0, warmup_steps=0,
+                                       cadence_per_day=1, winsor_limit=None,
+                                       adaptive_init=True)
+    lam = bc.lambda_
+    n_star = 1.0 / lam
+    assert 4.0 < n_star < 5.0            # halflife 3 -> lambda ~= 0.2063
+    for k in range(8):
+        probe = _bias_mod.OnlineBiasCorrector(
+            halflife_days=3.0, warmup_steps=0, cadence_per_day=1,
+            winsor_limit=None, adaptive_init=True)
+        for _ in range(k):               # k zero-residual observations
+            probe.update(10.0, 10.0)
+        probe.update(10.0, 11.0)         # then a unit residual
+        assert probe.bias_estimate == pytest.approx(max(1.0 / (k + 1), lam),
+                                                    rel=1e-9)
+
+
+def test_adaptive_init_does_not_crush_early_residuals_by_winsorising() -> None:
+    """Winsorisation starts early under adaptive_init; it must clip
+    outliers, not legitimate residuals seen while the scale is young."""
+    bc = _bias_mod.OnlineBiasCorrector(halflife_days=3.0, warmup_steps=0,
+                                       cadence_per_day=1, winsor_limit=5.0,
+                                       adaptive_init=True)
+    for _ in range(6):
+        bc.update(forecast=10.0, actual=30.0)     # steady +20 bias
+    assert bc.bias_estimate == pytest.approx(20.0, abs=1.0)
+
+
+def test_dtaci_style_correctors_keep_the_constant_gain_by_default() -> None:
+    """The v2.18.0 retune is scoped to the hourly bias corrector; the
+    D(k) bundles must be untouched until measured separately."""
+    bc = _bias_mod.OnlineBiasCorrector(halflife_days=21.0, warmup_steps=7,
+                                       cadence_per_day=1)
+    assert bc.adaptive_init is False
+
+
+# ── PerHourBiasCorrector retune (v2.18.0) ─────────────────────────
+
+
+def test_per_hour_defaults_are_the_retuned_values() -> None:
+    ph = hc.PerHourBiasCorrector()
+    assert ph.halflife_days == pytest.approx(3.0)
+    assert ph.warmup_updates == 2
+    assert all(b.adaptive_init for b in ph._inner.values())
+
+
+def test_per_hour_corrects_within_days_not_weeks() -> None:
+    """The user-visible fix: after a state wipe the corrector must start
+    correcting in days. Previously it was silent for 14 daily
+    observations and then applied half the true bias."""
+    ph = hc.PerHourBiasCorrector()
+    for _ in range(3):                              # three days
+        ph.update(forecast=40.0, actual=20.0, hour=9)
+    assert ph.correct(40.0, hour=9) == pytest.approx(20.0, abs=3.0)
+
+
+def test_per_hour_from_dict_ignores_a_persisted_halflife() -> None:
+    """An upgrade must adopt the retuned tuning, not resurrect the old
+    values from the state file, while keeping the learned history."""
+    ph = hc.PerHourBiasCorrector()
+    for _ in range(10):
+        ph.update(forecast=40.0, actual=20.0, hour=9)
+    d = ph.to_dict()
+    d["halflife_days"] = 14.0            # as written by v2.17.x
+    d["warmup_updates"] = 14
+    for ser in d["inner"].values():
+        ser["halflife_days"] = 14.0
+        ser["warmup_steps"] = 14
+        ser["adaptive_init"] = False
+    back = hc.PerHourBiasCorrector.from_dict(d)
+    assert back.halflife_days == pytest.approx(3.0)
+    assert back.warmup_updates == 2
+    assert all(b.adaptive_init for b in back._inner.values())
+    # learned state survives
+    assert back._inner[9].n_updates == 10
+    assert back._inner[9].bias_estimate == pytest.approx(
+        ph._inner[9].bias_estimate, abs=1e-9)
+
+
+def test_per_hour_state_roundtrip_is_behaviour_preserving() -> None:
+    ph = hc.PerHourBiasCorrector()
+    for _ in range(8):
+        ph.update(forecast=40.0, actual=20.0, hour=9)
+    back = hc.PerHourBiasCorrector.from_dict(ph.to_dict())
+    assert back.correct(40.0, hour=9) == pytest.approx(
+        ph.correct(40.0, hour=9), abs=1e-9)
+
+
 # ── HourlyFanChartCalibrator ──────────────────────────────────────
 
 

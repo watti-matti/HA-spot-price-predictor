@@ -1,6 +1,109 @@
 # Forecast model — backlog and open defects
 
-## Current status (2026-08-01) — the July summer weekday/weekend report
+## Current status (2026-08-11) — root cause found, and corrections below
+
+The July weekday over-prediction is real and reproduces offline once the
+harness is made to behave like production. Reproducing the deployed
+pipeline against the data store (frozen L1 + L2, `Y_fi_lag168` zeroed,
+neighbours lagged, no bias correction):
+
+| 2026-07 weekday | actual | model | bias |
+|---|--:|--:|--:|
+| hourly mean | 21.56 | 41.07 | **+19.52 (+90 %)** |
+| daily peak | 29.85 | 62.81 | **+32.96 (+110 %)** |
+
+**Shipped in v2.18.0** — the bias corrector was mistuned. A 14-day
+half-life behind a 14-update warm-up gate disabled the correction for
+exactly one half-life, then applied it at 50 % strength (a
+zero-initialised EMA reaches `1−(1−λ)ⁿ`). Retuned to a 3-day half-life
+with a 2-observation guard and a CMA→EMA warm-up. Producer:
+`studies/bias_corrector_warmup_study.py`.
+
+| configuration | MAE | weekday | wd peak | \|mth bias\| | 2026-07 wd peak bias |
+|---|--:|--:|--:|--:|--:|
+| no correction | 25.76 | 28.22 | 35.55 | 9.54 | +29.36 |
+| v2.17.3 | 24.91 | 26.83 | 33.91 | 7.21 | +27.17 |
+| **v2.18.0** | **24.13** | **25.76** | **32.36** | **3.30** | **+13.66** |
+
+Post-install (three weeks after a state wipe): bias −5.20 → −0.39,
+MAE 22.41 → 21.00.
+
+### Documentation debt found in the v2.18.0 doc audit
+
+Tracked, not fixed in this release:
+
+1. **Version archaeology removed from the docs.** References like "new in
+   v2.11.0" / "added in v2.10.0" / "passes the v2.5.6 hedge gate" told a
+   reader nothing about current behaviour and several had become false.
+   Stripped from README.md and TECHNICAL_GUIDE.md outside the changelog.
+2. **`TEKNINEN_TOTEUTUS.md` rewritten** as a current translation of
+   TECHNICAL_GUIDE.md. It had documented the pre-v2.17 leaky model and
+   cited a script that no longer exists. Pure attribute reference tables
+   now point to the English document rather than being duplicated, so
+   the two cannot drift apart again.
+3. **All seven files in `docs/diagrams/` deleted.** None was referenced
+   by any document, three had no rendered PNG so could not be viewed on
+   GitHub at all, and every one described the pre-integration
+   architecture: "Jinja2 inference", "Two-Stage Ridge Regression +
+   Piecewise Calibration", "REST Sensors", `mgrey.se` (the code uses
+   elprisetjustnu.se), Fingrid capacity `#24/27/115` (the config uses
+   267/268), and sensor names `price_forecast` / `meteo_7day_forecast`
+   that do not exist. Four of the five carried a feature-count claim of
+   **28–38** against an actual **nine**; `data-flow.drawio` itemised
+   them ("Supply (3), Time cycles (4), Demand patterns (8), Thermal
+   demand (6), Physics supply (3), Scarcity indicators (4) = 28").
+   Recoverable from git history. The accurate, compact data-flow diagram
+   in TECHNICAL_GUIDE.md is now the single architecture picture — a
+   second representation is what let these drift unnoticed.
+4. **Six screenshots are unreferenced**: `evaluation-{features,full,
+   metrics,timeseries}.png`, `install-05-operator_{1,2}.png`,
+   `install-08-device-created.png`.
+
+### Corrections to claims made earlier in this document
+
+1. **D6 is the root cause of the offline/field contradiction.** The
+   harness and `summer_weekday_status.py` refit L1 monthly; production
+   runs the frozen artifact. Refitting averages the week-bin noise away;
+   production applies one bin deterministically. Fix the harness before
+   trusting any further offline number — the "most likely explanation:
+   stale pre-v2.15 artifacts" hypothesis below is probably wrong.
+2. **D1's diagnosis needs amending.** Net load's informative half is
+   **wind, not consumption**. Measured with Fingrid day-ahead series:
+   oracle wind/PV is worth +3.8 % summer, oracle consumption −1.0 %.
+   Every consumption specification tried in the price mean (plain,
+   ×peak-hour, ×workday, peak-only, ×wind-scarcity) scored −0.4 % to
+   −1.3 %. Consumption does help the *daily-spread* model (+7 % on top
+   of wind/PV/nuclear), where sensitivity saturates at ~3.6 % MAPE —
+   so a focused consumption model has no headroom to buy.
+3. **The nuclear result is not safe.** `nuclear_mw` (188) is *realised*
+   production — the only realised series used in any of this work, and
+   the only variable that failed every test. Nord Pool prices *planned*
+   availability from the UMM outage schedule, which
+   `api_client.fetch_nuclear_outage_schedule` already fetches but which
+   feeds only the legacy base model. Re-run before concluding.
+4. **Information-set principle.** Datasets 246/247/165 are Fingrid
+   **day-ahead forecasts** — market-available at gate closure, and
+   therefore the correct regressors. Realised production is endogenous
+   (price and consumption are simultaneously determined) and must not
+   become a fitting target for the price model.
+
+### Largest unshipped opportunity (measured, not yet built)
+
+Fingrid's day-ahead wind/PV forecasts are only 85 % / 75 % reconstructible
+from our weather proxies. Adding the **orthogonal remainder** on top of
+the retained proxies is worth **+8.5 % MAE, +8.0 % summer** — the largest
+single effect measured. It must be *added to*, not substituted for, the
+weather proxy (substituting regresses summer), and it covers D+1 only.
+
+**Sequencing constraint:** the structural stack (capacity scaling,
+Fingrid channel, wind nonlinearity, amplitude recalibration) improves
+aggregate MAE 5.7 % but pushes the 2026-07 weekday-peak bias from +26.5
+to **+37.2**. It must not ship before the bias-corrector fix, which
+v2.18.0 delivers.
+
+---
+
+## Historical status (2026-08-01) — the July summer weekday/weekend report
 
 **The original observation was correct.** Weekends *are* forecast more
 accurately than weekdays in summer, and the gap is large. Producer:

@@ -674,3 +674,49 @@ def test_a_cold_start_is_not_repeated_on_every_restart(
         "the model has not changed again; a second wipe on the next start "
         "holds the calibrators permanently cold"
     )
+
+
+# ── Local-calendar workday flag (v2.18.0) ─────────────────────────
+
+
+def test_is_workday_uses_the_local_calendar() -> None:
+    """The trainer builds `is_workday` from Europe/Helsinki
+    (build_fresh_spike_model.py) and the coordinator builds `is_holiday`
+    from the local date, so the runtime must agree. Through v2.17.3 this
+    was a UTC weekday, which disagreed on 2.93 % of hours — 21:00–23:00
+    UTC — at exactly the Fri/Sat and Sun/Mon boundaries.
+    """
+    ts = np.array([
+        "2026-06-07T21:00",   # Sunday 21:00 UTC  = Monday 00:00 EEST
+        "2026-06-05T21:00",   # Friday 21:00 UTC  = Saturday 00:00 EEST
+        "2026-06-08T09:00",   # Monday, unambiguous
+        "2026-06-06T09:00",   # Saturday, unambiguous
+    ], dtype="datetime64[ns]")
+    got = pipeline_mod.Pipeline._is_workday(ts)
+    assert list(got) == [True, False, True, False], (
+        "Sunday 21:00 UTC is Monday locally (workday) and Friday 21:00 UTC "
+        "is Saturday locally (not) — a UTC weekday gets both backwards"
+    )
+
+
+def test_workday_flag_moves_the_forecast_at_the_local_boundary(
+    tmp_path: Path,
+) -> None:
+    """Behavioural guard: the hour that flips must actually change the
+    forecast, by roughly the shipped is_workday coefficient."""
+    p = _make_pipeline(tmp_path)
+    art = json.loads(
+        (REPO / "custom_components" / "spot_price_predictor" / "data"
+         / "spike_model_default.json").read_text())
+    coef = float(art["ridge_coef"][
+        (["intercept"] + list(art["ridge_features"])).index("is_workday")])
+    base = dict(wind=np.full(2, 6.0), solar=np.zeros(2), temp=np.full(2, 5.0),
+                enable_fan_chart=False)
+    sun_local = np.array(["2026-06-07T18:00", "2026-06-07T19:00"],
+                         dtype="datetime64[ns]")   # Sunday locally
+    mon_local = np.array(["2026-06-07T21:00", "2026-06-07T22:00"],
+                         dtype="datetime64[ns]")   # Monday locally
+    a = p.compute_forecast(sun_local, **base)["mean_eur_mwh"]
+    b = p.compute_forecast(mon_local, **base)["mean_eur_mwh"]
+    assert not np.allclose(a, b)
+    assert coef > 0.0
