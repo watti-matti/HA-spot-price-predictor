@@ -79,10 +79,31 @@ Tracked, not fixed in this release:
    experiment-only. The "stale pre-v2.15 artifacts" hypothesis below is
    still probably wrong.
 
-   Remaining limitation: the study cache behind `build_dataframe` ends
-   2026-06-26, so the harness cannot yet see the 2026-07 weekday bias
-   that prompted the investigation. Refresh the cache before using it to
-   judge the Fingrid day-ahead channel.
+   A second, independent provenance bug was found while verifying this:
+   `exp_extra_features.py` hardcoded `OUTPUT_DIR = REPO/"output"`,
+   overriding the store-preferring value it imported. Prices, neighbours
+   and weather therefore came from the fresh `data_store/` while the
+   Fingrid grid series came from a stale `output/` snapshot, and the
+   inner join in `build_dataframe` silently truncated the WHOLE frame to
+   the stale file's end. The harness had been running on data ~7 weeks
+   older than the store without saying so. Both now resolve to the same
+   source.
+
+   The harness now spans 2023-01-08 → 2026-08-12 and reproduces the
+   reported symptom. Weekday bias by month (PRODUCTION):
+
+   | month | mean € | bias | MAE |
+   |---|--:|--:|--:|
+   | 2025-12 | 41.4 | **+22.5** | 28.7 |
+   | 2026-02 | 155.0 | **−28.9** | 44.0 |
+   | 2026-05 | 59.7 | −20.0 | 27.6 |
+   | 2026-06 | 52.6 | −7.9 | 21.8 |
+   | **2026-07** | **17.2** | **+17.8** | 20.7 |
+   | 2026-08 (partial) | 14.0 | +4.5 | 17.7 |
+
+   A monthly weekday-bias table now ships in the harness output. A single
+   aggregate hid exactly this: +22.5 in December and −28.9 in February
+   average to nothing.
 2. **D1's diagnosis needs amending.** Net load's informative half is
    **wind, not consumption**. Measured with Fingrid day-ahead series:
    oracle wind/PV is worth +3.8 % summer, oracle consumption −1.0 %.
