@@ -54,6 +54,7 @@ import seasonal_decomposition as sd  # noqa: E402
 import solar_clear_sky as scs  # noqa: E402
 
 from build_seasonal_components import (  # noqa: E402
+    OUTPUT_DIR as _STORE_OUTPUT_DIR,
     load_fi_prices, load_neighbor_prices, load_weather_extended,
     WEATHER_WINDOW_START, WINDOW_END,
 )
@@ -71,7 +72,15 @@ except Exception:
 REPO_DATA = REPO / "custom_components" / "spot_price_predictor" / "data"
 RESULTS_DIR = REPO / "studies" / "results"
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-OUTPUT_DIR = REPO / "output"
+# Read from the SAME source build_seasonal_components resolved: the
+# canonical data store when it is populated, the legacy output/ parquets
+# otherwise. Hardcoding REPO/"output" here silently mixed feeds — prices,
+# neighbours and weather came from the fresh store while the Fingrid grid
+# series came from a stale output/ snapshot, and the inner join in
+# build_dataframe then truncated the WHOLE frame to the stale file's end.
+# The backtest harness ran on data ~7 weeks older than the store without
+# saying so.
+OUTPUT_DIR = _STORE_OUTPUT_DIR
 
 # Shipped seasonal artifact — same L1 components the production Pipeline uses.
 SEASONAL_ARTIFACT = json.loads(

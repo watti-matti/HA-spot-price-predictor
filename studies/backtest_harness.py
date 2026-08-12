@@ -281,7 +281,23 @@ def score(df: pd.DataFrame, preds: dict[str, np.ndarray]) -> dict:
     }
     out = {"n_eval": int(ev.sum()),
            "eval_window": [str(idx[ev][0]), str(idx[ev][-1])],
-           "price_p95": float(p95), "segments": {}}
+           "price_p95": float(p95), "segments": {}, "monthly": {}}
+    # Per-month WEEKDAY bias. A single aggregate hides the level errors
+    # this harness exists to catch: a month at +18 and a month at -20
+    # average to nothing. Weekday-only because that is where the
+    # reported symptom lives.
+    ei = idx[ev]
+    loc = pd.DatetimeIndex(ei).tz_convert("Europe/Helsinki")
+    wd = np.asarray(loc.weekday < 5)
+    for key in sorted({f"{d.year}-{d.month:02d}" for d in loc}):
+        m = np.array([f"{d.year}-{d.month:02d}" == key for d in loc]) & wd
+        if m.sum() < 100:
+            continue
+        row = {"n": int(m.sum()), "mean_price": float(ye[m].mean())}
+        for cfg, p in preds.items():
+            e = p[ev][m] - ye[m]
+            row[cfg] = {"bias": float(e.mean()), "mae": float(np.abs(e).mean())}
+        out["monthly"][key] = row
     for sname, m in segments.items():
         seg = {"n": int(m.sum()), "mean_price": float(ye[m].mean())}
         for cfg, p in preds.items():
@@ -321,6 +337,13 @@ def write_md(res: dict, out: Path) -> None:
             f"{seg[c]['mae']:.2f} ({seg[c]['bias']:+.1f})" for c in cfgs)
         lines.append(f"| {sname} | {seg['n']:,} | "
                      f"{seg['mean_price']:.0f} | {cells} |")
+    if res.get("monthly"):
+        lines += ["", "## Weekday bias by month (PRODUCTION)", "",
+                  "| month | n | mean € | bias | MAE |", "|---|---:|---:|---:|---:|"]
+        for k, r in res["monthly"].items():
+            lines.append(f"| {k} | {r['n']:,} | {r['mean_price']:.0f} | "
+                         f"{r['PRODUCTION']['bias']:+.1f} | "
+                         f"{r['PRODUCTION']['mae']:.1f} |")
     lines += [
         "",
         "Isolated deltas: FRESH − DEPLOYED = value of retraining on fresh "
@@ -349,6 +372,14 @@ def main() -> None:
             f"{seg[c]['mae']:6.2f} ({seg[c]['bias']:+6.1f})"
             for c in ("PRODUCTION", "FRESH", "FRESH_CONS"))
         print(f"{sname:18s} | {cells}")
+    if res.get("monthly"):
+        print()
+        hdr = ("month", "n", "mean EUR", "bias", "MAE")
+        print("%-9s %6s %9s %8s %7s   (PRODUCTION, weekday only)" % hdr)
+        for k, r in res["monthly"].items():
+            print("%-9s %6d %9.1f %+8.2f %7.2f" % (
+                k, r["n"], r["mean_price"],
+                r["PRODUCTION"]["bias"], r["PRODUCTION"]["mae"]))
     print("\nWrote studies/results/backtest_harness.{md,json}")
 
 
