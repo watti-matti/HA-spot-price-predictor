@@ -64,12 +64,25 @@ Tracked, not fixed in this release:
 
 ### Corrections to claims made earlier in this document
 
-1. **D6 is the root cause of the offline/field contradiction.** The
-   harness and `summer_weekday_status.py` refit L1 monthly; production
-   runs the frozen artifact. Refitting averages the week-bin noise away;
-   production applies one bin deterministically. Fix the harness before
-   trusting any further offline number — the "most likely explanation:
-   stale pre-v2.15 artifacts" hypothesis below is probably wrong.
+1. **D6 — FIXED.** The harness refit L1 monthly while production runs
+   the frozen artifact, which is why offline work concluded weekday
+   *under*-prediction while the field saw *over*-prediction. It was also
+   outright **broken**: from v2.17.0 it asserted an eight-feature list
+   against a nine-feature artifact and could not run at all, so "the
+   frozen harness all experiments report against" had not run for three
+   releases. `backtest_harness.py` now has a `PRODUCTION` config that is
+   `Pipeline.compute_forecast` — frozen L1 and coefficients, neighbours
+   lagged 168 h, `physics_seasonal` deseasonalisation, local-calendar
+   flags, `Y_fi_lag168` zeroed, softplus floor — pinned to the real
+   pipeline by `tests/test_harness_production_parity.py` (agreement
+   better than 1e-6 EUR/MWh). FRESH configs remain, relabelled as
+   experiment-only. The "stale pre-v2.15 artifacts" hypothesis below is
+   still probably wrong.
+
+   Remaining limitation: the study cache behind `build_dataframe` ends
+   2026-06-26, so the harness cannot yet see the 2026-07 weekday bias
+   that prompted the investigation. Refresh the cache before using it to
+   judge the Fingrid day-ahead channel.
 2. **D1's diagnosis needs amending.** Net load's informative half is
    **wind, not consumption**. Measured with Fingrid day-ahead series:
    oracle wind/PV is worth +3.8 % summer, oracle consumption −1.0 %.
