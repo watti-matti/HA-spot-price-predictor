@@ -124,19 +124,66 @@ Tracked, not fixed in this release:
    (price and consumption are simultaneously determined) and must not
    become a fitting target for the price model.
 
-### Largest unshipped opportunity (measured, not yet built)
+### Fingrid day-ahead channel — MEASURED AND REJECTED (WP2.5)
 
-Fingrid's day-ahead wind/PV forecasts are only 85 % / 75 % reconstructible
-from our weather proxies. Adding the **orthogonal remainder** on top of
-the retained proxies is worth **+8.5 % MAE, +8.0 % summer** — the largest
-single effect measured. It must be *added to*, not substituted for, the
-weather proxy (substituting regresses summer), and it covers D+1 only.
+**Corrects an earlier claim in this document.** The "+8.5 % MAE, the
+largest single effect measured" figure was wrong. It came from the
+walk-forward harness, where every input is available at every hour. That
+is legitimate for weather — Open-Meteo genuinely forecasts 7 days — but
+Fingrid 246/247 reach only ~36–42 h. Scoring them at all leads assumed
+the publication boundary away, the same class of error as the v2.16
+auction leak.
 
-**Sequencing constraint:** the structural stack (capacity scaling,
-Fingrid channel, wind nonlinearity, amplitude recalibration) improves
-aggregate MAE 5.7 % but pushes the 2026-07 weekday-peak bias from +26.5
-to **+37.2**. It must not ship before the bias-corrector fix, which
-v2.18.0 delivers.
+Re-measured origin-based (06:00 UTC daily, 170 h horizon, the
+`honest_horizon_study` convention), producer
+`studies/exp_fingrid_dayahead_channel.py`, 68,000 scored hours per
+variant over 2025-07 … 2026-08:
+
+| variant | MAE | bias | summer | wd peak | vs BASE |
+|---|--:|--:|--:|--:|--:|
+| BASE | 26.56 | −2.91 | 21.30 | 29.21 | +0.0 % |
+| FG_ALL *(ceiling, not shippable)* | 26.14 | −7.54 | 21.13 | 28.64 | +1.6 % |
+| FG_D1 | 26.64 | −4.05 | 21.35 | 29.26 | **−0.3 %** |
+| FG_D1_FADE | 26.31 | −5.69 | 21.17 | 28.87 | **+0.9 %** |
+| FG_SUBST | 26.94 | −10.08 | 21.93 | 29.49 | −1.4 % |
+
+By lead-time day:
+
+```
+lead        BASE      FG_ALL       FG_D1  FG_D1_FADE
+D+1        26.41       25.98       25.98       25.98
+D+3        26.52       26.11       26.76       26.14
+D+7        26.65       26.22       26.88       26.65
+```
+
+The channel works where it exists (D+1, +1.6 %) but **FG_D1 is worse than
+BASE from D+3 onward**: zeroing a feature past its boundary hurts,
+because the coefficient was fitted on hours where it was present. Fading
+recovers most of that and leaves +0.9 % overall.
+
+**Verdict: do not ship.** +0.9 % MAE costs +2.8 EUR/MWh of bias
+(−2.91 → −5.69), and it makes the big-miss months worse — 2026-02
+−38.6 → −46.3, 2026-05 −24.2 → −27.6, 2026-01 −9.5 → −17.0 — including
+2026-07, the reported symptom, +22.3 → +23.3. Same pattern as the
+structural stack: slightly better average, worse where it matters.
+
+Two findings worth keeping:
+
+1. **Substitution is worse than addition** (FG_SUBST −1.4 %). If this is
+   ever revisited, the weather proxy must be retained and the Fingrid
+   feed added as the orthogonal remainder.
+2. **A feature with a publication boundary needs the boundary modelled at
+   fit time**, not just at inference. Fitting on hours where it is
+   present and zeroing it later is actively harmful. A shippable version
+   would need the coefficient fitted under the same availability mask it
+   will face.
+
+**Sequencing constraint:** the structural stack (capacity scaling, wind
+nonlinearity, amplitude recalibration) improves aggregate MAE 5.7 % but
+pushes the 2026-07 weekday-peak bias from +26.5 to **+37.2**. v2.18.0
+delivered the bias-corrector fix it was gated behind, but the same
+caveat applies as to the Fingrid channel above: measure bias per month,
+not just aggregate MAE, before shipping any of it.
 
 ---
 
