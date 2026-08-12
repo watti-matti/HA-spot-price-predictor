@@ -55,6 +55,8 @@ sys.path.insert(0, str(REPO / "custom_components" / "spot_price_predictor"))
 import seasonal_decomposition as sd  # noqa: E402
 from exp_extra_features import build_dataframe, SEASONAL_ARTIFACT  # noqa: E402
 from v2510_layer3_ar_wind import fit_ridge  # noqa: E402
+from holidays import build_holiday_set  # noqa: E402
+import price_floor as _pf  # noqa: E402
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -66,8 +68,17 @@ RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 DATA_DIR = REPO / "custom_components" / "spot_price_predictor" / "data"
 
 EVAL_START = pd.Timestamp("2025-07-01", tz="UTC")
+# Feature order of the SHIPPED artifact (without the intercept, which is
+# first in `ridge_coef`). Asserted against the artifact in
+# build_predictions so a retrain that changes the set fails loudly here
+# rather than silently mis-aligning the design matrix — which is exactly
+# what happened between v2.17.0 and v2.18.0, when this list still named
+# the same-hour neighbour features and the harness could not run at all.
 FEATS = ["Y_fi_lag168", "is_workday", "Y_sigmoid_wind_rho",
-         "Y_solar_effective", "Y_temp", "Y_se1", "Y_se3", "Y_ee"]
+         "Y_solar_effective", "Y_temp",
+         "Y_se1_lag168", "Y_se3_lag168", "Y_ee_lag168", "is_holiday"]
+NEIGHBOUR_LAG_HOURS = 168
+PRICE_FLOOR = -5.0
 # Physics seasonal-fit config — matches exp_extra_features.build_dataframe.
 PHYS_DEPTH = ("P_hour", "P_week")
 PHYS_SMOOTH = {"P_week": 7}
@@ -95,6 +106,82 @@ def _fit_l1_like_shipped(name: str, x: np.ndarray, ts: np.ndarray) -> dict:
     return sd.fit_components(x, ts, depth=depth)
 
 
+def build_production_prediction(df: pd.DataFrame) -> np.ndarray:
+    """Exactly what the deployed pipeline computes, hour by hour.
+
+    This is the harness's reference config and the reason WP0 existed:
+    the FRESH configs below refit L1 every month, while production runs
+    the FROZEN artifact. Refitting averages the week-bin noise away;
+    production applies one bin deterministically. That difference is why
+    offline work concluded weekday *under*-prediction while the field saw
+    *over*-prediction (docs/BACKLOG.md D6).
+
+    Faithful to `Pipeline.compute_forecast` in every respect that moves
+    the number:
+      * frozen L1 from seasonal_components_default.json
+      * frozen L2 coefficients, intercept FIRST
+      * neighbours lagged NEIGHBOUR_LAG_HOURS, deseasonalised at the hour
+        they were observed in
+      * physics terms deseasonalised with the artifact's `physics_seasonal`
+        block, not per-day centred
+      * `is_workday` on the LOCAL calendar, minus public holidays
+      * `Y_fi_lag168` zeroed, as the coordinator hard-codes it
+      * softplus floor at PRICE_FLOOR, not a clamp at zero
+
+    Not modelled: the per-hour bias corrector (it needs a realised-price
+    feedback loop, and its value is measured separately by
+    studies/bias_corrector_warmup_study.py) and the L3 AR(1) term (the
+    harness is a day-ahead regime by construction).
+    """
+    idx = df.index
+    ts = pd.DatetimeIndex(idx, tz="UTC").values
+    n = len(df)
+    spike = json.loads((DATA_DIR / "spike_model_default.json").read_text())
+    coef = dict(zip(["intercept"] + list(spike["ridge_features"]),
+                    np.asarray(spike["ridge_coef"], dtype=float)))
+    phys = spike.get("physics_seasonal") or {}
+
+    loc = pd.DatetimeIndex(idx).tz_convert("Europe/Helsinki")
+    hol = build_holiday_set(2022, 2028)
+    is_hol = np.array([1.0 if d.strftime("%Y-%m-%d") in hol else 0.0
+                       for d in loc])
+    is_wd = (loc.weekday < 5).astype(float) * (1.0 - is_hol)
+
+    def _des_phys(name: str, vals: np.ndarray) -> np.ndarray:
+        comp = phys.get(name)
+        return (vals - sd.compute_seasonal_part(ts, comp) if comp
+                else vals - float(np.nanmean(vals)))
+
+    Y_wr = _des_phys("sigmoid_wind_rho", df["sigmoid_wind_rho"].values)
+    Y_se = _des_phys("solar_effective", df["solar_effective"].values)
+    Y_temp = df["temp"].values - sd.compute_seasonal_part(
+        ts, SEASONAL_ARTIFACT["components"]["temp"])
+
+    Yz = {}
+    for z in ("se1", "se3", "ee"):
+        raw = df[z].values.astype(float)
+        raw = np.where(np.isfinite(raw), raw, np.nanmean(raw))
+        y = raw - sd.compute_seasonal_part(ts, SEASONAL_ARTIFACT["components"][z])
+        Yz[z] = (pd.Series(y, index=idx)
+                 .shift(NEIGHBOUR_LAG_HOURS).fillna(0.0).values)
+
+    seas = sd.compute_seasonal_part(ts, SEASONAL_ARTIFACT["components"]["fi"])
+    ridge = (coef["intercept"]
+             + coef["Y_fi_lag168"] * 0.0            # coordinator zeroes it
+             + coef["is_workday"] * is_wd
+             + coef["Y_sigmoid_wind_rho"] * Y_wr
+             + coef["Y_solar_effective"] * Y_se
+             + coef["Y_temp"] * Y_temp
+             + coef["Y_se1_lag168"] * Yz["se1"]
+             + coef["Y_se3_lag168"] * Yz["se3"]
+             + coef["Y_ee_lag168"] * Yz["ee"]
+             + coef["is_holiday"] * is_hol)
+    # The real softplus floor, not a hard clamp — near the floor the two
+    # differ by log(2), and a parity test against Pipeline must see the
+    # same curve.
+    return _pf.apply_floor(seas + ridge, floor=PRICE_FLOOR)
+
+
 def build_predictions(df: pd.DataFrame) -> dict[str, np.ndarray]:
     """Return {config: prediction array aligned to df.index} covering the
     eval window (NaN outside it)."""
@@ -105,25 +192,25 @@ def build_predictions(df: pd.DataFrame) -> dict[str, np.ndarray]:
     is_workday = df["is_workday"].values
     wind_rho = df["sigmoid_wind_rho"].values   # raw physics, pre-deseason
     solar_eff = df["solar_effective"].values
+    # Calendar flags on the LOCAL clock, matching the trainer and the
+    # runtime. `df["is_workday"]` from build_dataframe is UTC-based.
+    _loc = pd.DatetimeIndex(idx).tz_convert("Europe/Helsinki")
+    _hol = build_holiday_set(2022, 2028)
+    is_holiday = np.array([1.0 if d.strftime("%Y-%m-%d") in _hol else 0.0
+                           for d in _loc])
+    is_workday_local = (_loc.weekday < 5).astype(float) * (1.0 - is_holiday)
 
-    preds = {k: np.full(n, np.nan) for k in ("DEPLOYED", "FRESH", "FRESH_CONS")}
+    preds = {k: np.full(n, np.nan) for k in ("PRODUCTION", "FRESH", "FRESH_CONS")}
 
-    # ── DEPLOYED: shipped L1 + shipped ridge coefs, per-day centring ──
+    # ── PRODUCTION: exactly what the deployed pipeline computes ──
     spike = json.loads((DATA_DIR / "spike_model_default.json").read_text())
-    coef = np.asarray(spike["ridge_coef"], dtype=float)   # [intercept, 8]
-    assert spike["ridge_features"] == FEATS, "artifact feature order changed"
-    seas_fi_dep = sd.compute_seasonal_part(ts, SEASONAL_ARTIFACT["components"]["fi"])
-    Yfi_dep = fi - seas_fi_dep
-    lag_dep = pd.Series(Yfi_dep, index=idx).shift(168).values
-    Yz_dep = {z: df[z].values - sd.compute_seasonal_part(
-        ts, SEASONAL_ARTIFACT["components"][z]) for z in ("temp", "se1", "se3", "ee")}
-    X_dep = np.column_stack([
-        np.ones(n), lag_dep, is_workday,
-        _day_center(wind_rho, idx), _day_center(solar_eff, idx),
-        Yz_dep["temp"], Yz_dep["se1"], Yz_dep["se3"], Yz_dep["ee"]])
-    pred_dep = np.maximum(0.0, seas_fi_dep + X_dep @ coef)
+    assert list(spike["ridge_features"]) == FEATS, (
+        f"shipped artifact declares {spike['ridge_features']}, harness "
+        f"expects {FEATS}. Update FEATS and build_production_prediction "
+        f"together — a silent mismatch mis-aligns the design matrix."
+    )
     ev = np.asarray(idx >= EVAL_START)
-    preds["DEPLOYED"][ev] = pred_dep[ev]
+    preds["PRODUCTION"][ev] = build_production_prediction(df)[ev]
 
     # ── FRESH / FRESH_CONS: walk-forward monthly refit ──
     month_starts = pd.date_range(EVAL_START, idx[-1], freq="MS", tz="UTC")
@@ -142,6 +229,12 @@ def build_predictions(df: pd.DataFrame) -> dict[str, np.ndarray]:
         for z in ("temp", "se1", "se3", "ee"):
             comp = _fit_l1_like_shipped(z, df[z].values[tr], ts[tr])
             Yz[z] = df[z].values - sd.compute_seasonal_part(ts, comp)
+        # Neighbours enter LAGGED — they clear in the same day-ahead
+        # auction as FI, so a same-hour value is unknowable at forecast
+        # time (the v2.16 leak).
+        Zlag = {z: pd.Series(Yz[z], index=idx)
+                .shift(NEIGHBOUR_LAG_HOURS).fillna(0.0).values
+                for z in ("se1", "se3", "ee")}
         # Physics: trainer-style seasonal deseason (fit on train).
         pcomp = {name: sd.fit_components(vals[tr], ts[tr], depth=PHYS_DEPTH,
                                          smooth=PHYS_SMOOTH)
@@ -150,27 +243,28 @@ def build_predictions(df: pd.DataFrame) -> dict[str, np.ndarray]:
         Ys_seas = solar_eff - sd.compute_seasonal_part(ts, pcomp["solar"])
         # Ridge fit — trainer convention (seasonal physics deseason).
         X_tr = np.column_stack([
-            np.ones(n), lag, is_workday, Yw_seas, Ys_seas,
-            Yz["temp"], Yz["se1"], Yz["se3"], Yz["ee"]])
+            np.ones(n), lag, is_workday_local, Yw_seas, Ys_seas,
+            Yz["temp"], Zlag["se1"], Zlag["se3"], Zlag["ee"], is_holiday])
         ok = tr & np.isfinite(X_tr).all(axis=1) & np.isfinite(Yfi)
         c = fit_ridge(X_tr[ok], Yfi[ok], alpha=1.0)
         # Inference on the month block.
         # FRESH: production-faithful per-day centring (legacy mismatch).
         Xb_legacy = np.column_stack([
-            np.ones(n), lag, is_workday,
+            np.ones(n), lag, is_workday_local,
             _day_center(wind_rho, idx), _day_center(solar_eff, idx),
-            Yz["temp"], Yz["se1"], Yz["se3"], Yz["ee"]])[blk]
-        preds["FRESH"][blk] = np.maximum(0.0, seas_fi[blk] + Xb_legacy @ c)
+            Yz["temp"], Zlag["se1"], Zlag["se3"], Zlag["ee"],
+            is_holiday])[blk]
+        preds["FRESH"][blk] = np.maximum(PRICE_FLOOR, seas_fi[blk] + Xb_legacy @ c)
         # FRESH_CONS: consistent stored-seasonal deseason.
         Xb_cons = X_tr[blk]
-        preds["FRESH_CONS"][blk] = np.maximum(0.0, seas_fi[blk] + Xb_cons @ c)
+        preds["FRESH_CONS"][blk] = np.maximum(PRICE_FLOOR, seas_fi[blk] + Xb_cons @ c)
     return preds
 
 
 def score(df: pd.DataFrame, preds: dict[str, np.ndarray]) -> dict:
     idx = df.index
     y = df["fi"].values
-    ev = np.asarray(idx >= EVAL_START) & np.isfinite(preds["DEPLOYED"])
+    ev = np.asarray(idx >= EVAL_START) & np.isfinite(preds["PRODUCTION"])
     for p in preds.values():
         ev &= np.isfinite(p)
     mo = idx.month.values[ev]
@@ -199,7 +293,7 @@ def score(df: pd.DataFrame, preds: dict[str, np.ndarray]) -> dict:
 
 
 def write_md(res: dict, out: Path) -> None:
-    cfgs = ["DEPLOYED", "FRESH", "FRESH_CONS"]
+    cfgs = ["PRODUCTION", "FRESH", "FRESH_CONS"]
     lines = [
         "# Backtest harness — frozen day-ahead walk-forward",
         "",
@@ -207,10 +301,16 @@ def write_md(res: dict, out: Path) -> None:
         f"{res['eval_window'][0][:10]} → {res['eval_window'][1][:10]} "
         f"({res['n_eval']:,} h)",
         "",
-        "Regime: day-ahead (no one-step AR), monthly walk-forward refit for "
-        "FRESH configs, per-day physics centring for production-faithful "
-        "configs, weather-oracle inputs (identical across configs — deltas "
-        "are the honest signal).",
+        "Regime: day-ahead (no one-step AR). PRODUCTION is the frozen "
+        "shipped artifact evaluated exactly as `Pipeline.compute_forecast` "
+        "does — frozen L1, frozen coefficients, neighbours lagged 168 h, "
+        "physics deseasonalised with the artifact's `physics_seasonal` "
+        "block, local-calendar workday and holiday flags, `Y_fi_lag168` "
+        "zeroed, softplus floor. Parity is pinned by "
+        "tests/test_harness_production_parity.py. FRESH configs refit L1 "
+        "and the ridge monthly and are for model experiments only — do NOT "
+        "read them as production behaviour (backlog D6). Weather inputs are "
+        "identical across configs, so the deltas are the honest signal.",
         "",
         "| segment | n | mean € | " + " | ".join(
             f"{c} MAE (bias)" for c in cfgs) + " |",
@@ -242,12 +342,12 @@ def main() -> None:
         json.dumps(res, indent=2), encoding="utf-8")
     write_md(res, RESULTS_DIR / "backtest_harness.md")
     print(f"\nsnapshot = {res['snapshot_id']}   n_eval = {res['n_eval']:,}")
-    print(f"{'segment':18s} | {'DEPLOYED':>16s} | {'FRESH':>16s} | "
+    print(f"{'segment':18s} | {'PRODUCTION':>16s} | {'FRESH':>16s} | "
           f"{'FRESH_CONS':>16s}")
     for sname, seg in res["segments"].items():
         cells = " | ".join(
             f"{seg[c]['mae']:6.2f} ({seg[c]['bias']:+6.1f})"
-            for c in ("DEPLOYED", "FRESH", "FRESH_CONS"))
+            for c in ("PRODUCTION", "FRESH", "FRESH_CONS"))
         print(f"{sname:18s} | {cells}")
     print("\nWrote studies/results/backtest_harness.{md,json}")
 
