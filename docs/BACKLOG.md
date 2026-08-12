@@ -149,6 +149,66 @@ Tracked, not fixed in this release:
    (price and consumption are simultaneously determined) and must not
    become a fitting target for the price model.
 
+### asinh VST — MEASURED AND RECOMMENDED (WP2a)
+
+The first change measured in this investigation that improves **both**
+MAE and bias, and the reported symptom with them. Producer:
+`studies/exp_asinh_vst.py`.
+
+Against the realistic baseline — v2.18.0 as it now ships, with the
+per-hour corrector — non-overlapping hourly replay, 2025-07 … 2026-08,
+9,757 scored hours:
+
+| config | MAE | bias | \|mth bias\| | 2026-07 wd |
+|---|--:|--:|--:|--:|
+| BASE raw | 26.25 | −2.72 | 11.10 | +22.22 |
+| BASE + corrector | 24.03 | +0.01 | 4.10 | +9.53 |
+| ASINH raw | 24.72 | −7.59 | 12.32 | +16.14 |
+| **ASINH + corrector** | **22.63** | **−0.14** | **3.67** | **+6.47** |
+
+**MAE −5.8 %, monthly bias −10 %, July weekday over-prediction −32 %**
+relative to what ships today.
+
+**Why the raw bias worsens, and why it does not matter.** The VST
+predicts a conditional MEDIAN — that is what makes it MAE-optimal — and
+the median of a right-skewed price sits below the mean, so raw bias goes
+−2.72 → −7.59. The corrector absorbs it completely (−0.14). This change
+is viable *only because* v2.18.0 cut the corrector half-life to 3 days;
+against the old 14-day setting the added bias would have persisted for
+weeks. Sequence matters.
+
+**The transform must cover L1.** `ASINH_L2` — linear L1, transformed L2
+residual only — scores **−2.8 %**, i.e. worse than base. There is no
+runtime-only version; shipping means retraining the seasonal artifact
+too.
+
+**asinh over log, on robustness not fit.** `log(p + 20)` scored
+marginally better on raw MAE (24.79 vs 24.93 origin-based), but the
+offset is arbitrary and the transform breaks below −20 EUR/MWh. asinh
+with median/MAD standardisation is data-driven and defined on the whole
+real line — the Uniejewski/Weron/Ziel argument.
+
+**It does not replace the conditional-spread model.** Daily amplitude
+law, `amp = a + b × level`:
+
+```
+ACTUAL        20.85 + 1.016 x level
+BASE          51.72 + 0.107 x level
+ASINH         33.88 + 0.314 x level
+LOG20         27.94 + 0.485 x level
+```
+
+asinh triples the slope but the market's is 1.016. A global transform
+cannot express a *conditional* spread (Koopman, Ooms & Carnero 2007) —
+WP2b remains complementary, not superseded.
+
+**Before shipping:** retraining in transformed space changes the model
+fingerprint and cold-starts the calibrators (now a much smaller cost —
+v2.18.0 took the 3-week post-install penalty from −5.20 to −0.39
+EUR/MWh). The sign constraints on wind/PV and the 168 h neighbour-lag
+guard must be re-verified against the new artifact, since both are
+asserted on coefficients whose scale changes under the transform.
+
 ### Fingrid day-ahead channel — MEASURED AND REJECTED (WP2.5)
 
 **Corrects an earlier claim in this document.** The "+8.5 % MAE, the
