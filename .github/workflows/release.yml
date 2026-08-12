@@ -18,6 +18,19 @@ on:
 permissions:
   contents: write
 
+# Publishing a release and then editing its notes fires this workflow
+# twice, and both runs race to upload the same asset name. The loser gets
+#   HTTP 422: Validation Failed - ReleaseAsset.name already exists
+# and the release shows a red X even though the asset is attached
+# correctly (v2.18.0 did exactly this). `--clobber` does not help: the
+# conflict is a concurrent upload, not a pre-existing asset.
+#
+# Serialise per tag and cancel the superseded run, so the last edit wins
+# and a red X means something is genuinely wrong.
+concurrency:
+  group: release-asset-${{ github.event.release.tag_name }}
+  cancel-in-progress: true
+
 jobs:
   attach-zip:
     runs-on: ubuntu-latest
