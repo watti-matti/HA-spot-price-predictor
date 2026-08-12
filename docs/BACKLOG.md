@@ -112,12 +112,37 @@ Tracked, not fixed in this release:
    −1.3 %. Consumption does help the *daily-spread* model (+7 % on top
    of wind/PV/nuclear), where sensitivity saturates at ~3.6 % MAPE —
    so a focused consumption model has no headroom to buy.
-3. **The nuclear result is not safe.** `nuclear_mw` (188) is *realised*
-   production — the only realised series used in any of this work, and
-   the only variable that failed every test. Nord Pool prices *planned*
-   availability from the UMM outage schedule, which
-   `api_client.fetch_nuclear_outage_schedule` already fetches but which
-   feeds only the legacy base model. Re-run before concluding.
+3. **The nuclear result IS safe — UMM was tested and has no leverage.**
+   The concern was right in principle: `nuclear_mw` (188) is *realised*
+   production, so every nuclear test used information the market did not
+   have at gate closure. The remedy does not exist, though. Producer:
+   `studies/exp_umm_nuclear_leverage.py`, which pulls the full published
+   history (1,906 nuclear messages, 131 Finnish production-unit entries,
+   2013 onward) from the Nord Pool UMM API.
+
+   | | mean MW | sd MW | hours > 0 |
+   |---|--:|--:|--:|
+   | realised unavailable (Fingrid 188) | 724 | 646 | 30,993 |
+   | UMM, all messages | 134 | 323 | 5,931 |
+   | UMM, announced >36 h ahead | 64 | 278 | **1,804** |
+
+   Only **16 outage periods** in 2023-01 … 2026-08 were announced more
+   than 36 h ahead — the rest are published at or after the event starts
+   (median lead −5.4 h for unplanned, −4.2 h for planned). Correlation of
+   the usable signal with realised unavailability is **+0.025, R² 0.001**.
+
+   The day-ahead-obtainable nuclear signal explains **0.1 %** of what
+   actually happens to the fleet. Realised unavailability is non-zero in
+   98 % of hours — continuous derating, refuelling ramps and short trips,
+   none of which generate an advance UMM. There is no better nuclear
+   variable to test with, so the earlier negative results stand as
+   conclusions rather than as artefacts.
+
+   Secondary finding: Fortum publishes Loviisa diligently (118 of 131
+   entries) while TVO barely publishes Olkiluoto at all — OL3, the
+   1600 MW unit and the single biggest lever on Finnish nuclear
+   availability, has **3 entries in 13 years**. Any future attempt needs
+   a different source, not a better use of this one.
 4. **Information-set principle.** Datasets 246/247/165 are Fingrid
    **day-ahead forecasts** — market-available at gate closure, and
    therefore the correct regressors. Realised production is endogenous
