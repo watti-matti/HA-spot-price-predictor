@@ -2,7 +2,7 @@
 
 [![HACS Integration](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-2.18.0-blue.svg)](https://github.com/watti-matti/HA-spot-price-predictor/releases/latest)
+[![Version](https://img.shields.io/badge/version-2.18.1-blue.svg)](https://github.com/watti-matti/HA-spot-price-predictor/releases/latest)
 
 **Forecast Finnish electricity prices for the next 170 hours**, in both spot (EUR/MWh) and consumer (EUR/kWh) terms, with calibrated probabilistic bands and 7-day duration curves for cost-aware load scheduling.
 
@@ -23,6 +23,7 @@
 
 ## Recent changes (v2.12 → v2.18)
 
+- **v2.18.1** — `consumption_entity` smoothing had never worked: it queried the recorder synchronously on the event loop, once per forecast hour, and a bare `except` swallowed HA's blocking-call `RuntimeError` (145–170 logged tracebacks every update) while baseload silently fell back to `annual_consumption_kwh`. The value is now resolved once per update on the recorder executor, failures are logged and retried at most hourly, and the 23-hour cache is keyed on the real clock instead of forecast-hour timestamps. **If `consumption_entity` is set, baseload now follows that sensor.**
 - **v2.18.0** — the hourly bias corrector was mistuned: a 14-day half-life behind a 14-update warm-up gate disabled correction for one half-life and then applied it at 50 % strength. Retuned to a 3-day half-life with a CMA→EMA warm-up; monthly bias −54 %. Also three train/inference mismatches (UTC-vs-local workday flag, 15-minute neighbour prices keeping the `:45` quarter, a Kolari weather site 62 km from the one the model was trained on).
 - **v2.17.3** — fixed a `NameError` that had silently killed the whole prediction pipeline on every install since v2.17.0; DtACI D(k) bundles now cold-start on model change.
 - **v2.17.0/.1** — **removed the day-ahead auction leak.** `Y_se1`/`Y_se3`/`Y_ee` were same-hour prices of zones that clear in the *same* auction as FI, so they could never be observed before the target. Now lagged 168 h. Honest leak-free accuracy improved 35.5 → 27.1 MAE (−24 %); the wind coefficient recovered from −44.6 to −98.7 and the solar sign corrected itself. Added a public-holiday flag.

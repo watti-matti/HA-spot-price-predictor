@@ -187,7 +187,7 @@ The duration sensor then computes parallel `dk_cheap_pv_eur_kwh[24]` / `dk_peak_
 Two configuration fields drive the baseload `c_h` used in the PV calculation:
 
 - **`annual_consumption_kwh`** (default 12 000) — typical TOTAL annual household demand from the bill. Multiplied by a 12-element Finnish residential monthly seasonal profile (`FINLAND_RESIDENTIAL_MONTHLY_FACTORS` in [`const.py`](custom_components/spot_price_predictor/const.py); sum of factors = 12.00 exactly, range ≈ ±19 %).
-- **`consumption_entity`** (optional) — any HA consumption sensor (cumulative-kWh counter, daily/monthly `utility_meter`, or instantaneous-power sensor). The integration auto-detects the sensor type, smooths it on a 14-day rolling window with a 5 % hysteresis dead-band, and caches the result under `.storage/spot_price_predictor_consumption_cache.json` (recomputed at most once per day).
+- **`consumption_entity`** (optional) — an HA consumption sensor: a cumulative-kWh counter (`state_class: total_increasing`, 14-day delta) or an instantaneous-power sensor (W/kW, 28-day mean of daily statistics). Daily/monthly `utility_meter` sensors (`state_class: total`) reset inside the window and fall back to `annual_consumption_kwh`. The smoothed value has a 5 % hysteresis dead-band and is cached in memory: resolved once per coordinator update before the forecast loop, recomputed at most once per day (and once after each restart), with failed lookups retried at most hourly. The recorder query runs on the recorder's executor, never on the event loop.
 
 ### Stability invariant
 
