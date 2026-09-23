@@ -215,6 +215,7 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
         # `.storage/spot_price_predictor_consumption_cache.json`.
         self._consumption_cached_daily_kwh: float | None = None
         self._consumption_last_resolved_at: datetime | None = None
+        self._consumption_last_attempt_at: datetime | None = None
 
         self._pv_enabled = self.pv_capacity_kwp > 0.0 or bool(
             self.pv_external_entity)
@@ -491,9 +492,7 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
         explicitly updates their config to use the new schema.
         """
         # Resolve daily kWh — entity-smoothed if configured, else config.
-        daily_kwh = None
-        if self.consumption_entity:
-            daily_kwh = self._smooth_consumption_entity(ts_utc)
+        daily_kwh = self._consumption_cached_daily_kwh
         if daily_kwh is None or daily_kwh <= 0.0:
             daily_kwh = self.annual_consumption_kwh / 365.0
 
@@ -523,10 +522,12 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
         # Fallback: UTC+3 (Finland, no DST)
         return ts_utc + timedelta(hours=3)
 
-    def _smooth_consumption_entity(self, ts_utc: datetime) -> float | None:
-        """Smoothed typical-daily-kWh from `self.consumption_entity`.
+    async def _async_refresh_consumption_cache(self, now_utc: datetime) -> None:
+        """Refresh the smoothed typical-daily-kWh cache from `consumption_entity`.
 
-        Returns None on any failure (caller falls back to
+        Called once per coordinator update, before the per-hour forecast
+        loop; `_resolve_baseload` only reads the cache. On failure the
+        cache is left as-is (caller falls back to
         `annual_consumption_kwh / 365`). Recomputes the smoothed value at
         most once per day; the cached value persists across coordinator
         cycles. 5 % hysteresis on the cached value prevents tiny sensor
@@ -545,28 +546,52 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
            kWh per day.
         4. Unknown — returns None, caller falls back to config.
         """
-        # If we already resolved within the last 23 hours, return cache.
+        if not self.consumption_entity:
+            return
+        # If we already resolved within the last 23 hours, keep the cache.
         # (23h window so the recompute happens on a slightly drifting
         # boundary; avoids reading HA history on every coordinator tick.)
         if (
             self._consumption_cached_daily_kwh is not None
             and self._consumption_last_resolved_at is not None
-            and (ts_utc - self._consumption_last_resolved_at)
+            and (now_utc - self._consumption_last_resolved_at)
                 < timedelta(hours=23)
         ):
-            return self._consumption_cached_daily_kwh
+            return
+        # Failed or empty lookups retry at most hourly, not on every
+        # 15-minute retry cycle of the coordinator.
+        if (
+            self._consumption_last_attempt_at is not None
+            and (now_utc - self._consumption_last_attempt_at)
+                < timedelta(hours=1)
+        ):
+            return
+        self._consumption_last_attempt_at = now_utc
+
+        state = self.hass.states.get(self.consumption_entity)
+        if state is None:
+            _LOGGER.warning(
+                "consumption_entity '%s' not found; falling back to "
+                "annual_consumption_kwh config", self.consumption_entity,
+            )
+            return
 
         try:
-            new_value = self._fetch_consumption_daily_kwh(ts_utc)
+            from homeassistant.components.recorder import get_instance
+            # Recorder queries are blocking and must run on the recorder's
+            # own executor, never on the event loop.
+            new_value = await get_instance(self.hass).async_add_executor_job(
+                self._fetch_consumption_daily_kwh, state, now_utc,
+            )
         except Exception as err:
             _LOGGER.warning(
                 "consumption_entity '%s' resolve failed: %s; "
                 "falling back to annual_consumption_kwh config",
                 self.consumption_entity, err,
             )
-            return None
+            return
         if new_value is None or new_value <= 0.0:
-            return None
+            return
 
         # Apply hysteresis — only update the cached value if the new
         # reading deviates by more than 5 % from the cached one.
@@ -575,20 +600,19 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
             if abs(new_value - old) / max(old, 1e-6) < CONSUMPTION_HYSTERESIS_PCT:
                 # Within dead-band; keep the old cached value but bump the
                 # resolved-at timestamp so we don't recompute again today.
-                self._consumption_last_resolved_at = ts_utc
-                return old
+                self._consumption_last_resolved_at = now_utc
+                return
 
         self._consumption_cached_daily_kwh = new_value
-        self._consumption_last_resolved_at = ts_utc
+        self._consumption_last_resolved_at = now_utc
         _LOGGER.info(
             "consumption_entity smoothed daily kWh = %.2f (entity=%s, "
             "smoothing window %d days, hysteresis %.0f%%)",
             new_value, self.consumption_entity,
             CONSUMPTION_SMOOTHING_DAYS, CONSUMPTION_HYSTERESIS_PCT * 100,
         )
-        return new_value
 
-    def _fetch_consumption_daily_kwh(self, ts_utc: datetime) -> float | None:
+    def _fetch_consumption_daily_kwh(self, state, ts_utc: datetime) -> float | None:
         """Auto-detect sensor type and return smoothed daily kWh.
 
         Reading HA's recorder/history is allowed here because we apply
@@ -596,10 +620,9 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
         decisions don't propagate back into our value (single-day
         variation is 1/14 ≈ 7 % of the average). Combined with the 5 %
         hysteresis dead-band, the closed-loop gain stays well below 1.
+
+        Blocking: runs in the recorder executor, never on the event loop.
         """
-        state = self.hass.states.get(self.consumption_entity)
-        if state is None:
-            return None
         unit = (state.attributes.get("unit_of_measurement") or "").lower()
         device_class = (state.attributes.get("device_class") or "").lower()
         state_class = (state.attributes.get("state_class") or "").lower()
@@ -630,28 +653,13 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
             current = float(state.state)
         except (TypeError, ValueError):
             return None
-        try:
-            from homeassistant.components.recorder import (
-                history,
-                get_instance,
-            )
-        except ImportError:
-            return None
+        from homeassistant.components.recorder import history
+
         start = ts_utc - timedelta(days=CONSUMPTION_SMOOTHING_DAYS)
-        try:
-            recorder = get_instance(self.hass)
-            past = recorder.history.state_changes_during_period(
-                self.hass, start, ts_utc, self.consumption_entity,
-                no_attributes=True,
-            )
-        except Exception:
-            try:
-                past = history.state_changes_during_period(
-                    self.hass, start, ts_utc, self.consumption_entity,
-                    no_attributes=True,
-                )
-            except Exception:
-                return None
+        past = history.state_changes_during_period(
+            self.hass, start, ts_utc, self.consumption_entity,
+            no_attributes=True,
+        )
         rows = past.get(self.consumption_entity) or []
         oldest_value: float | None = None
         for row in rows:
@@ -679,22 +687,17 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
         self, state, ts_utc: datetime, unit: str,
     ) -> float | None:
         """28-day mean of instantaneous power → typical daily kWh."""
-        try:
-            from homeassistant.components.recorder import statistics
-        except ImportError:
-            return None
+        from homeassistant.components.recorder import statistics
+
         start = ts_utc - timedelta(days=CONSUMPTION_SMOOTHING_DAYS * 2)
-        try:
-            stats = statistics.statistics_during_period(
-                self.hass,
-                start, ts_utc,
-                statistic_ids={self.consumption_entity},
-                period="day",
-                units=None,
-                types={"mean"},
-            )
-        except Exception:
-            return None
+        stats = statistics.statistics_during_period(
+            self.hass,
+            start, ts_utc,
+            statistic_ids={self.consumption_entity},
+            period="day",
+            units=None,
+            types={"mean"},
+        )
         rows = stats.get(self.consumption_entity) or []
         means = [r.get("mean") for r in rows if r.get("mean") is not None]
         if not means:
@@ -1707,6 +1710,9 @@ class SpotPriceCoordinator(DataUpdateCoordinator):
 
             # Build PV forecast (length = number of predictions; all zeros when PV disabled)
             pv_kwh = self._compute_pv_forecast(weather, len(predictions), now)
+
+            if self._pv_enabled:
+                await self._async_refresh_consumption_cache(now)
 
             # Build unified forecast: spot + consumer + weather (+ PV-aware) per hour
             forecast = []
