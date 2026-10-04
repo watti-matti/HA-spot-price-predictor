@@ -16,10 +16,15 @@ REM ============================================================
 setlocal EnableExtensions
 
 REM ======================= EDIT ME ===========================
-REM Fingrid API key (free, https://data.fingrid.fi). OPTIONAL:
-REM leave BLANK to train without nuclear features and skip the
-REM solar sub-model. The model still works fully without it.
-set "FINGRID_API_KEY=39f0d633f8e74fc8bdff79537e559d8c"
+REM Fingrid API key (free, https://data.fingrid.fi). OPTIONAL: without
+REM it the model trains without nuclear features and skips the solar
+REM sub-model, and still works fully.
+REM
+REM NEVER write the key in this file -- it is committed to a public
+REM repository. Put it in a file named .env in the repository root:
+REM     FINGRID_API_KEY=your-key
+REM (.env is gitignored; see .env.example), or set FINGRID_API_KEY in
+REM your environment. The script reads it from there below.
 
 REM Region config file under config\regions\<REGION>.yaml
 set "REGION=finland"
@@ -41,6 +46,13 @@ REM ===========================================================
 pushd "%~dp0.." || (echo ERROR: could not locate repo root & exit /b 1)
 echo Repo root: %CD%
 echo.
+
+REM Fingrid key: environment first, then .env in the repo root (gitignored).
+if "%FINGRID_API_KEY%"=="" if exist ".env" (
+  for /f "usebackq eol=# tokens=1,* delims==" %%A in (".env") do (
+    if /i "%%A"=="FINGRID_API_KEY" set "FINGRID_API_KEY=%%B"
+  )
+)
 
 set "FK="
 if not "%FINGRID_API_KEY%"=="" set "FK=--fingrid-key %FINGRID_API_KEY%"
