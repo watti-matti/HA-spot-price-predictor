@@ -298,6 +298,9 @@ class _Transaction:
 
     def __init__(self) -> None:
         self.committed = False
+        # Set by the context manager after a rollback; None when the
+        # transaction committed and so nothing was restored.
+        self.restore_verified: bool | None = None
 
     def commit(self) -> None:
         self.committed = True
@@ -331,6 +334,21 @@ def _artifacts_transaction(data_dir: Path, names: Iterable[str]):
                 p = data_dir / n
                 if p.exists():
                     p.unlink()
+            # Verify rather than assume. Callers report
+            # `shipped_artifacts_untouched` to the operator, and a
+            # rollback that silently half-worked would be worse than no
+            # rollback at all — it would be an untrue reassurance.
+            bad = [n for n, blob in saved.items()
+                   if (data_dir / n).read_bytes() != blob]
+            bad += [n for n in absent if (data_dir / n).exists()]
+            tx.restore_verified = not bad
+            if bad:
+                raise RuntimeError(
+                    "artifact rollback FAILED to restore: "
+                    f"{', '.join(sorted(bad))} in {data_dir}. The shipped "
+                    "artifacts may be modified — check `git status` and "
+                    "restore with `git checkout -- <path>` before using "
+                    "the model.")
 
 
 @contextlib.contextmanager
@@ -416,32 +434,37 @@ def retrain_all(
                 src = data_dir / name
                 if src.exists():
                     shutil.copy2(src, candidate_dir / name)
-            # Never commit in candidate mode: the shipped artifacts are
+            # Never commit in candidate mode: the shipped artifacts get
             # restored and the candidate lives only under candidate_dir.
-            res["candidate_dir"] = str(candidate_dir)
-            res["shipped_artifacts_untouched"] = True
-            return res
-
-        # All-or-nothing. A SKIPPED layer (e.g. solar without a Fingrid
-        # key) is not a failure and must not discard the layers that
-        # did refit, so key the decision on errors only — unlike `ok`,
-        # which also reports False for a skip.
-        failed = sorted(l for l, r in res["results"].items() if "error" in r)
-        if failed and not allow_partial:
-            res["rolled_back"] = True
-            res["rolled_back_because"] = failed
-            res["artifacts_installed"] = []
-            _LOGGER.error(
-                "retrain rolled back: %s failed, so the shipped artifacts "
-                "were restored. Nothing was installed.", ", ".join(failed))
         else:
-            tx.commit()
-            res["rolled_back"] = False
-            res["artifacts_installed"] = names
-            if failed:
-                _LOGGER.warning(
-                    "retrain kept partial results (--allow-partial): %s "
-                    "failed", ", ".join(failed))
+            # All-or-nothing. A SKIPPED layer (e.g. solar without a
+            # Fingrid key) is not a failure and must not discard the
+            # layers that did refit, so key the decision on errors only
+            # — unlike `ok`, which also reports False for a skip.
+            failed = sorted(l for l, r in res["results"].items()
+                            if "error" in r)
+            if failed and not allow_partial:
+                res["rolled_back"] = True
+                res["rolled_back_because"] = failed
+                res["artifacts_installed"] = []
+                _LOGGER.error(
+                    "retrain rolled back: %s failed, so the shipped "
+                    "artifacts were restored. Nothing was installed.",
+                    ", ".join(failed))
+            else:
+                tx.commit()
+                res["rolled_back"] = False
+                res["artifacts_installed"] = names
+                if failed:
+                    _LOGGER.warning(
+                        "retrain kept partial results (--allow-partial): %s "
+                        "failed", ", ".join(failed))
+
+    # Outside the `with`, so the transaction has finished restoring and
+    # verifying. Report what was checked, not what was intended.
+    if candidate_dir is not None:
+        res["candidate_dir"] = str(candidate_dir)
+        res["shipped_artifacts_untouched"] = bool(tx.restore_verified)
     return res
 
 
