@@ -766,6 +766,65 @@ independent PV→price signal. The model is now *harmless* with respect to
 PV but not *responsive* to it. **D1 is the route to responsiveness** —
 PV enters as supply inside net load, at every horizon.
 
+#### Re-confirmed 2026-10-13 on fresh data — `studies/exp_capacity_scaling.py`
+
+Re-measured after the 2026 summer build-out took PV from 1575 to 2074 MW
+(+32 % in five months), on the production-equivalent origin-based
+protocol (06:00 UTC, 170 h, monthly walk-forward refit), eval 2025-07 …
+2026-10, 78,200 scored hours per variant:
+
+```
+variant        MAE    bias  summer  winter     p90+  vs BASE
+BASE         26.93   -1.80   21.95   34.94    68.11   +0.00%
+CAP_PV       27.01   -3.07   21.89   35.49    69.47   -0.30%
+CAP_WIND     26.82   -7.97   21.41   37.73    75.15   +0.43%
+CAP_BOTH     26.97   -8.73   21.58   38.09    76.07   -0.14%
+CAP_NORM     26.97   -8.73   21.58   38.08    76.07   -0.15%
+```
+
+No accuracy gain, and it damages the segments that matter: monthly bias
+−1.80 → −8.73, winter +9 %, and the top price decile (≥127 EUR/MWh)
+**+12 % worse**. `CAP_NORM` divides by mean capacity so the column stays
+on BASE's scale — needed because scaling by GW inflates the wind column
+~9× against a fixed ridge `alpha`, which alone shrinks the coefficient.
+It is identical to `CAP_BOTH` to two decimals, so none of the
+degradation is a regularisation artifact.
+
+**The stationarity argument is refuted, not merely unhelpful.** The case
+for scaling was that a per-GW coefficient should be stable where a raw
+one drifts with the fleet. Relative range of the per-year coefficient,
+2023–2026:
+
+```
+            wind   solar
+BASE        0.31    1.13
+CAP_BOTH    0.44    0.86
+```
+
+Scaling makes the wind coefficient *less* stable. So fleet size is not
+what drives the year-to-year variation — regime and merit-order position
+are, and those do not scale with installed MW.
+
+**Why it actively hurts, which is the useful part.** The bias goes
+sharply negative precisely because capacity grew: the scaled wind term
+subtracts more for the same weather in recent years, so the model
+under-predicts. That means the market's price response per *installed*
+GW has been **falling** as the fleet grew — the merit-order curve
+flattens as zero-marginal-cost capacity is added, so marginal impact per
+MW declines. Capacity scaling assumes impact ∝ capacity and therefore
+over-states recent years by construction.
+
+**The distinction to keep.** Capacity belongs in the *generation*
+sub-model (Stage A), where `MW = capacity × capacity_factor(weather)` is
+physics — and the solar sub-model's pinned `capacity_ref_mw` is a real
+bug there (1484.7 against an actual 2073.8; note that sub-model is also
+still dead code, imported at `pipeline.py` and never called). It does
+**not** belong in the *price* coefficient (Stage B), where the response
+per MW is itself a function of how much capacity exists.
+
+Any plan or note claiming "+2.4 % from capacity-scaled wind/PV proxies"
+is superseded by this measurement and by the original D5 finding.
+
 ### D6 — Production behaviour is not reproduced offline
 
 The field report (weekday morning/evening peaks over-predicted in July)
