@@ -292,6 +292,46 @@ ARTIFACT_NAMES = {
 }
 
 
+class _Transaction:
+    """Handle yielded by `_artifacts_transaction`; commit to keep writes."""
+
+    def __init__(self) -> None:
+        self.committed = False
+
+    def commit(self) -> None:
+        self.committed = True
+
+
+@contextlib.contextmanager
+def _artifacts_transaction(data_dir: Path, names: Iterable[str]):
+    """All-or-nothing artifact writes.
+
+    The shipped artifacts are snapshotted on entry and restored on exit
+    unless the block calls `commit()`. This makes a batch retrain
+    transactional: `retrain_all` catches each layer's exception and
+    carries on, so without this a run that fails half-way leaves the
+    earlier layers' writes in place. That is how the 2026-10-12 run put
+    a regressed five-feature spike artifact on disk while reporting
+    `ok: false` — the caller's `|| goto :fail` blocked staging, but the
+    shipped file had already been overwritten.
+    """
+    tx = _Transaction()
+    names = list(names)
+    saved = {n: (data_dir / n).read_bytes()
+             for n in names if (data_dir / n).exists()}
+    absent = [n for n in names if n not in saved]
+    try:
+        yield tx
+    finally:
+        if not tx.committed:
+            for n, blob in saved.items():
+                (data_dir / n).write_bytes(blob)
+            for n in absent:
+                p = data_dir / n
+                if p.exists():
+                    p.unlink()
+
+
 @contextlib.contextmanager
 def _artifacts_preserved(data_dir: Path, names: Iterable[str]):
     """Restore the shipped artifacts on exit, whatever happened inside.
@@ -328,6 +368,7 @@ def retrain_all(
     layers: Iterable[str] | None = None,
     fingrid_api_key: str | None = None,
     candidate_dir: Path | None = None,
+    allow_partial: bool = False,
 ) -> dict:
     """Refit one or more model artifacts.
 
@@ -340,6 +381,10 @@ def retrain_all(
             Defaults to all three.
         fingrid_api_key: needed for the solar layer only. Falls back
             to `FINGRID_API_KEY` env var.
+        allow_partial: keep the artifacts written by layers that did
+            succeed even when another layer failed. Off by default: a
+            batch retrain is all-or-nothing, because a half-updated set
+            of artifacts is not a model anyone validated.
         candidate_dir: when set, the refitted artifacts are collected
             here and the shipped ones under `data_dir` are restored
             byte-for-byte. Nothing the running integration reads is
@@ -356,22 +401,47 @@ def retrain_all(
         data_dir = Path(__file__).resolve().parent / "data"
     layers = list(layers) if layers else list(ALL_LAYERS)
 
+    names = [ARTIFACT_NAMES[l] for l in layers if l in ARTIFACT_NAMES]
+
     if candidate_dir is not None:
         candidate_dir = Path(candidate_dir)
         candidate_dir.mkdir(parents=True, exist_ok=True)
-        names = [ARTIFACT_NAMES[l] for l in layers if l in ARTIFACT_NAMES]
-        with _artifacts_preserved(data_dir, names):
-            res = _retrain_layers(repo_root, data_dir, layers,
-                                  fingrid_api_key)
+
+    with _artifacts_transaction(data_dir, names) as tx:
+        res = _retrain_layers(repo_root, data_dir, layers, fingrid_api_key)
+
+        if candidate_dir is not None:
             for name in names:
                 src = data_dir / name
                 if src.exists():
                     shutil.copy2(src, candidate_dir / name)
-        res["candidate_dir"] = str(candidate_dir)
-        res["shipped_artifacts_untouched"] = True
-        return res
+            # Never commit in candidate mode: the shipped artifacts are
+            # restored and the candidate lives only under candidate_dir.
+            res["candidate_dir"] = str(candidate_dir)
+            res["shipped_artifacts_untouched"] = True
+            return res
 
-    return _retrain_layers(repo_root, data_dir, layers, fingrid_api_key)
+        # All-or-nothing. A SKIPPED layer (e.g. solar without a Fingrid
+        # key) is not a failure and must not discard the layers that
+        # did refit, so key the decision on errors only — unlike `ok`,
+        # which also reports False for a skip.
+        failed = sorted(l for l, r in res["results"].items() if "error" in r)
+        if failed and not allow_partial:
+            res["rolled_back"] = True
+            res["rolled_back_because"] = failed
+            res["artifacts_installed"] = []
+            _LOGGER.error(
+                "retrain rolled back: %s failed, so the shipped artifacts "
+                "were restored. Nothing was installed.", ", ".join(failed))
+        else:
+            tx.commit()
+            res["rolled_back"] = False
+            res["artifacts_installed"] = names
+            if failed:
+                _LOGGER.warning(
+                    "retrain kept partial results (--allow-partial): %s "
+                    "failed", ", ".join(failed))
+    return res
 
 
 def _retrain_layers(
@@ -430,11 +500,16 @@ def _main() -> int:
         help="Train into DIR and restore the shipped artifacts, so the "
              "running model is left untouched. Evaluate the candidate "
              "before promoting it.")
+    parser.add_argument(
+        "--allow-partial", action="store_true",
+        help="Keep artifacts from layers that succeeded even if another "
+             "layer failed. Default is all-or-nothing rollback.")
     args = parser.parse_args()
 
     result = retrain_all(layers=args.layers,
                           fingrid_api_key=args.fingrid_key,
-                          candidate_dir=args.candidate_dir)
+                          candidate_dir=args.candidate_dir,
+                          allow_partial=args.allow_partial)
     print(json.dumps(result, indent=2))
     return 0 if result["ok"] else 1
 

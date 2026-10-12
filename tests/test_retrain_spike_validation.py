@@ -149,3 +149,107 @@ def test_candidate_mode_removes_artifacts_that_did_not_exist_before(
 
     assert not created.exists(), (
         "an artifact created during a candidate run was left in data_dir")
+
+
+# ── all-or-nothing rollback ────────────────────────────────────────
+
+def _stub_layers(monkeypatch, data_dir, *, solar_raises: bool):
+    """Replace the three layer refitters with stubs that write a marker
+    artifact, so rollback can be observed without a real 2-minute fit."""
+    def _seasonal(repo_root, dd):
+        (dd / retrain.ARTIFACT_NAMES["seasonal"]).write_bytes(b'{"v":"new"}')
+        return {"layer": "seasonal"}
+
+    def _spike(repo_root, dd):
+        (dd / retrain.ARTIFACT_NAMES["spike"]).write_bytes(b'{"v":"new"}')
+        return {"layer": "spike"}
+
+    def _solar(repo_root, dd, key):
+        if solar_raises:
+            raise RuntimeError("solar sub-model: no overlapping hours")
+        (dd / retrain.ARTIFACT_NAMES["solar"]).write_bytes(b'{"v":"new"}')
+        return {"layer": "solar"}
+
+    monkeypatch.setattr(retrain, "retrain_seasonal", _seasonal)
+    monkeypatch.setattr(retrain, "retrain_spike_model", _spike)
+    monkeypatch.setattr(retrain, "retrain_solar_submodel", _solar)
+
+
+def _seed(data_dir: Path) -> dict[str, bytes]:
+    data_dir.mkdir(parents=True, exist_ok=True)
+    blobs = {}
+    for name in retrain.ARTIFACT_NAMES.values():
+        blob = f'{{"v":"shipped-{name}"}}'.encode()
+        (data_dir / name).write_bytes(blob)
+        blobs[name] = blob
+    return blobs
+
+
+def test_failed_layer_rolls_back_the_whole_run(monkeypatch, tmp_path) -> None:
+    """This is the 2026-10-12 failure: seasonal and spike refit, solar
+    blew up. Every artifact must be back to its shipped bytes."""
+    data_dir = tmp_path / "data"
+    shipped = _seed(data_dir)
+    _stub_layers(monkeypatch, data_dir, solar_raises=True)
+
+    res = retrain.retrain_all(repo_root=tmp_path, data_dir=data_dir)
+
+    assert res["ok"] is False
+    assert res["rolled_back"] is True
+    assert res["rolled_back_because"] == ["solar"]
+    assert res["artifacts_installed"] == []
+    for name, blob in shipped.items():
+        assert (data_dir / name).read_bytes() == blob, (
+            f"{name} was not rolled back after a failed run")
+
+
+def test_successful_run_commits_every_artifact(monkeypatch, tmp_path) -> None:
+    data_dir = tmp_path / "data"
+    shipped = _seed(data_dir)
+    _stub_layers(monkeypatch, data_dir, solar_raises=False)
+
+    res = retrain.retrain_all(repo_root=tmp_path, data_dir=data_dir,
+                              fingrid_api_key="x")
+
+    assert res["rolled_back"] is False
+    for name in shipped:
+        assert (data_dir / name).read_bytes() == b'{"v":"new"}', (
+            f"{name} should have been installed on a clean run")
+
+
+def test_allow_partial_keeps_what_succeeded(monkeypatch, tmp_path) -> None:
+    data_dir = tmp_path / "data"
+    shipped = _seed(data_dir)
+    _stub_layers(monkeypatch, data_dir, solar_raises=True)
+
+    res = retrain.retrain_all(repo_root=tmp_path, data_dir=data_dir,
+                              allow_partial=True)
+
+    assert res["rolled_back"] is False
+    assert (data_dir / retrain.ARTIFACT_NAMES["spike"]).read_bytes() \
+        == b'{"v":"new"}'
+    # solar never wrote, so its shipped copy must still be intact
+    assert (data_dir / retrain.ARTIFACT_NAMES["solar"]).read_bytes() \
+        == shipped[retrain.ARTIFACT_NAMES["solar"]]
+
+
+def test_skipped_layer_does_not_roll_back_the_others(
+        monkeypatch, tmp_path) -> None:
+    """Solar skips when no Fingrid key is given. `ok` reports False for a
+    skip, but a skip is not a failure and must not discard the refits
+    that did happen."""
+    data_dir = tmp_path / "data"
+    _seed(data_dir)
+
+    def _solar_skip(repo_root, dd, key):
+        return {"layer": "solar", "skipped": True, "reason": "no key"}
+
+    _stub_layers(monkeypatch, data_dir, solar_raises=False)
+    monkeypatch.setattr(retrain, "retrain_solar_submodel", _solar_skip)
+
+    res = retrain.retrain_all(repo_root=tmp_path, data_dir=data_dir)
+
+    assert res["ok"] is False          # a skip still reports not-ok
+    assert res["rolled_back"] is False  # ...but nothing is discarded
+    assert (data_dir / retrain.ARTIFACT_NAMES["seasonal"]).read_bytes() \
+        == b'{"v":"new"}'
