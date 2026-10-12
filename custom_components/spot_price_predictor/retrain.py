@@ -117,27 +117,110 @@ def retrain_seasonal(repo_root: Path, data_dir: Path) -> dict:
     }
 
 
+def pipeline_ridge_features(repo_root: Path) -> tuple[str, ...]:
+    """Read `pipeline.RIDGE_FEATURES` without importing the module.
+
+    `pipeline.py` uses package-relative imports (`from . import ...`),
+    so a bare `import pipeline` raises, and importing it as a package
+    member drags in Home Assistant — which is absent on a training PC.
+    The feature list is a module-level tuple of string literals, so the
+    source can simply be parsed. Static reading is also the safer choice
+    for a guard: it cannot be perturbed by import side effects.
+    """
+    src = (repo_root / "custom_components" / "spot_price_predictor"
+           / "pipeline.py").read_text(encoding="utf-8")
+    import ast
+
+    for node in ast.parse(src).body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if any(isinstance(t, ast.Name) and t.id == "RIDGE_FEATURES"
+               for t in node.targets):
+            return tuple(ast.literal_eval(node.value))
+    raise RuntimeError(
+        "could not find RIDGE_FEATURES in pipeline.py — the guard cannot "
+        "verify the artifact, so refusing rather than installing blind.")
+
+
+def _validate_spike_payload(meta: dict, source: Path, repo_root: Path) -> None:
+    """Refuse a spike artifact the running pipeline cannot consume.
+
+    This guard exists because of a real, silent regression. Until
+    v2.18.2 this module refitted via ``v2513_layer4_spike_model``, a
+    v2.5.13-era trainer that writes a FIVE-feature model — no neighbour
+    prices, no holiday — over its own short train window. It replaced
+    the shipped nine-feature ``v2.17.1`` artifact with no error at all;
+    the only symptom was a worse forecast. Validating the candidate
+    against the pipeline's own feature tuple turns any future
+    trainer/pipeline divergence into a loud failure here, before the
+    shipped artifact is touched.
+    """
+    # pipeline.RIDGE_FEATURES carries "intercept" in slot 0; the
+    # artifact's `ridge_features` names only the real columns, with the
+    # intercept implied as the first coefficient. Compare accordingly.
+    full = list(pipeline_ridge_features(repo_root))
+    if not full or full[0] != "intercept":
+        raise RuntimeError(
+            "pipeline.RIDGE_FEATURES no longer starts with 'intercept'; the "
+            "guard's alignment assumption is stale. Refusing to install.")
+    expected = full[1:]
+    got = list(meta.get("ridge_features") or [])
+    if got != expected:
+        raise ValueError(
+            f"spike feature mismatch in {source.name}: pipeline expects "
+            f"{len(expected)} features {expected}, trainer wrote {len(got)} "
+            f"{got}. Refusing to install."
+        )
+    coef = meta.get("ridge_coef") or []
+    if len(coef) != len(full):
+        raise ValueError(
+            f"spike coefficient mismatch in {source.name}: {len(coef)} "
+            f"coefficients for {len(expected)} features — the intercept is "
+            f"first, so {len(full)} are required."
+        )
+    if not meta.get("physics_seasonal"):
+        raise ValueError(
+            f"spike artifact {source.name} has no `physics_seasonal` block, "
+            "so the pipeline would deseasonalise the wind/solar physics "
+            "terms inconsistently with training."
+        )
+
+
 def retrain_spike_model(repo_root: Path, data_dir: Path) -> dict:
     """Refit L2 Ridge + L3 AR(1) + L4 GPD POT in one pass.
 
     Writes data/spike_model_default.json. Returns the L4 GPD POT
     diagnostics + CVaR back-test summary.
+
+    Refits with ``studies/build_fresh_spike_model.py`` — the trainer
+    that produces the shipped nine-feature ``v2.17.1/leakfree-holiday``
+    form. That script deliberately writes a CANDIDATE under output/
+    instead of overwriting the shipped artifact, so this function
+    validates the candidate and only then installs it atomically.
     """
     _ensure_repo_imports(repo_root)
-    import v2513_layer4_spike_model as l4
+    import build_fresh_spike_model as bfsm
 
     _LOGGER.info("retrain L2+L3+L4: refitting Ridge + AR(1) + GPD POT")
     old_cwd = os.getcwd()
     os.chdir(repo_root)
     try:
-        l4.main()
+        bfsm.main()
     finally:
         os.chdir(old_cwd)
 
+    candidate = repo_root / "output" / "spike_model_fresh.json"
+    if not candidate.exists():
+        raise FileNotFoundError(
+            f"spike candidate missing after refit: {candidate}")
+    meta = json.loads(candidate.read_text(encoding="utf-8"))
+    _validate_spike_payload(meta, candidate, repo_root)
+
     artifact = data_dir / "spike_model_default.json"
-    if not artifact.exists():
-        raise FileNotFoundError(f"spike artifact missing after refit: {artifact}")
-    meta = json.loads(artifact.read_text(encoding="utf-8"))
+    _atomic_write_json(artifact, meta)
+    _LOGGER.info("retrain L2+L3+L4: installed %d-feature %s, window %s",
+                 len(meta.get("ridge_features") or []),
+                 meta.get("version"), meta.get("train_window"))
     return {
         "layer": "spike",
         "artifact": str(artifact),

@@ -189,7 +189,12 @@ def hourly_mean_mw(rows: list[dict]) -> pd.Series:
         except (KeyError, TypeError, ValueError):
             continue
     if not bucket:
-        return pd.Series(dtype=float)
+        # Keep the index tz-aware even when empty: a naive empty index
+        # concatenated with the tz-aware cloud series silently yields an
+        # empty join rather than raising, which is how a single failed
+        # Fingrid fetch used to look like "no overlapping hours".
+        return pd.Series(dtype=float,
+                         index=pd.DatetimeIndex([], tz="UTC"))
     idx = pd.DatetimeIndex(sorted(bucket.keys()), tz="UTC")
     vals = [sum(bucket[t]) / len(bucket[t]) for t in idx]
     return pd.Series(vals, index=idx, dtype=float)
@@ -444,6 +449,27 @@ def main() -> None:
     # Align all three to common hourly UTC index
     df = pd.concat([s_prod, s_cap, s_cloud], axis=1).dropna()
     print(f"      aligned rows: {len(df):,}", flush=True)
+
+    # An empty frame used to surface 30 lines later as
+    # `IndexError: index 0 is out of bounds` from the 70/30 split, which
+    # says nothing about which of the three inputs went missing. Name the
+    # culprit instead: each series is fetched from a different service,
+    # so the distinction is the whole diagnosis.
+    if df.empty:
+        parts = {"Fingrid 248 production": s_prod,
+                 "Fingrid 267 capacity": s_cap,
+                 "Open-Meteo cloud_cover": s_cloud}
+        detail = ", ".join(
+            f"{name}: {len(s):,} rows"
+            + (f" [{s.index.min()} .. {s.index.max()}]" if len(s) else " EMPTY")
+            for name, s in parts.items())
+        empty = [n for n, s in parts.items() if not len(s)]
+        raise RuntimeError(
+            "solar sub-model: no overlapping hours after aligning the three "
+            f"inputs over {WINDOW_START.date()} -> {WINDOW_END.date()}. "
+            + (f"Empty input(s): {', '.join(empty)}. " if empty else
+               "All three returned rows, so their indices do not overlap. ")
+            + detail)
 
     print("[4/4] Computing clear-sky baselines + fitting modulators...",
           flush=True)
