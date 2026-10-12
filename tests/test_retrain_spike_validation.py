@@ -97,3 +97,55 @@ def test_retrain_uses_the_nine_feature_trainer() -> None:
     import build_fresh_spike_model as bfsm
     assert list(bfsm.FEATS) == list(ARTIFACT_FEATURES), (
         "the trainer's FEATS and pipeline.RIDGE_FEATURES have diverged")
+
+
+# ── candidate mode: production must be untouchable ─────────────────
+
+def test_candidate_mode_restores_shipped_artifacts(tmp_path) -> None:
+    """A candidate run must leave data_dir byte-identical, even though
+    the layer trainers write straight to the shipped artifact path."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    shipped = data_dir / retrain.ARTIFACT_NAMES["spike"]
+    original = b'{"version": "shipped", "ridge_features": []}'
+    shipped.write_bytes(original)
+
+    with retrain._artifacts_preserved(data_dir, [shipped.name]):
+        shipped.write_bytes(b'{"version": "candidate-overwrote-it"}')
+        assert shipped.read_bytes() != original      # trainer did write
+
+    assert shipped.read_bytes() == original, (
+        "shipped artifact was not restored after a candidate run")
+
+
+def test_candidate_mode_restores_even_when_a_layer_raises(tmp_path) -> None:
+    """The 2026-10-12 run crashed in the solar layer AFTER the spike
+    layer had already overwritten its artifact. Restoration must happen
+    on the exception path too."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    shipped = data_dir / retrain.ARTIFACT_NAMES["seasonal"]
+    original = b'{"version": "shipped"}'
+    shipped.write_bytes(original)
+
+    with pytest.raises(RuntimeError):
+        with retrain._artifacts_preserved(data_dir, [shipped.name]):
+            shipped.write_bytes(b'{"version": "half-written"}')
+            raise RuntimeError("solar layer blew up")
+
+    assert shipped.read_bytes() == original
+
+
+def test_candidate_mode_removes_artifacts_that_did_not_exist_before(
+        tmp_path) -> None:
+    """A newly created artifact must not silently become 'shipped'."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    created = data_dir / retrain.ARTIFACT_NAMES["solar"]
+    assert not created.exists()
+
+    with retrain._artifacts_preserved(data_dir, [created.name]):
+        created.write_bytes(b'{"version": "brand new"}')
+
+    assert not created.exists(), (
+        "an artifact created during a candidate run was left in data_dir")

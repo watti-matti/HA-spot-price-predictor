@@ -28,6 +28,7 @@ helpers wrap this.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -284,11 +285,49 @@ def retrain_solar_submodel(
 # ── Orchestrator ───────────────────────────────────────────────────
 
 
+ARTIFACT_NAMES = {
+    "seasonal": "seasonal_components_default.json",
+    "spike":    "spike_model_default.json",
+    "solar":    "solar_submodel_default.json",
+}
+
+
+@contextlib.contextmanager
+def _artifacts_preserved(data_dir: Path, names: Iterable[str]):
+    """Restore the shipped artifacts on exit, whatever happened inside.
+
+    The layer trainers are study scripts that write to the shipped
+    artifact path using their own module constants, and the solar one
+    builds that path inline at two separate sites. Rather than refactor
+    three scripts to accept an output directory, snapshot the bytes and
+    put them back. That makes candidate mode non-destructive regardless
+    of where a trainer decides to write — including when it crashes
+    half-way, which is exactly how the 2026-10-12 run left a regressed
+    spike artifact in place.
+    """
+    names = list(names)
+    saved = {n: (data_dir / n).read_bytes()
+             for n in names if (data_dir / n).exists()}
+    absent = [n for n in names if n not in saved]
+    try:
+        yield
+    finally:
+        for n, blob in saved.items():
+            (data_dir / n).write_bytes(blob)
+        # A trainer may have created an artifact that did not exist
+        # before; leaving it behind would silently become "shipped".
+        for n in absent:
+            p = data_dir / n
+            if p.exists():
+                p.unlink()
+
+
 def retrain_all(
     repo_root: Path | None = None,
     data_dir: Path | None = None,
     layers: Iterable[str] | None = None,
     fingrid_api_key: str | None = None,
+    candidate_dir: Path | None = None,
 ) -> dict:
     """Refit one or more model artifacts.
 
@@ -301,6 +340,11 @@ def retrain_all(
             Defaults to all three.
         fingrid_api_key: needed for the solar layer only. Falls back
             to `FINGRID_API_KEY` env var.
+        candidate_dir: when set, the refitted artifacts are collected
+            here and the shipped ones under `data_dir` are restored
+            byte-for-byte. Nothing the running integration reads is
+            changed, so a candidate can be trained and evaluated while
+            production keeps serving the current model.
 
     Returns:
         Aggregate result dict with `started_at`, `completed_at`, and
@@ -311,6 +355,31 @@ def retrain_all(
     if data_dir is None:
         data_dir = Path(__file__).resolve().parent / "data"
     layers = list(layers) if layers else list(ALL_LAYERS)
+
+    if candidate_dir is not None:
+        candidate_dir = Path(candidate_dir)
+        candidate_dir.mkdir(parents=True, exist_ok=True)
+        names = [ARTIFACT_NAMES[l] for l in layers if l in ARTIFACT_NAMES]
+        with _artifacts_preserved(data_dir, names):
+            res = _retrain_layers(repo_root, data_dir, layers,
+                                  fingrid_api_key)
+            for name in names:
+                src = data_dir / name
+                if src.exists():
+                    shutil.copy2(src, candidate_dir / name)
+        res["candidate_dir"] = str(candidate_dir)
+        res["shipped_artifacts_untouched"] = True
+        return res
+
+    return _retrain_layers(repo_root, data_dir, layers, fingrid_api_key)
+
+
+def _retrain_layers(
+    repo_root: Path,
+    data_dir: Path,
+    layers: list[str],
+    fingrid_api_key: str | None,
+) -> dict:
 
     started = datetime.now(timezone.utc).isoformat()
     results: dict[str, Any] = {}
@@ -356,10 +425,16 @@ def _main() -> int:
                         help="Subset of layers to retrain.")
     parser.add_argument("--fingrid-key", default=None,
                         help="Fingrid API key (for solar layer).")
+    parser.add_argument(
+        "--candidate-dir", default=None, metavar="DIR",
+        help="Train into DIR and restore the shipped artifacts, so the "
+             "running model is left untouched. Evaluate the candidate "
+             "before promoting it.")
     args = parser.parse_args()
 
     result = retrain_all(layers=args.layers,
-                          fingrid_api_key=args.fingrid_key)
+                          fingrid_api_key=args.fingrid_key,
+                          candidate_dir=args.candidate_dir)
     print(json.dumps(result, indent=2))
     return 0 if result["ok"] else 1
 
