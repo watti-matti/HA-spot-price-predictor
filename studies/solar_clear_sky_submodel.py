@@ -427,70 +427,42 @@ def _load_dotenv(path: Path) -> None:
             os.environ[key] = val
 
 
-def load_pv_from_store() -> tuple[pd.Series, pd.Series]:
-    """Read the national PV series and installed capacity from the data store.
-
-    Returns `(actual_mw, capacity_mw)`, both hourly and UTC-indexed.
-
-    This used to fetch Fingrid 248 and 267 live over the whole four-year
-    window on every run. Both series are already collected by
-    `src/data_store.py` into fi_grid_data.parquet — 247
-    (`solar_forecast_mw`) and 267 (`solar_capacity_mw`) — so the live
-    fetch was a slow network dependency on data we had on disk, and the
-    only thing in this script that needed a Fingrid API key.
-
-    NOTE ON THE TARGET. 248 and 247 are both Fingrid *forecast* series,
-    not metering: distributed PV is not TSO-metered anywhere in Finland,
-    so every national figure is modelled. 248 is re-estimated through
-    the day; 247 is the day-ahead forecast. For a sub-model that feeds
-    the PRICE path, 247 is the better target on principle, not merely
-    the convenient one — the market bid against the published day-ahead
-    number, so calibrating to it reproduces what price-setters acted on.
-    Calibrating to a later, more accurate estimate would fit the model
-    to information no bidder had. The fitted `gain` and `capacity_ref_mw`
-    are specific to this target and are not comparable with artifacts
-    built against 248.
-    """
-    store = REPO / "data_store" / "fi_grid_data.parquet"
-    if not store.exists():
-        raise FileNotFoundError(
-            f"{store} not found — run `python -m src.data_store update` "
-            "first; this sub-model now reads the cached grid series "
-            "rather than fetching Fingrid directly.")
-    g = pd.read_parquet(store)
-    missing = [c for c in ("solar_forecast_mw", "solar_capacity_mw")
-               if c not in g.columns]
-    if missing:
-        raise KeyError(
-            f"{store} lacks {missing}. Those columns need a Fingrid API key "
-            "at data-store update time: set FINGRID_API_KEY and re-run "
-            "`python -m src.data_store update`.")
-
-    g = g.loc[(g.index >= WINDOW_START) & (g.index <= WINDOW_END)]
-    prod = g["solar_forecast_mw"].astype(float).rename("actual_mw").dropna()
-    # Capacity is a slow step series; carry it across any reporting gaps.
-    cap = (g["solar_capacity_mw"].astype(float).rename("capacity_mw")
-           .reindex(prod.index).ffill().bfill())
-    return prod, cap
-
-
 def main() -> None:
+    _load_dotenv(REPO / ".env")
+    api_key = os.environ.get("FINGRID_API_KEY", "").strip()
+    if not api_key:
+        print("ERROR: FINGRID_API_KEY not found.")
+        print("       Either export it in your shell:")
+        print("         export FINGRID_API_KEY=your_key_here   (bash/zsh)")
+        print("         $env:FINGRID_API_KEY = 'your_key_here' (PowerShell)")
+        print("       Or store it in .env at the repo root (gitignored):")
+        print("         echo 'FINGRID_API_KEY=your_key_here' >> .env")
+        print("       Free instant key at https://developer-data.fingrid.fi/")
+        sys.exit(2)
+
     with open(REGION_YAML) as f:
         region = yaml.safe_load(f)
     locations = region["weather_source"]["locations"]
     print(f"window: {WINDOW_START.date()} -> {WINDOW_END.date()}", flush=True)
 
-    print("[1/4] Reading national PV (Fingrid 247) from the data store...",
-          flush=True)
-    s_prod, s_cap = load_pv_from_store()
-    print(f"      {len(s_prod):,} hours, "
-          f"{s_prod.index.min().date()} .. {s_prod.index.max().date()}  "
-          f"peak {s_prod.max():.0f} MW", flush=True)
+    print("[1/4] Fetching Fingrid 248 (solar production)...", flush=True)
+    raw_prod = fetch_fingrid(DATASET_SOLAR_PRODUCTION, WINDOW_START,
+                             WINDOW_END, api_key)
+    s_prod = hourly_mean_mw(raw_prod).rename("actual_mw")
 
-    print("[2/4] Installed capacity (Fingrid 267) from the data store...",
-          flush=True)
-    print(f"      capacity {s_cap.min():.0f} -> {s_cap.max():.0f} MW",
-          flush=True)
+    print("[2/4] Fetching Fingrid 267 (capacity)...", flush=True)
+    raw_cap = fetch_fingrid(DATASET_SOLAR_CAPACITY, WINDOW_START,
+                            WINDOW_END, api_key)
+    s_cap = hourly_mean_mw(raw_cap).rename("capacity_mw")
+    # Forward-fill capacity (slow-changing reference series)
+    s_cap = s_cap.reindex(s_prod.index).ffill().bfill()
+
+    with open(REGION_YAML) as f:
+        region = yaml.safe_load(f)
+    locations = region["weather_source"]["locations"]
+    print(f"window: {WINDOW_START.date()} -> {WINDOW_END.date()}", flush=True)
+
+
 
     print("[3/4] Fetching Open-Meteo cloud_cover (7 weighted sites)...",
           flush=True)

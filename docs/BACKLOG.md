@@ -817,7 +817,7 @@ over-states recent years by construction.
 **The distinction to keep.** Capacity belongs in the *generation*
 sub-model (Stage A), where `MW = capacity × capacity_factor(weather)` is
 physics — and the solar sub-model's pinned `capacity_ref_mw` is a real
-bug there (1484.7 against an actual 2073.8; note that sub-model is also
+bug there (1367.2 against an actual 2073.8; note that sub-model is also
 still dead code, imported at `pipeline.py` and never called). It does
 **not** belong in the *price* coefficient (Stage B), where the response
 per MW is itself a function of how much capacity exists.

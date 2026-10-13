@@ -241,26 +241,25 @@ def retrain_solar_submodel(
 ) -> dict:
     """Refit the v2.5.3 clear-sky × cloudiness solar sub-model.
 
-    No Fingrid API key is needed. The sub-model used to fetch datasets
-    248 and 267 live on every run; it now reads the national PV series
-    (247) and installed capacity (267) from the cached data store, so
-    the only network call left is Open-Meteo cloud cover, which is
-    unauthenticated. `fingrid_api_key` is accepted and exported for
-    backward compatibility but is no longer required.
-
-    The data store itself still needs a key to populate those columns —
-    `python -m src.data_store update` — and `load_pv_from_store` raises
-    with that instruction if they are absent.
+    Requires Fingrid API key (dataset 248 = FI solar generation).
+    If `fingrid_api_key` is None, looks for `FINGRID_API_KEY` env var
+    or skips the refit and returns a skip marker.
     """
     if not fingrid_api_key:
         fingrid_api_key = os.environ.get("FINGRID_API_KEY", "").strip()
+    if not fingrid_api_key:
+        _LOGGER.warning("retrain solar: no Fingrid API key — skipping")
+        return {
+            "layer": "solar",
+            "skipped": True,
+            "reason": "no FINGRID_API_KEY provided",
+        }
 
     _ensure_repo_imports(repo_root)
     import solar_clear_sky_submodel as scsm
 
     _LOGGER.info("retrain solar: refitting clear-sky × cloudiness sub-model")
-    if fingrid_api_key:
-        os.environ["FINGRID_API_KEY"] = fingrid_api_key
+    os.environ["FINGRID_API_KEY"] = fingrid_api_key
     old_cwd = os.getcwd()
     os.chdir(repo_root)
     try:

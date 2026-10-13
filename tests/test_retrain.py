@@ -75,34 +75,21 @@ def test_retrain_all_unknown_layer_returns_error(tmp_path: Path) -> None:
     assert result["ok"] is False
 
 
-def test_retrain_solar_no_longer_requires_a_fingrid_key(tmp_path: Path) -> None:
-    """The solar layer used to skip without a Fingrid key, because it
-    fetched dataset 248 live. It now reads the national PV series from
-    the cached data store (247), so no key is needed and the layer must
-    ATTEMPT the refit rather than skip.
+def test_retrain_all_skips_solar_when_no_key(tmp_path: Path) -> None:
+    """Solar layer must skip cleanly when no Fingrid key is provided.
 
-    Proven by making the import step raise a sentinel: reaching it at
-    all means the key gate is gone. The refit must NOT actually run —
-    `solar_clear_sky_submodel.main()` resolves its own paths from the
-    real repo and would overwrite the shipped artifact as a test side
-    effect (it did, before this was pinned down).
+    The sub-model fetches Fingrid 248 directly, so without a key there
+    is nothing it can do. A skip (not an error) keeps the all-or-nothing
+    rollback from discarding a good seasonal and spike refit.
     """
     import os
     saved = os.environ.pop("FINGRID_API_KEY", None)
-    sentinel = RuntimeError("reached the import step")
-
-    def _boom(_repo_root):
-        raise sentinel
-
-    orig = retrain._ensure_repo_imports
-    retrain._ensure_repo_imports = _boom
     try:
-        with pytest.raises(RuntimeError) as got:
-            retrain.retrain_solar_submodel(
-                repo_root=tmp_path, data_dir=tmp_path, fingrid_api_key=None)
-        assert got.value is sentinel, "returned early instead of refitting"
+        result = retrain.retrain_solar_submodel(
+            repo_root=tmp_path, data_dir=tmp_path, fingrid_api_key=None)
+        assert result["skipped"] is True
+        assert "no FINGRID_API_KEY" in result["reason"]
     finally:
-        retrain._ensure_repo_imports = orig
         if saved is not None:
             os.environ["FINGRID_API_KEY"] = saved
 
@@ -118,28 +105,12 @@ def test_retrain_all_records_started_and_completed(tmp_path: Path) -> None:
     assert result["started_at"] <= result["completed_at"]
 
 
-def test_keyless_solar_run_reports_the_error_not_a_skip(tmp_path: Path) -> None:
-    """Formerly this asserted a `skipped` marker. Since the layer no
-    longer needs a Fingrid key, a keyless run is a real attempt, and a
-    failure must be reported as an error so the all-or-nothing rollback
-    engages instead of being quietly tolerated.
-
-    The layer is forced to fail at the import step. Letting it reach
-    `solar_clear_sky_submodel.main()` is not an option in a test: that
-    module resolves paths from the REAL repo, not from `repo_root`, so
-    it would refit against the live data store and overwrite the
-    shipped artifact — outside this run's `tmp_path` snapshot, so the
-    rollback could not undo it. Only visible when the whole suite runs,
-    because a sibling test puts studies/ on sys.path first.
-    """
+def test_solar_skip_does_not_roll_back_the_other_layers(tmp_path: Path) -> None:
+    """`ok` reports False for a skip, but a skip is not a failure and
+    must not discard layers that did refit — otherwise a keyless run
+    would throw away a good seasonal and spike fit."""
     import os
     saved = os.environ.pop("FINGRID_API_KEY", None)
-
-    def _boom(_repo_root):
-        raise ModuleNotFoundError("no studies/ under repo_root")
-
-    orig = retrain._ensure_repo_imports
-    retrain._ensure_repo_imports = _boom
     try:
         result = retrain.retrain_all(
             layers=["solar"],
@@ -147,12 +118,9 @@ def test_keyless_solar_run_reports_the_error_not_a_skip(tmp_path: Path) -> None:
             fingrid_api_key=None,
         )
         assert result["ok"] is False
-        assert "skipped" not in result["results"]["solar"]
-        assert "error" in result["results"]["solar"]
-        assert result["rolled_back"] is True
-        assert result["rolled_back_because"] == ["solar"]
+        assert result["results"]["solar"]["skipped"] is True
+        assert result["rolled_back"] is False
     finally:
-        retrain._ensure_repo_imports = orig
         if saved is not None:
             os.environ["FINGRID_API_KEY"] = saved
 
