@@ -1,0 +1,187 @@
+{
+  "_what": "Reference point for the training baseline. The numbers below are valid ONLY for this exact fingerprint. To judge whether a new model is better, score both configs in a SINGLE harness run; never compare across runs.",
+  "fingerprint": {
+    "inference_code": "44664da11eef27ca1354c5190317adab00b96d66a5cbb2e5b4ae77a780bdab85",
+    "inference_modules": [
+      "api_client.py",
+      "bias_corrector.py",
+      "const.py",
+      "consumption_profile_loader.py",
+      "coordinator.py",
+      "dk_dtaci.py",
+      "dk_utils.py",
+      "dtaci.py",
+      "dtaci_integration.py",
+      "features.py",
+      "holidays.py",
+      "hourly_calibration.py",
+      "model.py",
+      "pipeline.py",
+      "price_floor.py",
+      "price_forecast_verifier.py",
+      "pv_aware_cvar.py",
+      "pv_cost_kernel.py",
+      "pv_estimate.py",
+      "pv_nowcast.py",
+      "seasonal_decomposition.py",
+      "solar_clear_sky.py"
+    ],
+    "shipped_artifacts": "25b3bf142ae9c3716ac1ed485aa5a72300e9f39edacd3a6a7adcf129955465c9",
+    "harness_code": "3aae015eb30efe8f1a002f6a4a4f106c1e019322e31a07869e53432484d3fb34",
+    "data_store_snapshot": "7400c845b7756a98",
+    "data_store_parquets": "c91c0a88b5b83a626934182ed0bac2d76cf4a916f5a6404c315e3c341cf21c89",
+    "weather_cache": "578c72cd49c3d5243e457186ac8a8bb0803304d4be7a48faf2088e469c96fb71",
+    "weather_cache_files": 28
+  },
+  "artifacts": {
+    "spike_model_default.json": {
+      "present": true,
+      "version": "v2.17.1/leakfree-holiday",
+      "n_features": 9,
+      "ridge_features": [
+        "Y_fi_lag168",
+        "is_workday",
+        "Y_sigmoid_wind_rho",
+        "Y_solar_effective",
+        "Y_temp",
+        "Y_se1_lag168",
+        "Y_se3_lag168",
+        "Y_ee_lag168",
+        "is_holiday"
+      ],
+      "train_window": [
+        "2023-01-08 23:00:00+00:00",
+        "2026-06-26 21:00:00+00:00"
+      ],
+      "data_store_snapshot": "c8a5feece6ecdcc3"
+    },
+    "seasonal_components_default.json": {
+      "present": true,
+      "version": "2.5.8",
+      "train_window": [
+        "2023-01-01 00:00:00+00:00",
+        "2026-07-15 04:00:00+00:00"
+      ]
+    },
+    "solar_submodel_default.json": {
+      "present": true,
+      "version": "2.5.3",
+      "train_window": [
+        "2023-01-01 00:00:00+00:00",
+        "2025-05-10 06:00:00+00:00"
+      ]
+    },
+    "model_coefs_default.json": {
+      "present": true,
+      "version": null
+    }
+  },
+  "harness": {
+    "results_sha256": "c24222544e3d398a33953bf776ab92cd18146a5b64c726ae500a07fd0581398f",
+    "snapshot_id": "7400c845b7756a98",
+    "n_eval": 11233,
+    "eval_window": [
+      "2025-07-01 00:00:00+00:00",
+      "2026-10-12 16:00:00+00:00"
+    ],
+    "price_p95": 159.5792,
+    "segments": {
+      "ALL": {
+        "PRODUCTION": {
+          "mae": 24.514497905883808,
+          "bias": -0.6490827573507372
+        },
+        "FRESH": {
+          "mae": 34.18539545465144,
+          "bias": -3.9482576021052416
+        },
+        "FRESH_CONS": {
+          "mae": 26.608302986973584,
+          "bias": -1.9505163695539054
+        },
+        "n": 11233,
+        "mean_price": 52.33950618712721
+      },
+      "WINTER Dec-Feb": {
+        "PRODUCTION": {
+          "mae": 31.971020752688553,
+          "bias": -1.6376336935430456
+        },
+        "FRESH": {
+          "mae": 44.81974294627044,
+          "bias": -19.041886094682333
+        },
+        "FRESH_CONS": {
+          "mae": 34.14166162785245,
+          "bias": -6.30980812867647
+        },
+        "n": 2160,
+        "mean_price": 95.49441712962962
+      },
+      "SUMMER May-Jul": {
+        "PRODUCTION": {
+          "mae": 19.99818402237727,
+          "bias": -4.626245117612764
+        },
+        "FRESH": {
+          "mae": 25.719855036378966,
+          "bias": -5.406939541144324
+        },
+        "FRESH_CONS": {
+          "mae": 22.175327191753656,
+          "bias": -5.21711641564593
+        },
+        "n": 2942,
+        "mean_price": 34.4195458871516
+      },
+      "midday 8-12 UTC": {
+        "PRODUCTION": {
+          "mae": 24.271183006690393,
+          "bias": 2.7720853293102694
+        },
+        "FRESH": {
+          "mae": 34.10897809915201,
+          "bias": -2.1531026730939193
+        },
+        "FRESH_CONS": {
+          "mae": 26.19215328844784,
+          "bias": 1.108586889857222
+        },
+        "n": 1875,
+        "mean_price": 53.26134186666667
+      },
+      "evening 15-19 UTC": {
+        "PRODUCTION": {
+          "mae": 32.32225736598346,
+          "bias": -5.314385473894512
+        },
+        "FRESH": {
+          "mae": 45.032720267438194,
+          "bias": -6.927523103261279
+        },
+        "FRESH_CONS": {
+          "mae": 35.212319705184065,
+          "bias": -6.721838717302307
+        },
+        "n": 1871,
+        "mean_price": 71.77612292891502
+      },
+      "tail p95 price": {
+        "PRODUCTION": {
+          "mae": 86.41814228484176,
+          "bias": -86.0592646438313
+        },
+        "FRESH": {
+          "mae": 123.08438272197498,
+          "bias": -123.04254568197835
+        },
+        "FRESH_CONS": {
+          "mae": 96.7680059241034,
+          "bias": -96.60525041739831
+        },
+        "n": 562,
+        "mean_price": 221.34491637010677
+      }
+    }
+  }
+}
