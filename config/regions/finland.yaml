@@ -219,6 +219,88 @@ grid_sources:
     resolution: "1d"
     update_interval_hours: 24
 
+  # --------------------------------------------------------------------
+  # Cross-border transfer capacity and realised flows.
+  #
+  # WHY: the model has no transmission variable at all, so a change in
+  # interconnector capacity is unrepresentable. The Aurora Line (SE1-FI)
+  # entering service shows clearly in the data — corr(FI, SE1) steps
+  # 0.343 (2025-10) -> 0.885 (2025-11) and mean |FI-SE1| falls 36.26 ->
+  # 7.04 — and a monthly walk-forward refit does NOT recover those
+  # months, so the coefficients cannot absorb it. That is a missing
+  # input, not a fitting problem.
+  #
+  # INFORMATION-SET CONSTRAINT (read before using any of these):
+  #
+  #   * The DAY-AHEAD capacity series, which would be the correct
+  #     market-available regressor, were DISCONTINUED for FI<->SE after
+  #     2024-10-29 (datasets 24/25/26/27 and planned 142-145). They do
+  #     not cover the 2025-2026 window at all.
+  #   * The INTRADAY capacity series below are active, but Fingrid
+  #     defines them as "free capacity after day-ahead market" — a
+  #     POST-AUCTION quantity. Used at the same hour they would leak the
+  #     target, exactly like the contemporaneous neighbour prices fixed
+  #     in v2.17.0. They must be LAGGED.
+  #   * The flow series are REALISED measurements, so likewise lagged.
+  #
+  # Lagging costs little here, unlike for prices. Transfer capacity is a
+  # step function that changes on commissioning or planned outage and
+  # then holds, so a 168 h lag preserves the regime signal almost
+  # intact — whereas for neighbour prices the same lag collapses
+  # correlation from 0.785 to 0.39.
+  #
+  # Pre-2023-06-13 the flow series are hourly, 15-minute after; the
+  # store resamples to hourly means either way.
+  # --------------------------------------------------------------------
+  - name: "fingrid_ntc_se1_fi"
+    env_key: "FINGRID_API_KEY"
+    url: "https://data.fingrid.fi/api/datasets/38/data"
+    feature_name: "ntc_se1_fi_mw"      # intraday capacity SE1 -> FI
+    max_value: 1
+  - name: "fingrid_ntc_fi_se1"
+    env_key: "FINGRID_API_KEY"
+    url: "https://data.fingrid.fi/api/datasets/44/data"
+    feature_name: "ntc_fi_se1_mw"      # intraday capacity FI -> SE1
+    max_value: 1
+  - name: "fingrid_ntc_se3_fi"
+    env_key: "FINGRID_API_KEY"
+    url: "https://data.fingrid.fi/api/datasets/39/data"
+    feature_name: "ntc_se3_fi_mw"      # intraday capacity SE3 -> FI
+    max_value: 1
+  - name: "fingrid_ntc_fi_se3"
+    env_key: "FINGRID_API_KEY"
+    url: "https://data.fingrid.fi/api/datasets/45/data"
+    feature_name: "ntc_fi_se3_mw"      # intraday capacity FI -> SE3
+    max_value: 1
+  # FI<->EE day-ahead capacity IS still published (112/115), so these are
+  # the only market-available-at-gate-closure capacity series we have.
+  - name: "fingrid_ntc_ee_fi_da"
+    env_key: "FINGRID_API_KEY"
+    url: "https://data.fingrid.fi/api/datasets/112/data"
+    feature_name: "ntc_ee_fi_da_mw"
+    max_value: 1
+  - name: "fingrid_ntc_fi_ee_da"
+    env_key: "FINGRID_API_KEY"
+    url: "https://data.fingrid.fi/api/datasets/115/data"
+    feature_name: "ntc_fi_ee_da_mw"
+    max_value: 1
+  # Realised flows: positive = export from Finland, negative = import.
+  - name: "fingrid_flow_fi_se1"
+    env_key: "FINGRID_API_KEY"
+    url: "https://data.fingrid.fi/api/datasets/60/data"
+    feature_name: "flow_fi_se1_mw"     # FI <-> Northern Sweden
+    max_value: 1
+  - name: "fingrid_flow_fi_se3"
+    env_key: "FINGRID_API_KEY"
+    url: "https://data.fingrid.fi/api/datasets/61/data"
+    feature_name: "flow_fi_se3_mw"     # FI <-> Central Sweden
+    max_value: 1
+  - name: "fingrid_flow_fi_ee"
+    env_key: "FINGRID_API_KEY"
+    url: "https://data.fingrid.fi/api/datasets/55/data"
+    feature_name: "flow_fi_ee_mw"      # FI <-> Estonia
+    max_value: 1
+
 # ============================================================================
 # Demand modeling parameters
 # ============================================================================

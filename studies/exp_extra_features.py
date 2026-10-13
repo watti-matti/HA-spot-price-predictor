@@ -94,10 +94,54 @@ SOLAR_ARTIFACT = json.loads(
 # ── Data assembly ────────────────────────────────────────────────────
 
 
+# The grid columns the shared analysis frame is built from. This is an
+# explicit WHITELIST, not `df.columns`, and that matters:
+# `build_dataframe` intersects every input's index and then `dropna()`s,
+# so one column with shorter or gappier history silently truncates the
+# WHOLE frame for every study. That has already happened once — a stale
+# grid snapshot cut the frame to 2026-06-26 and quietly invalidated a
+# batch of results.
+#
+# Adding a Fingrid dataset to config/regions/finland.yaml therefore does
+# NOT change this frame. New columns are opt-in through
+# `load_grid_extra()`, which reindexes onto a caller-supplied index
+# instead of constraining it.
+GRID_COLUMNS = (
+    "nuclear_mw", "consumption_mw", "wind_forecast_mw",
+    "solar_forecast_mw", "solar_capacity_mw", "wind_capacity_mw",
+)
+
+
 def load_grid() -> dict[str, pd.Series]:
     """Fingrid streams (nuclear_mw is already normalised to [0, 1])."""
     df = pd.read_parquet(OUTPUT_DIR / "fi_grid_data.parquet")
-    return {col: df[col] for col in df.columns}
+    missing = [c for c in GRID_COLUMNS if c not in df.columns]
+    if missing:
+        raise KeyError(
+            f"fi_grid_data.parquet lacks {missing}. Re-run "
+            "`python -m src.data_store update` with FINGRID_API_KEY set.")
+    return {col: df[col] for col in GRID_COLUMNS}
+
+
+def load_grid_extra(names: list[str], index: pd.DatetimeIndex
+                    ) -> dict[str, pd.Series]:
+    """Opt-in loader for grid columns outside `GRID_COLUMNS`.
+
+    Reindexes onto `index` rather than intersecting with it, so a series
+    with a shorter history yields NaN for the uncovered span instead of
+    shortening the caller's frame. The caller decides what to do with
+    those NaNs — which is the right place for that decision, since a
+    cross-border capacity series that only starts in 2025 is still
+    usable for a 2025-2026 study.
+    """
+    df = pd.read_parquet(OUTPUT_DIR / "fi_grid_data.parquet")
+    missing = [n for n in names if n not in df.columns]
+    if missing:
+        raise KeyError(
+            f"fi_grid_data.parquet lacks {missing}. These come from the "
+            "cross-border entries in config/regions/finland.yaml — re-run "
+            "`python -m src.data_store update` with FINGRID_API_KEY set.")
+    return {n: df[n].reindex(index) for n in names}
 
 
 def build_dataframe() -> pd.DataFrame:

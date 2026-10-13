@@ -27,7 +27,7 @@
       "solar_clear_sky.py"
     ],
     "shipped_artifacts": "25b3bf142ae9c3716ac1ed485aa5a72300e9f39edacd3a6a7adcf129955465c9",
-    "harness_code": "3aae015eb30efe8f1a002f6a4a4f106c1e019322e31a07869e53432484d3fb34",
+    "harness_code": "61f9e297e05eca48b69b6bc20a89fbe838c27c807721f10135ef01173a1292c6",
     "data_store_snapshot": "7400c845b7756a98",
     "data_store_parquets": "c91c0a88b5b83a626934182ed0bac2d76cf4a916f5a6404c315e3c341cf21c89",
     "weather_cache": "578c72cd49c3d5243e457186ac8a8bb0803304d4be7a48faf2088e469c96fb71",
