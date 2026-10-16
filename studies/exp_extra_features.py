@@ -112,6 +112,22 @@ GRID_COLUMNS = (
 )
 
 
+# Reporting gaps are filled according to what the series IS, because
+# `build_dataframe` inner-joins every input and then `dropna()`s — so one
+# NaN hour in one column deletes that hour for every study. Measured on
+# the 2023-01 onward window, 207 hours were being discarded this way,
+# 125 of them for `solar_capacity_mw` alone.
+#
+# Installed capacity is a slow STEP series: a reporting gap carries no
+# missing information, so carrying the last value forward is correct and
+# dropping the hour is not. Nuclear and consumption get short-gap
+# interpolation only (longest observed runs 15 h and 24 h). The Fingrid
+# forecast series have no gaps and are left untouched.
+_STEP_FILL = ("solar_capacity_mw", "wind_capacity_mw")
+_INTERP_FILL = ("nuclear_mw", "consumption_mw")
+_INTERP_LIMIT = 3
+
+
 def load_grid() -> dict[str, pd.Series]:
     """Fingrid streams (nuclear_mw is already normalised to [0, 1])."""
     df = pd.read_parquet(OUTPUT_DIR / "fi_grid_data.parquet")
@@ -120,7 +136,15 @@ def load_grid() -> dict[str, pd.Series]:
         raise KeyError(
             f"fi_grid_data.parquet lacks {missing}. Re-run "
             "`python -m src.data_store update` with FINGRID_API_KEY set.")
-    return {col: df[col] for col in GRID_COLUMNS}
+    out = {}
+    for col in GRID_COLUMNS:
+        s = df[col]
+        if col in _STEP_FILL:
+            s = s.ffill().bfill()
+        elif col in _INTERP_FILL:
+            s = s.interpolate(limit=_INTERP_LIMIT)
+        out[col] = s
+    return out
 
 
 def load_grid_extra(names: list[str], index: pd.DatetimeIndex

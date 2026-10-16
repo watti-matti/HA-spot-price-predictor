@@ -4,9 +4,9 @@
       "file": "fi_prices.parquet",
       "source": "Sahkotin FI spot price",
       "rows": 35040,
-      "start": "2022-10-13 18:00:00+00:00",
-      "end": "2026-10-12 17:00:00+00:00",
-      "content_sha256": "d6aa66a4347c129b",
+      "start": "2022-10-17 16:00:00+00:00",
+      "end": "2026-10-16 15:00:00+00:00",
+      "content_sha256": "82cf6a5e0134cbff",
       "columns": [
         "price_eur_mwh"
       ]
@@ -14,10 +14,10 @@
     "weather": {
       "file": "fi_weather.parquet",
       "source": "Open-Meteo historical-forecast (7 FI sites, weighted)",
-      "rows": 35046,
-      "start": "2022-10-13 18:00:00+00:00",
-      "end": "2026-10-12 23:00:00+00:00",
-      "content_sha256": "4216c44858fd58d9",
+      "rows": 35048,
+      "start": "2022-10-17 16:00:00+00:00",
+      "end": "2026-10-16 23:00:00+00:00",
+      "content_sha256": "abc2cdfe3785c772",
       "columns": [
         "wind_speed_weighted",
         "solar_irradiance_weighted",
@@ -27,10 +27,10 @@
     "neighbor": {
       "file": "fi_neighbor_prices.parquet",
       "source": "elprisetjustnu SE1/SE3 + Elering EE",
-      "rows": 62190,
-      "start": "2022-10-13 18:00:00+00:00",
-      "end": "2026-10-12 23:00:00+00:00",
-      "content_sha256": "837fdc13f3f60c7f",
+      "rows": 62480,
+      "start": "2022-10-17 16:00:00+00:00",
+      "end": "2026-10-16 23:00:00+00:00",
+      "content_sha256": "0e64d36b82b720a2",
       "columns": [
         "se1",
         "se3",
@@ -41,24 +41,36 @@
       "file": "fi_grid_data.parquet",
       "source": "Fingrid 188/165/246/247/267",
       "rows": 35040,
-      "start": "2022-10-13 18:00:00+00:00",
-      "end": "2026-10-12 17:00:00+00:00",
-      "content_sha256": "8626702f42dcf4f3",
+      "start": "2022-10-17 16:00:00+00:00",
+      "end": "2026-10-16 15:00:00+00:00",
+      "content_sha256": "69e7e979fe859962",
       "columns": [
         "nuclear_mw",
         "consumption_mw",
         "wind_forecast_mw",
         "solar_forecast_mw",
         "solar_capacity_mw",
-        "wind_capacity_mw"
+        "wind_capacity_mw",
+        "ntc_se1_fi_mw",
+        "ntc_fi_se1_mw",
+        "ntc_se3_fi_mw",
+        "ntc_fi_se3_mw",
+        "ntc_ee_fi_da_mw",
+        "ntc_fi_ee_da_mw",
+        "flow_fi_se1_mw",
+        "flow_fi_se3_mw",
+        "flow_fi_ee_mw",
+        "wind_actual_mw",
+        "consumption_actual_mw",
+        "flow_fi_no_mw"
       ]
     }
   },
-  "snapshot_id": "7400c845b7756a98",
-  "updated_at": "2026-10-12T18:00:00+00:00",
+  "snapshot_id": "22a27347590b74d6",
+  "updated_at": "2026-10-16T16:00:00+00:00",
   "window": {
-    "start": "2022-10-13T18:00:00+00:00",
-    "end": "2026-10-12T18:00:00+00:00",
+    "start": "2022-10-17T16:00:00+00:00",
+    "end": "2026-10-16T16:00:00+00:00",
     "years": 4
   }
 }

@@ -301,6 +301,43 @@ grid_sources:
     feature_name: "flow_fi_ee_mw"      # FI <-> Estonia
     max_value: 1
 
+  # --------------------------------------------------------------------
+  # REALISED series. Everything above for wind/solar/consumption is a
+  # Fingrid day-ahead FORECAST, which is the right regressor for a price
+  # model (the market bid against it). These realised counterparts are
+  # for a different question: how good is Fingrid's own forecast?
+  #
+  # Without them, a Stage-A sub-model miss cannot be attributed to our
+  # physics versus their forecast error — it is a blank row in the error
+  # budget. They must NOT be used as price-model inputs; realised values
+  # were not known at gate closure.
+  #
+  # NOTE: there is no realised national SOLAR series. Fingrid publishes
+  # only forecasts (247, 248) and installed capacity (267) — distributed
+  # PV is not TSO-metered, so every national figure is modelled. That
+  # gap cannot be closed from this API.
+  #
+  # 15-minute from 2023-06-13, hourly before; the store resamples to
+  # hourly means either way, as the flow series already do.
+  # --------------------------------------------------------------------
+  - name: "fingrid_wind_actual"
+    env_key: "FINGRID_API_KEY"
+    url: "https://data.fingrid.fi/api/datasets/75/data"
+    feature_name: "wind_actual_mw"     # realised, vs forecast 246
+    max_value: 1
+  - name: "fingrid_consumption_actual"
+    env_key: "FINGRID_API_KEY"
+    url: "https://data.fingrid.fi/api/datasets/124/data"
+    feature_name: "consumption_actual_mw"   # realised, vs forecast 165
+    max_value: 1
+  # Finland-Norway: the one border with no data at all. Positive =
+  # export from Finland, negative = import.
+  - name: "fingrid_flow_fi_no"
+    env_key: "FINGRID_API_KEY"
+    url: "https://data.fingrid.fi/api/datasets/57/data"
+    feature_name: "flow_fi_no_mw"
+    max_value: 1
+
 # ============================================================================
 # Demand modeling parameters
 # ============================================================================

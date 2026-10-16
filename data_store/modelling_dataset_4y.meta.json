@@ -1,0 +1,359 @@
+{
+  "rows": 35040,
+  "columns": 59,
+  "start": "2022-10-17 16:00:00+00:00",
+  "end": "2026-10-16 15:00:00+00:00",
+  "causality_counts": {
+    "target": 1,
+    "ex-ante": 42,
+    "ex-post": 14,
+    "unclassified": 0
+  },
+  "target_column": "fi_price_eur_mwh",
+  "feature_columns": [
+    "wind_speed_weighted",
+    "solar_irradiance_weighted",
+    "temperature_weighted",
+    "cloud_cover__Helsinki___Uusimaa",
+    "cloud_cover__Ii-Simo,_N._Ostrobothnia_coast",
+    "cloud_cover__Joroinen,_Eastern_Finland",
+    "cloud_cover__Kolari-Muonio_fells,_Lapland",
+    "cloud_cover__Lapua___S._Ostrobothnia",
+    "cloud_cover__Raahe_coast_(Kalajoki-Raahe)",
+    "cloud_cover__Rauma___SW_Satakunta",
+    "global_tilted_irradiance_instant__Helsinki___Uusimaa",
+    "global_tilted_irradiance_instant__Ii-Simo,_N._Ostrobothnia_coast",
+    "global_tilted_irradiance_instant__Joroinen,_Eastern_Finland",
+    "global_tilted_irradiance_instant__Kolari-Muonio_fells,_Lapland",
+    "global_tilted_irradiance_instant__Lapua___S._Ostrobothnia",
+    "global_tilted_irradiance_instant__Raahe_coast_(Kalajoki-Raahe)",
+    "global_tilted_irradiance_instant__Rauma___SW_Satakunta",
+    "temperature_2m__Helsinki___Uusimaa",
+    "temperature_2m__Ii-Simo,_N._Ostrobothnia_coast",
+    "temperature_2m__Joroinen,_Eastern_Finland",
+    "temperature_2m__Kolari-Muonio_fells,_Lapland",
+    "temperature_2m__Lapua___S._Ostrobothnia",
+    "temperature_2m__Raahe_coast_(Kalajoki-Raahe)",
+    "temperature_2m__Rauma___SW_Satakunta",
+    "wind_speed_120m__Helsinki___Uusimaa",
+    "wind_speed_120m__Ii-Simo,_N._Ostrobothnia_coast",
+    "wind_speed_120m__Joroinen,_Eastern_Finland",
+    "wind_speed_120m__Kolari-Muonio_fells,_Lapland",
+    "wind_speed_120m__Lapua___S._Ostrobothnia",
+    "wind_speed_120m__Raahe_coast_(Kalajoki-Raahe)",
+    "wind_speed_120m__Rauma___SW_Satakunta",
+    "consumption_mw",
+    "wind_forecast_mw",
+    "solar_forecast_mw",
+    "solar_capacity_mw",
+    "wind_capacity_mw",
+    "is_holiday",
+    "is_workday",
+    "local_hour",
+    "local_dow",
+    "sigmoid_wind_rho",
+    "solar_effective"
+  ],
+  "complete_rows_on_features": 35019,
+  "coverage": {
+    "fi_price_eur_mwh": 1.0,
+    "se1_price_eur_mwh": 1.0,
+    "se3_price_eur_mwh": 1.0,
+    "ee_price_eur_mwh": 0.999772,
+    "wind_speed_weighted": 1.0,
+    "solar_irradiance_weighted": 1.0,
+    "temperature_weighted": 1.0,
+    "cloud_cover__Helsinki___Uusimaa": 1.0,
+    "cloud_cover__Ii-Simo,_N._Ostrobothnia_coast": 1.0,
+    "cloud_cover__Joroinen,_Eastern_Finland": 1.0,
+    "cloud_cover__Kolari-Muonio_fells,_Lapland": 1.0,
+    "cloud_cover__Lapua___S._Ostrobothnia": 1.0,
+    "cloud_cover__Raahe_coast_(Kalajoki-Raahe)": 1.0,
+    "cloud_cover__Rauma___SW_Satakunta": 1.0,
+    "global_tilted_irradiance_instant__Helsinki___Uusimaa": 1.0,
+    "global_tilted_irradiance_instant__Ii-Simo,_N._Ostrobothnia_coast": 1.0,
+    "global_tilted_irradiance_instant__Joroinen,_Eastern_Finland": 1.0,
+    "global_tilted_irradiance_instant__Kolari-Muonio_fells,_Lapland": 1.0,
+    "global_tilted_irradiance_instant__Lapua___S._Ostrobothnia": 1.0,
+    "global_tilted_irradiance_instant__Raahe_coast_(Kalajoki-Raahe)": 1.0,
+    "global_tilted_irradiance_instant__Rauma___SW_Satakunta": 1.0,
+    "temperature_2m__Helsinki___Uusimaa": 1.0,
+    "temperature_2m__Ii-Simo,_N._Ostrobothnia_coast": 1.0,
+    "temperature_2m__Joroinen,_Eastern_Finland": 1.0,
+    "temperature_2m__Kolari-Muonio_fells,_Lapland": 1.0,
+    "temperature_2m__Lapua___S._Ostrobothnia": 1.0,
+    "temperature_2m__Raahe_coast_(Kalajoki-Raahe)": 1.0,
+    "temperature_2m__Rauma___SW_Satakunta": 1.0,
+    "wind_speed_120m__Helsinki___Uusimaa": 1.0,
+    "wind_speed_120m__Ii-Simo,_N._Ostrobothnia_coast": 1.0,
+    "wind_speed_120m__Joroinen,_Eastern_Finland": 1.0,
+    "wind_speed_120m__Kolari-Muonio_fells,_Lapland": 1.0,
+    "wind_speed_120m__Lapua___S._Ostrobothnia": 1.0,
+    "wind_speed_120m__Raahe_coast_(Kalajoki-Raahe)": 1.0,
+    "wind_speed_120m__Rauma___SW_Satakunta": 1.0,
+    "nuclear_mw": 0.999229,
+    "consumption_mw": 0.999401,
+    "wind_forecast_mw": 1.0,
+    "solar_forecast_mw": 1.0,
+    "solar_capacity_mw": 1.0,
+    "wind_capacity_mw": 1.0,
+    "ntc_se1_fi_mw": 0.949315,
+    "ntc_fi_se1_mw": 0.94863,
+    "ntc_se3_fi_mw": 0.94863,
+    "ntc_fi_se3_mw": 0.941096,
+    "ntc_ee_fi_da_mw": 0.987842,
+    "ntc_fi_ee_da_mw": 0.987842,
+    "flow_fi_se1_mw": 0.999971,
+    "flow_fi_se3_mw": 0.999971,
+    "flow_fi_ee_mw": 0.999971,
+    "wind_actual_mw": 1.0,
+    "consumption_actual_mw": 1.0,
+    "flow_fi_no_mw": 0.999971,
+    "is_holiday": 1.0,
+    "is_workday": 1.0,
+    "local_hour": 1.0,
+    "local_dow": 1.0,
+    "sigmoid_wind_rho": 1.0,
+    "solar_effective": 1.0
+  },
+  "columns_meta": {
+    "fi_price_eur_mwh": {
+      "causality": "target",
+      "description": "FI day-ahead spot price, EUR/MWh"
+    },
+    "se1_price_eur_mwh": {
+      "causality": "ex-post",
+      "description": "SE1 cleared price \u2014 clears in the SAME auction as FI, so same-hour use leaks the target; admissible only lagged"
+    },
+    "se3_price_eur_mwh": {
+      "causality": "ex-post",
+      "description": "SE3 cleared price \u2014 clears in the SAME auction as FI, so same-hour use leaks the target; admissible only lagged"
+    },
+    "ee_price_eur_mwh": {
+      "causality": "ex-post",
+      "description": "EE cleared price \u2014 clears in the SAME auction as FI, so same-hour use leaks the target; admissible only lagged"
+    },
+    "wind_speed_weighted": {
+      "causality": "ex-ante",
+      "description": "Open-Meteo forecast-as-issued, capacity-weighted aggregate"
+    },
+    "solar_irradiance_weighted": {
+      "causality": "ex-ante",
+      "description": "Open-Meteo forecast-as-issued, capacity-weighted aggregate"
+    },
+    "temperature_weighted": {
+      "causality": "ex-ante",
+      "description": "Open-Meteo forecast-as-issued, capacity-weighted aggregate"
+    },
+    "cloud_cover__Helsinki___Uusimaa": {
+      "causality": "ex-ante",
+      "description": "Open-Meteo cloud_cover at Helsinki___Uusimaa, forecast-as-issued"
+    },
+    "cloud_cover__Ii-Simo,_N._Ostrobothnia_coast": {
+      "causality": "ex-ante",
+      "description": "Open-Meteo cloud_cover at Ii-Simo,_N._Ostrobothnia_coast, forecast-as-issued"
+    },
+    "cloud_cover__Joroinen,_Eastern_Finland": {
+      "causality": "ex-ante",
+      "description": "Open-Meteo cloud_cover at Joroinen,_Eastern_Finland, forecast-as-issued"
+    },
+    "cloud_cover__Kolari-Muonio_fells,_Lapland": {
+      "causality": "ex-ante",
+      "description": "Open-Meteo cloud_cover at Kolari-Muonio_fells,_Lapland, forecast-as-issued"
+    },
+    "cloud_cover__Lapua___S._Ostrobothnia": {
+      "causality": "ex-ante",
+      "description": "Open-Meteo cloud_cover at Lapua___S._Ostrobothnia, forecast-as-issued"
+    },
+    "cloud_cover__Raahe_coast_(Kalajoki-Raahe)": {
+      "causality": "ex-ante",
+      "description": "Open-Meteo cloud_cover at Raahe_coast_(Kalajoki-Raahe), forecast-as-issued"
+    },
+    "cloud_cover__Rauma___SW_Satakunta": {
+      "causality": "ex-ante",
+      "description": "Open-Meteo cloud_cover at Rauma___SW_Satakunta, forecast-as-issued"
+    },
+    "global_tilted_irradiance_instant__Helsinki___Uusimaa": {
+      "causality": "ex-ante",
+      "description": "Open-Meteo global_tilted_irradiance_instant at Helsinki___Uusimaa, forecast-as-issued"
+    },
+    "global_tilted_irradiance_instant__Ii-Simo,_N._Ostrobothnia_coast": {
+      "causality": "ex-ante",
+      "description": "Open-Meteo global_tilted_irradiance_instant at Ii-Simo,_N._Ostrobothnia_coast, forecast-as-issued"
+    },
+    "global_tilted_irradiance_instant__Joroinen,_Eastern_Finland": {
+      "causality": "ex-ante",
+      "description": "Open-Meteo global_tilted_irradiance_instant at Joroinen,_Eastern_Finland, forecast-as-issued"
+    },
+    "global_tilted_irradiance_instant__Kolari-Muonio_fells,_Lapland": {
+      "causality": "ex-ante",
+      "description": "Open-Meteo global_tilted_irradiance_instant at Kolari-Muonio_fells,_Lapland, forecast-as-issued"
+    },
+    "global_tilted_irradiance_instant__Lapua___S._Ostrobothnia": {
+      "causality": "ex-ante",
+      "description": "Open-Meteo global_tilted_irradiance_instant at Lapua___S._Ostrobothnia, forecast-as-issued"
+    },
+    "global_tilted_irradiance_instant__Raahe_coast_(Kalajoki-Raahe)": {
+      "causality": "ex-ante",
+      "description": "Open-Meteo global_tilted_irradiance_instant at Raahe_coast_(Kalajoki-Raahe), forecast-as-issued"
+    },
+    "global_tilted_irradiance_instant__Rauma___SW_Satakunta": {
+      "causality": "ex-ante",
+      "description": "Open-Meteo global_tilted_irradiance_instant at Rauma___SW_Satakunta, forecast-as-issued"
+    },
+    "temperature_2m__Helsinki___Uusimaa": {
+      "causality": "ex-ante",
+      "description": "Open-Meteo temperature_2m at Helsinki___Uusimaa, forecast-as-issued"
+    },
+    "temperature_2m__Ii-Simo,_N._Ostrobothnia_coast": {
+      "causality": "ex-ante",
+      "description": "Open-Meteo temperature_2m at Ii-Simo,_N._Ostrobothnia_coast, forecast-as-issued"
+    },
+    "temperature_2m__Joroinen,_Eastern_Finland": {
+      "causality": "ex-ante",
+      "description": "Open-Meteo temperature_2m at Joroinen,_Eastern_Finland, forecast-as-issued"
+    },
+    "temperature_2m__Kolari-Muonio_fells,_Lapland": {
+      "causality": "ex-ante",
+      "description": "Open-Meteo temperature_2m at Kolari-Muonio_fells,_Lapland, forecast-as-issued"
+    },
+    "temperature_2m__Lapua___S._Ostrobothnia": {
+      "causality": "ex-ante",
+      "description": "Open-Meteo temperature_2m at Lapua___S._Ostrobothnia, forecast-as-issued"
+    },
+    "temperature_2m__Raahe_coast_(Kalajoki-Raahe)": {
+      "causality": "ex-ante",
+      "description": "Open-Meteo temperature_2m at Raahe_coast_(Kalajoki-Raahe), forecast-as-issued"
+    },
+    "temperature_2m__Rauma___SW_Satakunta": {
+      "causality": "ex-ante",
+      "description": "Open-Meteo temperature_2m at Rauma___SW_Satakunta, forecast-as-issued"
+    },
+    "wind_speed_120m__Helsinki___Uusimaa": {
+      "causality": "ex-ante",
+      "description": "Open-Meteo wind_speed_120m at Helsinki___Uusimaa, forecast-as-issued"
+    },
+    "wind_speed_120m__Ii-Simo,_N._Ostrobothnia_coast": {
+      "causality": "ex-ante",
+      "description": "Open-Meteo wind_speed_120m at Ii-Simo,_N._Ostrobothnia_coast, forecast-as-issued"
+    },
+    "wind_speed_120m__Joroinen,_Eastern_Finland": {
+      "causality": "ex-ante",
+      "description": "Open-Meteo wind_speed_120m at Joroinen,_Eastern_Finland, forecast-as-issued"
+    },
+    "wind_speed_120m__Kolari-Muonio_fells,_Lapland": {
+      "causality": "ex-ante",
+      "description": "Open-Meteo wind_speed_120m at Kolari-Muonio_fells,_Lapland, forecast-as-issued"
+    },
+    "wind_speed_120m__Lapua___S._Ostrobothnia": {
+      "causality": "ex-ante",
+      "description": "Open-Meteo wind_speed_120m at Lapua___S._Ostrobothnia, forecast-as-issued"
+    },
+    "wind_speed_120m__Raahe_coast_(Kalajoki-Raahe)": {
+      "causality": "ex-ante",
+      "description": "Open-Meteo wind_speed_120m at Raahe_coast_(Kalajoki-Raahe), forecast-as-issued"
+    },
+    "wind_speed_120m__Rauma___SW_Satakunta": {
+      "causality": "ex-ante",
+      "description": "Open-Meteo wind_speed_120m at Rauma___SW_Satakunta, forecast-as-issued"
+    },
+    "nuclear_mw": {
+      "causality": "ex-post",
+      "description": "Fingrid series \u2014 see the module docstring for causality"
+    },
+    "consumption_mw": {
+      "causality": "ex-ante",
+      "description": "Fingrid series \u2014 see the module docstring for causality"
+    },
+    "wind_forecast_mw": {
+      "causality": "ex-ante",
+      "description": "Fingrid series \u2014 see the module docstring for causality"
+    },
+    "solar_forecast_mw": {
+      "causality": "ex-ante",
+      "description": "Fingrid series \u2014 see the module docstring for causality"
+    },
+    "solar_capacity_mw": {
+      "causality": "ex-ante",
+      "description": "Fingrid series \u2014 see the module docstring for causality"
+    },
+    "wind_capacity_mw": {
+      "causality": "ex-ante",
+      "description": "Fingrid series \u2014 see the module docstring for causality"
+    },
+    "ntc_se1_fi_mw": {
+      "causality": "ex-post",
+      "description": "Fingrid series \u2014 see the module docstring for causality"
+    },
+    "ntc_fi_se1_mw": {
+      "causality": "ex-post",
+      "description": "Fingrid series \u2014 see the module docstring for causality"
+    },
+    "ntc_se3_fi_mw": {
+      "causality": "ex-post",
+      "description": "Fingrid series \u2014 see the module docstring for causality"
+    },
+    "ntc_fi_se3_mw": {
+      "causality": "ex-post",
+      "description": "Fingrid series \u2014 see the module docstring for causality"
+    },
+    "ntc_ee_fi_da_mw": {
+      "causality": "ex-ante-ended",
+      "description": "Fingrid series \u2014 see the module docstring for causality \u2014 DISCONTINUED after 2026-10-02; excluded from feature_columns because it is NaN for all later hours",
+      "ends_at": "2026-10-02 21:00:00+00:00"
+    },
+    "ntc_fi_ee_da_mw": {
+      "causality": "ex-ante-ended",
+      "description": "Fingrid series \u2014 see the module docstring for causality \u2014 DISCONTINUED after 2026-10-02; excluded from feature_columns because it is NaN for all later hours",
+      "ends_at": "2026-10-02 21:00:00+00:00"
+    },
+    "flow_fi_se1_mw": {
+      "causality": "ex-post",
+      "description": "Fingrid series \u2014 see the module docstring for causality"
+    },
+    "flow_fi_se3_mw": {
+      "causality": "ex-post",
+      "description": "Fingrid series \u2014 see the module docstring for causality"
+    },
+    "flow_fi_ee_mw": {
+      "causality": "ex-post",
+      "description": "Fingrid series \u2014 see the module docstring for causality"
+    },
+    "wind_actual_mw": {
+      "causality": "ex-post",
+      "description": "Fingrid series \u2014 see the module docstring for causality"
+    },
+    "consumption_actual_mw": {
+      "causality": "ex-post",
+      "description": "Fingrid series \u2014 see the module docstring for causality"
+    },
+    "flow_fi_no_mw": {
+      "causality": "ex-post",
+      "description": "Fingrid series \u2014 see the module docstring for causality"
+    },
+    "is_holiday": {
+      "causality": "ex-ante",
+      "description": "Finnish public holiday, local calendar"
+    },
+    "is_workday": {
+      "causality": "ex-ante",
+      "description": "weekday and not a public holiday, local calendar"
+    },
+    "local_hour": {
+      "causality": "ex-ante",
+      "description": "hour of day, Europe/Helsinki"
+    },
+    "local_dow": {
+      "causality": "ex-ante",
+      "description": "day of week, Europe/Helsinki, 0=Mon"
+    },
+    "sigmoid_wind_rho": {
+      "causality": "ex-ante",
+      "description": "sigmoid turbine curve x air density, shipped transform"
+    },
+    "solar_effective": {
+      "causality": "ex-ante",
+      "description": "irradiance x cell-temperature derate, shipped transform"
+    }
+  }
+}

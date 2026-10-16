@@ -133,6 +133,21 @@ def _merge(existing: pd.DataFrame | None, parts: list[pd.DataFrame]) -> pd.DataF
     return out
 
 
+def _expected_columns(name: str, config: dict) -> list[str]:
+    """Columns a source should produce, per the region config.
+
+    Only `grid` is config-driven — its series are declared one by one in
+    `grid_sources`, so the config is the authority on what the parquet
+    ought to contain. The other sources have fixed schemas, and an empty
+    list means "do not column-check", which keeps this conservative:
+    a wrong answer here would force a needless full refetch.
+    """
+    if name != "grid":
+        return []
+    return [s["feature_name"] for s in config.get("grid_sources", [])
+            if s.get("feature_name")]
+
+
 # ── public API ──────────────────────────────────────────────────────
 
 def update(config: dict, years: int = 4, seed: bool = True) -> dict:
@@ -152,6 +167,26 @@ def update(config: dict, years: int = 4, seed: bool = True) -> dict:
                 logger.info("  %s: seeded %d rows from output/%s",
                             name, len(existing), fname)
             except Exception:
+                existing = None
+
+        # `_missing_ranges` compares TIME COVERAGE only. If a new source
+        # is added to the region config, the stored window already spans
+        # `start..end`, so no range is missing and the new column is
+        # NEVER fetched — silently, forever. Adding the cross-border
+        # capacity and flow datasets hit exactly this: the config listed
+        # fifteen Fingrid series, the parquet kept six, and the run
+        # reported success with an unchanged content hash.
+        #
+        # So check the columns too, and refetch the whole window when
+        # any configured column is absent.
+        want = _expected_columns(name, config)
+        if existing is not None and want:
+            absent = [c for c in want if c not in existing.columns]
+            if absent:
+                logger.info(
+                    "  %s: %d configured column(s) missing from the store "
+                    "(%s) — refetching the full window", name, len(absent),
+                    ", ".join(absent[:6]) + ("…" if len(absent) > 6 else ""))
                 existing = None
 
         ranges = _missing_ranges(existing, start, end)
