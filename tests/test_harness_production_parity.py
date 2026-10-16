@@ -58,8 +58,14 @@ def _harness_production_fn():
         "PRICE_FLOOR": -5.0,
     }
     sys.path.insert(0, str(SPP))
+    sys.path.insert(0, str(REPO / "studies"))
     from holidays import build_holiday_set          # noqa: E402
     ns["build_holiday_set"] = build_holiday_set
+    # The sliced source lags by wall-clock hours rather than by row
+    # position (see studies/lag_utils.py). Kept in its own module so this
+    # namespace can supply it without importing the study pipeline.
+    from lag_utils import lag_by_hours               # noqa: E402
+    ns["lag_by_hours"] = lag_by_hours
     exec(compile(src[start:end], "backtest_harness.py", "exec"), ns)
     return ns["build_production_prediction"]
 

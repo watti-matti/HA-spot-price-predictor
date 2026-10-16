@@ -28,6 +28,7 @@ helpers wrap this.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -117,27 +118,110 @@ def retrain_seasonal(repo_root: Path, data_dir: Path) -> dict:
     }
 
 
+def pipeline_ridge_features(repo_root: Path) -> tuple[str, ...]:
+    """Read `pipeline.RIDGE_FEATURES` without importing the module.
+
+    `pipeline.py` uses package-relative imports (`from . import ...`),
+    so a bare `import pipeline` raises, and importing it as a package
+    member drags in Home Assistant — which is absent on a training PC.
+    The feature list is a module-level tuple of string literals, so the
+    source can simply be parsed. Static reading is also the safer choice
+    for a guard: it cannot be perturbed by import side effects.
+    """
+    src = (repo_root / "custom_components" / "spot_price_predictor"
+           / "pipeline.py").read_text(encoding="utf-8")
+    import ast
+
+    for node in ast.parse(src).body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if any(isinstance(t, ast.Name) and t.id == "RIDGE_FEATURES"
+               for t in node.targets):
+            return tuple(ast.literal_eval(node.value))
+    raise RuntimeError(
+        "could not find RIDGE_FEATURES in pipeline.py — the guard cannot "
+        "verify the artifact, so refusing rather than installing blind.")
+
+
+def _validate_spike_payload(meta: dict, source: Path, repo_root: Path) -> None:
+    """Refuse a spike artifact the running pipeline cannot consume.
+
+    This guard exists because of a real, silent regression. Until
+    v2.18.2 this module refitted via ``v2513_layer4_spike_model``, a
+    v2.5.13-era trainer that writes a FIVE-feature model — no neighbour
+    prices, no holiday — over its own short train window. It replaced
+    the shipped nine-feature ``v2.17.1`` artifact with no error at all;
+    the only symptom was a worse forecast. Validating the candidate
+    against the pipeline's own feature tuple turns any future
+    trainer/pipeline divergence into a loud failure here, before the
+    shipped artifact is touched.
+    """
+    # pipeline.RIDGE_FEATURES carries "intercept" in slot 0; the
+    # artifact's `ridge_features` names only the real columns, with the
+    # intercept implied as the first coefficient. Compare accordingly.
+    full = list(pipeline_ridge_features(repo_root))
+    if not full or full[0] != "intercept":
+        raise RuntimeError(
+            "pipeline.RIDGE_FEATURES no longer starts with 'intercept'; the "
+            "guard's alignment assumption is stale. Refusing to install.")
+    expected = full[1:]
+    got = list(meta.get("ridge_features") or [])
+    if got != expected:
+        raise ValueError(
+            f"spike feature mismatch in {source.name}: pipeline expects "
+            f"{len(expected)} features {expected}, trainer wrote {len(got)} "
+            f"{got}. Refusing to install."
+        )
+    coef = meta.get("ridge_coef") or []
+    if len(coef) != len(full):
+        raise ValueError(
+            f"spike coefficient mismatch in {source.name}: {len(coef)} "
+            f"coefficients for {len(expected)} features — the intercept is "
+            f"first, so {len(full)} are required."
+        )
+    if not meta.get("physics_seasonal"):
+        raise ValueError(
+            f"spike artifact {source.name} has no `physics_seasonal` block, "
+            "so the pipeline would deseasonalise the wind/solar physics "
+            "terms inconsistently with training."
+        )
+
+
 def retrain_spike_model(repo_root: Path, data_dir: Path) -> dict:
     """Refit L2 Ridge + L3 AR(1) + L4 GPD POT in one pass.
 
     Writes data/spike_model_default.json. Returns the L4 GPD POT
     diagnostics + CVaR back-test summary.
+
+    Refits with ``studies/build_fresh_spike_model.py`` — the trainer
+    that produces the shipped nine-feature ``v2.17.1/leakfree-holiday``
+    form. That script deliberately writes a CANDIDATE under output/
+    instead of overwriting the shipped artifact, so this function
+    validates the candidate and only then installs it atomically.
     """
     _ensure_repo_imports(repo_root)
-    import v2513_layer4_spike_model as l4
+    import build_fresh_spike_model as bfsm
 
     _LOGGER.info("retrain L2+L3+L4: refitting Ridge + AR(1) + GPD POT")
     old_cwd = os.getcwd()
     os.chdir(repo_root)
     try:
-        l4.main()
+        bfsm.main()
     finally:
         os.chdir(old_cwd)
 
+    candidate = repo_root / "output" / "spike_model_fresh.json"
+    if not candidate.exists():
+        raise FileNotFoundError(
+            f"spike candidate missing after refit: {candidate}")
+    meta = json.loads(candidate.read_text(encoding="utf-8"))
+    _validate_spike_payload(meta, candidate, repo_root)
+
     artifact = data_dir / "spike_model_default.json"
-    if not artifact.exists():
-        raise FileNotFoundError(f"spike artifact missing after refit: {artifact}")
-    meta = json.loads(artifact.read_text(encoding="utf-8"))
+    _atomic_write_json(artifact, meta)
+    _LOGGER.info("retrain L2+L3+L4: installed %d-feature %s, window %s",
+                 len(meta.get("ridge_features") or []),
+                 meta.get("version"), meta.get("train_window"))
     return {
         "layer": "spike",
         "artifact": str(artifact),
@@ -201,11 +285,108 @@ def retrain_solar_submodel(
 # ── Orchestrator ───────────────────────────────────────────────────
 
 
+ARTIFACT_NAMES = {
+    "seasonal": "seasonal_components_default.json",
+    "spike":    "spike_model_default.json",
+    "solar":    "solar_submodel_default.json",
+}
+
+
+class _Transaction:
+    """Handle yielded by `_artifacts_transaction`; commit to keep writes."""
+
+    def __init__(self) -> None:
+        self.committed = False
+        # Set by the context manager after a rollback; None when the
+        # transaction committed and so nothing was restored.
+        self.restore_verified: bool | None = None
+
+    def commit(self) -> None:
+        self.committed = True
+
+
+@contextlib.contextmanager
+def _artifacts_transaction(data_dir: Path, names: Iterable[str]):
+    """All-or-nothing artifact writes.
+
+    The shipped artifacts are snapshotted on entry and restored on exit
+    unless the block calls `commit()`. This makes a batch retrain
+    transactional: `retrain_all` catches each layer's exception and
+    carries on, so without this a run that fails half-way leaves the
+    earlier layers' writes in place. That is how the 2026-10-12 run put
+    a regressed five-feature spike artifact on disk while reporting
+    `ok: false` — the caller's `|| goto :fail` blocked staging, but the
+    shipped file had already been overwritten.
+    """
+    tx = _Transaction()
+    names = list(names)
+    saved = {n: (data_dir / n).read_bytes()
+             for n in names if (data_dir / n).exists()}
+    absent = [n for n in names if n not in saved]
+    try:
+        yield tx
+    finally:
+        if not tx.committed:
+            for n, blob in saved.items():
+                (data_dir / n).write_bytes(blob)
+            for n in absent:
+                p = data_dir / n
+                if p.exists():
+                    p.unlink()
+            # Verify rather than assume. Callers report
+            # `shipped_artifacts_untouched` to the operator, and a
+            # rollback that silently half-worked would be worse than no
+            # rollback at all — it would be an untrue reassurance.
+            bad = [n for n, blob in saved.items()
+                   if (data_dir / n).read_bytes() != blob]
+            bad += [n for n in absent if (data_dir / n).exists()]
+            tx.restore_verified = not bad
+            if bad:
+                raise RuntimeError(
+                    "artifact rollback FAILED to restore: "
+                    f"{', '.join(sorted(bad))} in {data_dir}. The shipped "
+                    "artifacts may be modified — check `git status` and "
+                    "restore with `git checkout -- <path>` before using "
+                    "the model.")
+
+
+@contextlib.contextmanager
+def _artifacts_preserved(data_dir: Path, names: Iterable[str]):
+    """Restore the shipped artifacts on exit, whatever happened inside.
+
+    The layer trainers are study scripts that write to the shipped
+    artifact path using their own module constants, and the solar one
+    builds that path inline at two separate sites. Rather than refactor
+    three scripts to accept an output directory, snapshot the bytes and
+    put them back. That makes candidate mode non-destructive regardless
+    of where a trainer decides to write — including when it crashes
+    half-way, which is exactly how the 2026-10-12 run left a regressed
+    spike artifact in place.
+    """
+    names = list(names)
+    saved = {n: (data_dir / n).read_bytes()
+             for n in names if (data_dir / n).exists()}
+    absent = [n for n in names if n not in saved]
+    try:
+        yield
+    finally:
+        for n, blob in saved.items():
+            (data_dir / n).write_bytes(blob)
+        # A trainer may have created an artifact that did not exist
+        # before; leaving it behind would silently become "shipped".
+        for n in absent:
+            p = data_dir / n
+            if p.exists():
+                p.unlink()
+
+
 def retrain_all(
     repo_root: Path | None = None,
     data_dir: Path | None = None,
     layers: Iterable[str] | None = None,
     fingrid_api_key: str | None = None,
+    candidate_dir: Path | None = None,
+    allow_partial: bool = False,
 ) -> dict:
     """Refit one or more model artifacts.
 
@@ -218,6 +399,15 @@ def retrain_all(
             Defaults to all three.
         fingrid_api_key: needed for the solar layer only. Falls back
             to `FINGRID_API_KEY` env var.
+        allow_partial: keep the artifacts written by layers that did
+            succeed even when another layer failed. Off by default: a
+            batch retrain is all-or-nothing, because a half-updated set
+            of artifacts is not a model anyone validated.
+        candidate_dir: when set, the refitted artifacts are collected
+            here and the shipped ones under `data_dir` are restored
+            byte-for-byte. Nothing the running integration reads is
+            changed, so a candidate can be trained and evaluated while
+            production keeps serving the current model.
 
     Returns:
         Aggregate result dict with `started_at`, `completed_at`, and
@@ -228,6 +418,61 @@ def retrain_all(
     if data_dir is None:
         data_dir = Path(__file__).resolve().parent / "data"
     layers = list(layers) if layers else list(ALL_LAYERS)
+
+    names = [ARTIFACT_NAMES[l] for l in layers if l in ARTIFACT_NAMES]
+
+    if candidate_dir is not None:
+        candidate_dir = Path(candidate_dir)
+        candidate_dir.mkdir(parents=True, exist_ok=True)
+
+    with _artifacts_transaction(data_dir, names) as tx:
+        res = _retrain_layers(repo_root, data_dir, layers, fingrid_api_key)
+
+        if candidate_dir is not None:
+            for name in names:
+                src = data_dir / name
+                if src.exists():
+                    shutil.copy2(src, candidate_dir / name)
+            # Never commit in candidate mode: the shipped artifacts get
+            # restored and the candidate lives only under candidate_dir.
+        else:
+            # All-or-nothing. A SKIPPED layer (e.g. solar without a
+            # Fingrid key) is not a failure and must not discard the
+            # layers that did refit, so key the decision on errors only
+            # — unlike `ok`, which also reports False for a skip.
+            failed = sorted(l for l, r in res["results"].items()
+                            if "error" in r)
+            if failed and not allow_partial:
+                res["rolled_back"] = True
+                res["rolled_back_because"] = failed
+                res["artifacts_installed"] = []
+                _LOGGER.error(
+                    "retrain rolled back: %s failed, so the shipped "
+                    "artifacts were restored. Nothing was installed.",
+                    ", ".join(failed))
+            else:
+                tx.commit()
+                res["rolled_back"] = False
+                res["artifacts_installed"] = names
+                if failed:
+                    _LOGGER.warning(
+                        "retrain kept partial results (--allow-partial): %s "
+                        "failed", ", ".join(failed))
+
+    # Outside the `with`, so the transaction has finished restoring and
+    # verifying. Report what was checked, not what was intended.
+    if candidate_dir is not None:
+        res["candidate_dir"] = str(candidate_dir)
+        res["shipped_artifacts_untouched"] = bool(tx.restore_verified)
+    return res
+
+
+def _retrain_layers(
+    repo_root: Path,
+    data_dir: Path,
+    layers: list[str],
+    fingrid_api_key: str | None,
+) -> dict:
 
     started = datetime.now(timezone.utc).isoformat()
     results: dict[str, Any] = {}
@@ -273,10 +518,21 @@ def _main() -> int:
                         help="Subset of layers to retrain.")
     parser.add_argument("--fingrid-key", default=None,
                         help="Fingrid API key (for solar layer).")
+    parser.add_argument(
+        "--candidate-dir", default=None, metavar="DIR",
+        help="Train into DIR and restore the shipped artifacts, so the "
+             "running model is left untouched. Evaluate the candidate "
+             "before promoting it.")
+    parser.add_argument(
+        "--allow-partial", action="store_true",
+        help="Keep artifacts from layers that succeeded even if another "
+             "layer failed. Default is all-or-nothing rollback.")
     args = parser.parse_args()
 
     result = retrain_all(layers=args.layers,
-                          fingrid_api_key=args.fingrid_key)
+                          fingrid_api_key=args.fingrid_key,
+                          candidate_dir=args.candidate_dir,
+                          allow_partial=args.allow_partial)
     print(json.dumps(result, indent=2))
     return 0 if result["ok"] else 1
 

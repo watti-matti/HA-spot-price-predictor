@@ -139,6 +139,16 @@ def fetch_dataset(ds_id: int, start: datetime, end: datetime,
         print(f"  ds {ds_id}: {start.date()} → {cursor.date()} cumulative "
               f"{len(out)} rows", flush=True)
 
+    # Never cache an empty result: the failure paths above fall through
+    # here with `out` possibly empty, and caching that turns a transient
+    # rate-limit into a permanent one, since later runs read [] from
+    # disk without any network call. See the same guard in
+    # studies/solar_clear_sky_submodel.py, where it cost a day.
+    if not out:
+        raise RuntimeError(
+            f"Fingrid dataset {ds_id} returned no rows for "
+            f"{start.date()}..{end.date()}. Not caching the empty result; "
+            "this is usually HTTP 429 rate limiting. Retry.")
     with open(cache_path, "w") as f:
         json.dump(out, f)
     return out

@@ -39,7 +39,7 @@ import numpy as _np  # noqa: E402
 from scipy.optimize import lsq_linear  # noqa: E402
 
 import seasonal_decomposition as sd  # noqa: E402
-from exp_extra_features import build_dataframe  # noqa: E402
+from exp_extra_features import lag_by_hours, build_dataframe  # noqa: E402
 from v2510_layer3_ar_wind import fit_ar1  # noqa: E402
 
 import importlib.util as _ilu  # noqa: E402
@@ -133,9 +133,10 @@ def main() -> None:
     phys["netload"] = _nlc
     _Ynl = (_nl.values - sd.compute_seasonal_part(ts, _nlc)) / 1000.0
     df["Y_netload_lag168"] = np.nan_to_num(
-        _pd.Series(_Ynl, index=df.index).shift(LAG).values)
+        lag_by_hours(_Ynl, df.index, LAG))
     for _z in ("se1", "se3", "ee"):
-        df[f"Y_{_z}_lag168"] = np.nan_to_num(df[f"Y_{_z}"].shift(LAG).values)
+        df[f"Y_{_z}_lag168"] = np.nan_to_num(
+            lag_by_hours(df[f"Y_{_z}"], df.index, LAG))
     _loc = _pd.DatetimeIndex(df.index).tz_convert("Europe/Helsinki")
     _hol = build_holiday_set(2022, 2028)
     df["is_holiday"] = np.array(

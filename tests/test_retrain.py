@@ -76,8 +76,12 @@ def test_retrain_all_unknown_layer_returns_error(tmp_path: Path) -> None:
 
 
 def test_retrain_all_skips_solar_when_no_key(tmp_path: Path) -> None:
-    """Solar layer must skip cleanly when no Fingrid key is provided."""
-    # Wipe any env var so the skip path is exercised
+    """Solar layer must skip cleanly when no Fingrid key is provided.
+
+    The sub-model fetches Fingrid 248 directly, so without a key there
+    is nothing it can do. A skip (not an error) keeps the all-or-nothing
+    rollback from discarding a good seasonal and spike refit.
+    """
     import os
     saved = os.environ.pop("FINGRID_API_KEY", None)
     try:
@@ -101,8 +105,10 @@ def test_retrain_all_records_started_and_completed(tmp_path: Path) -> None:
     assert result["started_at"] <= result["completed_at"]
 
 
-def test_retrain_all_solar_skip_does_not_count_as_ok(tmp_path: Path) -> None:
-    """A skipped layer marks the run as not-ok (not all layers completed)."""
+def test_solar_skip_does_not_roll_back_the_other_layers(tmp_path: Path) -> None:
+    """`ok` reports False for a skip, but a skip is not a failure and
+    must not discard layers that did refit — otherwise a keyless run
+    would throw away a good seasonal and spike fit."""
     import os
     saved = os.environ.pop("FINGRID_API_KEY", None)
     try:
@@ -113,6 +119,7 @@ def test_retrain_all_solar_skip_does_not_count_as_ok(tmp_path: Path) -> None:
         )
         assert result["ok"] is False
         assert result["results"]["solar"]["skipped"] is True
+        assert result["rolled_back"] is False
     finally:
         if saved is not None:
             os.environ["FINGRID_API_KEY"] = saved

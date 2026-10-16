@@ -99,7 +99,7 @@ echo.
 
 if "%RUN_TESTS%"=="1" (
   echo === [5/5] Running training tests ===
-  "%PYTHON%" -m pytest tests\test_training.py -q || goto :fail
+  "%PYTHON%" -m pytest tests -q || goto :fail
   echo.
 )
 

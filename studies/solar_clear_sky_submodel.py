@@ -166,6 +166,21 @@ def fetch_fingrid(ds_id: int, start: datetime, end: datetime,
         print(f"  ds {ds_id}: {cursor.date()} cumulative {len(out)} rows",
               flush=True)
 
+    # NEVER cache an empty result. Every failure path above (`break` on
+    # a non-200, on exhausted 429 retries, or on unparseable JSON) falls
+    # through to here with `out` possibly empty, and caching that poisons
+    # the chunk permanently: later runs return [] straight from disk
+    # without a network call, so a transient rate-limit becomes a
+    # permanent failure. That is exactly what happened on 2026-10-12 —
+    # a batch run wrote 2-byte `[]` caches for datasets 248 and 267, and
+    # the solar layer then failed identically on every subsequent run.
+    if not out:
+        raise RuntimeError(
+            f"Fingrid dataset {ds_id} returned no rows for "
+            f"{start.date()}..{end.date()}. Not caching the empty result. "
+            "This is usually rate limiting (HTTP 429) when another "
+            "Fingrid-heavy step ran just before; check the messages above "
+            "and retry.")
     with open(cache_path, "w") as f:
         json.dump(out, f)
     return out
@@ -189,7 +204,12 @@ def hourly_mean_mw(rows: list[dict]) -> pd.Series:
         except (KeyError, TypeError, ValueError):
             continue
     if not bucket:
-        return pd.Series(dtype=float)
+        # Keep the index tz-aware even when empty: a naive empty index
+        # concatenated with the tz-aware cloud series silently yields an
+        # empty join rather than raising, which is how a single failed
+        # Fingrid fetch used to look like "no overlapping hours".
+        return pd.Series(dtype=float,
+                         index=pd.DatetimeIndex([], tz="UTC"))
     idx = pd.DatetimeIndex(sorted(bucket.keys()), tz="UTC")
     vals = [sum(bucket[t]) / len(bucket[t]) for t in idx]
     return pd.Series(vals, index=idx, dtype=float)
@@ -437,6 +457,13 @@ def main() -> None:
     # Forward-fill capacity (slow-changing reference series)
     s_cap = s_cap.reindex(s_prod.index).ffill().bfill()
 
+    with open(REGION_YAML) as f:
+        region = yaml.safe_load(f)
+    locations = region["weather_source"]["locations"]
+    print(f"window: {WINDOW_START.date()} -> {WINDOW_END.date()}", flush=True)
+
+
+
     print("[3/4] Fetching Open-Meteo cloud_cover (7 weighted sites)...",
           flush=True)
     s_cloud = fetch_cloud_cover_weighted(WINDOW_START, WINDOW_END, locations)
@@ -444,6 +471,27 @@ def main() -> None:
     # Align all three to common hourly UTC index
     df = pd.concat([s_prod, s_cap, s_cloud], axis=1).dropna()
     print(f"      aligned rows: {len(df):,}", flush=True)
+
+    # An empty frame used to surface 30 lines later as
+    # `IndexError: index 0 is out of bounds` from the 70/30 split, which
+    # says nothing about which of the three inputs went missing. Name the
+    # culprit instead: each series is fetched from a different service,
+    # so the distinction is the whole diagnosis.
+    if df.empty:
+        parts = {"Fingrid 248 production": s_prod,
+                 "Fingrid 267 capacity": s_cap,
+                 "Open-Meteo cloud_cover": s_cloud}
+        detail = ", ".join(
+            f"{name}: {len(s):,} rows"
+            + (f" [{s.index.min()} .. {s.index.max()}]" if len(s) else " EMPTY")
+            for name, s in parts.items())
+        empty = [n for n, s in parts.items() if not len(s)]
+        raise RuntimeError(
+            "solar sub-model: no overlapping hours after aligning the three "
+            f"inputs over {WINDOW_START.date()} -> {WINDOW_END.date()}. "
+            + (f"Empty input(s): {', '.join(empty)}. " if empty else
+               "All three returned rows, so their indices do not overlap. ")
+            + detail)
 
     print("[4/4] Computing clear-sky baselines + fitting modulators...",
           flush=True)
