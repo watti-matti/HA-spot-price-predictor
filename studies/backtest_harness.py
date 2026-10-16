@@ -53,7 +53,8 @@ sys.path.insert(0, str(REPO / "studies"))
 sys.path.insert(0, str(REPO / "custom_components" / "spot_price_predictor"))
 
 import seasonal_decomposition as sd  # noqa: E402
-from exp_extra_features import build_dataframe, SEASONAL_ARTIFACT  # noqa: E402
+from exp_extra_features import (build_dataframe, lag_by_hours,
+                                SEASONAL_ARTIFACT)  # noqa: E402
 from v2510_layer3_ar_wind import fit_ridge  # noqa: E402
 from holidays import build_holiday_set  # noqa: E402
 import price_floor as _pf  # noqa: E402
@@ -162,8 +163,8 @@ def build_production_prediction(df: pd.DataFrame) -> np.ndarray:
         raw = df[z].values.astype(float)
         raw = np.where(np.isfinite(raw), raw, np.nanmean(raw))
         y = raw - sd.compute_seasonal_part(ts, SEASONAL_ARTIFACT["components"][z])
-        Yz[z] = (pd.Series(y, index=idx)
-                 .shift(NEIGHBOUR_LAG_HOURS).fillna(0.0).values)
+        Yz[z] = np.nan_to_num(
+            lag_by_hours(y, idx, NEIGHBOUR_LAG_HOURS), nan=0.0)
 
     seas = sd.compute_seasonal_part(ts, SEASONAL_ARTIFACT["components"]["fi"])
     ridge = (coef["intercept"]
@@ -224,7 +225,7 @@ def build_predictions(df: pd.DataFrame) -> dict[str, np.ndarray]:
         comp_fi = _fit_l1_like_shipped("fi", fi[tr], ts[tr])
         seas_fi = sd.compute_seasonal_part(ts, comp_fi)
         Yfi = fi - seas_fi
-        lag = pd.Series(Yfi, index=idx).shift(168).values
+        lag = lag_by_hours(Yfi, idx, 168)
         Yz = {}
         for z in ("temp", "se1", "se3", "ee"):
             comp = _fit_l1_like_shipped(z, df[z].values[tr], ts[tr])
@@ -233,7 +234,8 @@ def build_predictions(df: pd.DataFrame) -> dict[str, np.ndarray]:
         # auction as FI, so a same-hour value is unknowable at forecast
         # time (the v2.16 leak).
         Zlag = {z: pd.Series(Yz[z], index=idx)
-                .shift(NEIGHBOUR_LAG_HOURS).fillna(0.0).values
+                .pipe(lambda q: np.nan_to_num(
+                    lag_by_hours(q, idx, NEIGHBOUR_LAG_HOURS), nan=0.0))
                 for z in ("se1", "se3", "ee")}
         # Physics: trainer-style seasonal deseason (fit on train).
         pcomp = {name: sd.fit_components(vals[tr], ts[tr], depth=PHYS_DEPTH,

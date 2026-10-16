@@ -52,6 +52,9 @@ sys.path.insert(0, str(REPO / "studies"))
 
 import seasonal_decomposition as sd  # noqa: E402
 import solar_clear_sky as scs  # noqa: E402
+# Time-based lag; kept in its own module so the parity test can supply
+# it without importing this one. Re-exported for existing callers.
+from lag_utils import lag_by_hours  # noqa: E402,F401
 
 from build_seasonal_components import (  # noqa: E402
     OUTPUT_DIR as _STORE_OUTPUT_DIR,
@@ -126,6 +129,8 @@ GRID_COLUMNS = (
 _STEP_FILL = ("solar_capacity_mw", "wind_capacity_mw")
 _INTERP_FILL = ("nuclear_mw", "consumption_mw")
 _INTERP_LIMIT = 3
+
+
 
 
 def load_grid() -> dict[str, pd.Series]:
@@ -227,7 +232,7 @@ def build_dataframe() -> pd.DataFrame:
         df[f"Y_{name}"] = df[name].values - df[f"seasonal_{name}"].values
 
     # L2 physics features.
-    df["Y_fi_lag168"] = df["Y_fi"].shift(168)
+    df["Y_fi_lag168"] = lag_by_hours(df["Y_fi"], df.index, 168)
     df["is_workday"] = (df.index.weekday < 5).astype(float)
     df["sigmoid_wind_rho"] = sigmoid_turbine_rho(
         df["wind"].values, df["temp"].values)
@@ -263,8 +268,12 @@ def build_dataframe() -> pd.DataFrame:
     # recover fi(t) from `se3(t) + spread`. We rebuild it from a
     # 7-day shift+rolling-mean of fi vs se3 so the feature stays
     # leak-free.
-    fi_7d  = df["fi"].shift(168).rolling(168, min_periods=24).mean()
-    se3_7d = df["se3"].shift(168).rolling(168, min_periods=24).mean()
+    # rolling() is also positional, but a 168 h mean is far less
+    # sensitive to a few missing hours than a point lag is.
+    fi_7d  = pd.Series(lag_by_hours(df["fi"], df.index, 168),
+                       index=df.index).rolling(168, min_periods=24).mean()
+    se3_7d = pd.Series(lag_by_hours(df["se3"], df.index, 168),
+                       index=df.index).rolling(168, min_periods=24).mean()
     ep_raw = np.maximum(0.0, -(fi_7d.values - se3_7d.values))
     df["export_potential_se3"] = (
         ep_raw - np.nanmean(ep_raw[np.isfinite(ep_raw)])

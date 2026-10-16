@@ -46,7 +46,7 @@ REPO = Path(__file__).resolve().parent.parent
 for p in (REPO, REPO/"studies", REPO/"custom_components"/"spot_price_predictor"):
     sys.path.insert(0, str(p))
 import seasonal_decomposition as sd                                  # noqa: E402
-from exp_extra_features import build_dataframe                       # noqa: E402
+from exp_extra_features import lag_by_hours, build_dataframe                       # noqa: E402
 from backtest_harness import _fit_l1_like_shipped, PHYS_DEPTH, PHYS_SMOOTH  # noqa: E402
 try: sys.stdout.reconfigure(encoding="utf-8")
 except Exception: pass
@@ -84,7 +84,7 @@ def main() -> None:
         if tr.sum() < 8000: continue
         seas = sd.compute_seasonal_part(ts, _fit_l1_like_shipped("fi", fi[tr], ts[tr]))
         Yfi = fi - seas
-        lag = np.nan_to_num(pd.Series(Yfi, index=idx).shift(168).values)
+        lag = np.nan_to_num(lag_by_hours(Yfi, idx, 168))
         Yz = {z: df[z].values - sd.compute_seasonal_part(
                   ts, _fit_l1_like_shipped(z, df[z].values[tr], ts[tr]))
               for z in ("temp", "se1", "se3", "ee")}
@@ -92,7 +92,7 @@ def main() -> None:
             ts, sd.fit_components(wr[tr], ts[tr], depth=PHYS_DEPTH, smooth=PHYS_SMOOTH))
         Ys = se - sd.compute_seasonal_part(
             ts, sd.fit_components(se[tr], ts[tr], depth=PHYS_DEPTH, smooth=PHYS_SMOOTH))
-        nblag = [np.nan_to_num(pd.Series(Yz[z], index=idx).shift(168).values)
+        nblag = [np.nan_to_num(lag_by_hours(Yz[z], idx, 168))
                  for z in ("se1", "se3", "ee")]
 
         # ── net load predicted from weather + calendar (full horizon) ──

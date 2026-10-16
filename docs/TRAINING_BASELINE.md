@@ -84,7 +84,7 @@ Fingerprint, abbreviated — see `BASELINE.json` for full hashes:
 ```
 inference_code       44664da11eef27ca…      (22 modules, derived)
 shipped_artifacts    25b3bf142ae9c371…
-harness_code         79464edb8fc3f362…
+harness_code         30114cafcbfd1db7…
 data_store_snapshot  22a27347590b74d6
 data_store_parquets  a414929bf0273411…
 weather_cache        6676888069645026…      (28 files)
@@ -96,16 +96,16 @@ Artifacts: `spike_model_default.json` at `v2.17.1/leakfree-holiday`,
 2026-07-15.
 
 Measured, `PRODUCTION` config (the frozen artifact, i.e. what the field
-actually runs), `n_eval = 11,319`, eval window 2025-07-01 … 2026-10-16:
+actually runs), `n_eval = 11,303`, eval window 2025-07-01 … 2026-10-16:
 
 | segment | MAE | bias |
 |---|--:|--:|
-| ALL | 24.5307 | −0.6455 |
+| ALL | 24.5444 | −0.6452 |
 | WINTER Dec−Feb | 31.9710 | −1.6376 |
-| SUMMER May−Jul | 19.9836 | −4.6170 |
-| midday 8−12 UTC | 24.4061 | +2.5866 |
-| evening 15−19 UTC | 32.3112 | −5.1564 |
-| tail p95 price | 86.9614 | −86.6710 |
+| SUMMER May−Jul | 20.0171 | −4.6063 |
+| midday 8−12 UTC | 24.3871 | +2.5607 |
+| evening 15−19 UTC | 32.3139 | −5.0542 |
+| tail p95 price | 86.9318 | −86.6413 |
 
 The `tail p95 price` row is not a typo: bias ≈ −MAE means the model
 under-predicts essentially every hour in the top 5% of prices. That is
