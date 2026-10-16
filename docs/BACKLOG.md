@@ -1,5 +1,19 @@
 # Forecast model — backlog and open defects
 
+## Current status (2026-10-16)
+
+**Read `docs/SESSION_HANDOFF_2026-10-16.md` first.** It records the
+first measured improvement candidate (`RL_PROXY`: residual load from
+forecastable components, +1.70 % MAE and −7.4 % on the price tail,
+improving every lead day), three silent measurement defects now fixed,
+and corrections to several claims in this file — in particular that the
+admissible fundamentals ceiling is R² 0.537 rather than ~0.30, and that
+the `tail p95` bias reflects range compression (Theil: bias² is 0.03 %
+of MSE) rather than level bias.
+
+The architecture rebuild is parked with explicit activation triggers in
+`docs/MODELLING_DATA_AND_PARKED_DESIGN.md`.
+
 ## Current status (2026-08-11) — root cause found, and corrections below
 
 The July weekday over-prediction is real and reproduces offline once the
