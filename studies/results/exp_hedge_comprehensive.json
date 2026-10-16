@@ -1,0 +1,715 @@
+{
+  "n_candidates": 72,
+  "univariate": [
+    {
+      "variable": "ORACLE_ee_same_hour",
+      "block": "oracle price",
+      "beta": 0.7139996199741409,
+      "hac_t": 12.13333420959575,
+      "r2": 0.5451408739123563,
+      "n": 35040
+    },
+    {
+      "variable": "ORACLE_se3_same_hour",
+      "block": "oracle price",
+      "beta": 0.9346711665710922,
+      "hac_t": 21.672047589753166,
+      "r2": 0.5127007782765778,
+      "n": 35040
+    },
+    {
+      "variable": "ORACLE_se1_same_hour",
+      "block": "oracle price",
+      "beta": 1.113861132227862,
+      "hac_t": 19.905448930863162,
+      "r2": 0.5118236523224674,
+      "n": 35040
+    },
+    {
+      "variable": "residual_load_sq",
+      "block": "derived",
+      "beta": 1.5957092859292459,
+      "hac_t": 15.818635015741615,
+      "r2": 0.33810160312871773,
+      "n": 35019
+    },
+    {
+      "variable": "rl_per_wind_cap",
+      "block": "derived",
+      "beta": 118.60476436198522,
+      "hac_t": 11.16577745093297,
+      "r2": 0.3244623665217805,
+      "n": 35019
+    },
+    {
+      "variable": "residual_load_ex_ante",
+      "block": "derived",
+      "beta": 0.02248152889818903,
+      "hac_t": 15.80633556967295,
+      "r2": 0.30971939523013337,
+      "n": 35019
+    },
+    {
+      "variable": "rl_x_workday",
+      "block": "derived",
+      "beta": 0.025492065689621035,
+      "hac_t": 14.794896055592188,
+      "r2": 0.27064687098352347,
+      "n": 35019
+    },
+    {
+      "variable": "wind_forecast_mw",
+      "block": "fingrid ex-ante",
+      "beta": -0.022464940421844094,
+      "hac_t": -16.17204852691688,
+      "r2": 0.2672554932758502,
+      "n": 35040
+    },
+    {
+      "variable": "ORACLE_residual_load_realised",
+      "block": "oracle realised",
+      "beta": 0.02213191731330316,
+      "hac_t": 15.165101285774119,
+      "r2": 0.25727392638788105,
+      "n": 35040
+    },
+    {
+      "variable": "wind_penetration",
+      "block": "derived",
+      "beta": -211.776743181343,
+      "hac_t": -16.028083878509328,
+      "r2": 0.25716167299560244,
+      "n": 35019
+    },
+    {
+      "variable": "ORACLE_wind_actual_mw",
+      "block": "oracle realised",
+      "beta": -0.022353044032871822,
+      "hac_t": -15.76177856175138,
+      "r2": 0.24884368370092513,
+      "n": 35040
+    },
+    {
+      "variable": "wind_cap_factor",
+      "block": "derived",
+      "beta": -173.3724524968177,
+      "hac_t": -17.52825488829639,
+      "r2": 0.24281752661013623,
+      "n": 35040
+    },
+    {
+      "variable": "wind_speed_weighted",
+      "block": "weather agg",
+      "beta": -15.176872948712592,
+      "hac_t": -18.789888886551847,
+      "r2": 0.22853573134460736,
+      "n": 35040
+    },
+    {
+      "variable": "sigmoid_wind_rho",
+      "block": "weather agg",
+      "beta": -127.54766977313939,
+      "hac_t": -18.584208002907214,
+      "r2": 0.22678383119500933,
+      "n": 35040
+    },
+    {
+      "variable": "wind_log_scarcity",
+      "block": "transform",
+      "beta": 53.64827927008741,
+      "hac_t": 17.909963592578034,
+      "r2": 0.2247116113286035,
+      "n": 35040
+    },
+    {
+      "variable": "wind_sq",
+      "block": "transform",
+      "beta": -1.027414627533635,
+      "hac_t": -17.17172294702225,
+      "r2": 0.20954116299302084,
+      "n": 35040
+    },
+    {
+      "variable": "wind_speed_120m__Lapua___S._Ostrobothnia",
+      "block": "weather site",
+      "beta": -12.451778990449128,
+      "hac_t": -16.310178194534164,
+      "r2": 0.20750862974852968,
+      "n": 35040
+    },
+    {
+      "variable": "wind_speed_120m__Raahe_coast_(Kalajoki-Raahe)",
+      "block": "weather site",
+      "beta": -11.67280761981939,
+      "hac_t": -17.49235349918885,
+      "r2": 0.17237490977836956,
+      "n": 35040
+    },
+    {
+      "variable": "wind_speed_120m__Ii-Simo,_N._Ostrobothnia_coast",
+      "block": "weather site",
+      "beta": -9.045646604841957,
+      "hac_t": -17.337733281517046,
+      "r2": 0.1607456440343713,
+      "n": 35040
+    },
+    {
+      "variable": "hdd_10",
+      "block": "transform",
+      "beta": 7.099175116257302,
+      "hac_t": 7.956210119323997,
+      "r2": 0.14734174323741445,
+      "n": 35040
+    },
+    {
+      "variable": "wind_calm",
+      "block": "transform",
+      "beta": 24.880196035889536,
+      "hac_t": 13.7010076405497,
+      "r2": 0.1456047906459491,
+      "n": 35040
+    },
+    {
+      "variable": "wind_speed_120m__Rauma___SW_Satakunta",
+      "block": "weather site",
+      "beta": -9.197489102726149,
+      "hac_t": -14.965552976975038,
+      "r2": 0.14506363528672672,
+      "n": 35040
+    },
+    {
+      "variable": "fi_lag168_7dmean",
+      "block": "price lag",
+      "beta": 0.5420056303678463,
+      "hac_t": 4.432419651278684,
+      "r2": 0.14011191805277323,
+      "n": 34849
+    },
+    {
+      "variable": "temperature_2m__Rauma___SW_Satakunta",
+      "block": "weather site",
+      "beta": -5.896410580824171,
+      "hac_t": -7.561449866417953,
+      "r2": 0.13822343705029838,
+      "n": 35040
+    },
+    {
+      "variable": "temperature_weighted",
+      "block": "weather agg",
+      "beta": -6.0451363517898145,
+      "hac_t": -7.743173870265427,
+      "r2": 0.1376427900947116,
+      "n": 35040
+    },
+    {
+      "variable": "se1_lag168",
+      "block": "price lag",
+      "beta": 0.5506741915002676,
+      "hac_t": 4.9964843649785795,
+      "r2": 0.12673372632742264,
+      "n": 34872
+    },
+    {
+      "variable": "temperature_2m__Lapua___S._Ostrobothnia",
+      "block": "weather site",
+      "beta": -4.6359629278559895,
+      "hac_t": -7.3234442698068705,
+      "r2": 0.1256879292030968,
+      "n": 35040
+    },
+    {
+      "variable": "temperature_2m__Helsinki___Uusimaa",
+      "block": "weather site",
+      "beta": -6.300018330924316,
+      "hac_t": -7.430902661583344,
+      "r2": 0.1245525439979408,
+      "n": 35040
+    },
+    {
+      "variable": "fi_lag168",
+      "block": "price lag",
+      "beta": 0.3329352372269369,
+      "hac_t": 4.0987009451953975,
+      "r2": 0.11228455880826615,
+      "n": 34872
+    },
+    {
+      "variable": "temperature_2m__Raahe_coast_(Kalajoki-Raahe)",
+      "block": "weather site",
+      "beta": -4.263145560924353,
+      "hac_t": -7.261211583187349,
+      "r2": 0.10827090949175389,
+      "n": 35040
+    },
+    {
+      "variable": "wind_speed_120m__Joroinen,_Eastern_Finland",
+      "block": "weather site",
+      "beta": -9.08755001236164,
+      "hac_t": -13.477008549575697,
+      "r2": 0.10615688099722798,
+      "n": 35040
+    },
+    {
+      "variable": "temperature_2m__Joroinen,_Eastern_Finland",
+      "block": "weather site",
+      "beta": -4.243703451807069,
+      "hac_t": -6.9094809535322375,
+      "r2": 0.1032866277356449,
+      "n": 35040
+    },
+    {
+      "variable": "temperature_2m__Ii-Simo,_N._Ostrobothnia_coast",
+      "block": "weather site",
+      "beta": -4.092399566618126,
+      "hac_t": -7.272431929124539,
+      "r2": 0.10043021797295348,
+      "n": 35040
+    },
+    {
+      "variable": "wind_speed_120m__Kolari-Muonio_fells,_Lapland",
+      "block": "weather site",
+      "beta": -8.986790839266115,
+      "hac_t": -13.440307280372938,
+      "r2": 0.09627655099051502,
+      "n": 35040
+    },
+    {
+      "variable": "se3_lag168",
+      "block": "price lag",
+      "beta": 0.402221081529163,
+      "hac_t": 4.008030702795742,
+      "r2": 0.09588857600168132,
+      "n": 34872
+    },
+    {
+      "variable": "ee_lag168",
+      "block": "price lag",
+      "beta": 0.2707593753889095,
+      "hac_t": 3.6498363854679114,
+      "r2": 0.07938626255585401,
+      "n": 34872
+    },
+    {
+      "variable": "ORACLE_flow_fi_se1_mw",
+      "block": "oracle realised",
+      "beta": -0.02788144282627955,
+      "hac_t": -10.010568195652048,
+      "r2": 0.07332562427397171,
+      "n": 35039
+    },
+    {
+      "variable": "temperature_2m__Kolari-Muonio_fells,_Lapland",
+      "block": "weather site",
+      "beta": -2.7514426970972985,
+      "hac_t": -5.666131515386911,
+      "r2": 0.07288997789736451,
+      "n": 35040
+    },
+    {
+      "variable": "wind_speed_120m__Helsinki___Uusimaa",
+      "block": "weather site",
+      "beta": -5.6346407173609725,
+      "hac_t": -10.260893699201413,
+      "r2": 0.06319847121505928,
+      "n": 35040
+    },
+    {
+      "variable": "fi_lag336",
+      "block": "price lag",
+      "beta": 0.2465561922029815,
+      "hac_t": 2.9676958409629117,
+      "r2": 0.06183508353809897,
+      "n": 34704
+    },
+    {
+      "variable": "ORACLE_flow_fi_se3_mw",
+      "block": "oracle realised",
+      "beta": -0.025502075127406355,
+      "hac_t": -6.888656374493729,
+      "r2": 0.05301255874183919,
+      "n": 35039
+    },
+    {
+      "variable": "wind_capacity_mw",
+      "block": "fingrid ex-ante",
+      "beta": -0.009164468883999482,
+      "hac_t": -3.4707029759757084,
+      "r2": 0.03949829587028464,
+      "n": 35040
+    },
+    {
+      "variable": "ORACLE_nuclear_mw",
+      "block": "oracle realised",
+      "beta": -94.05240957088272,
+      "hac_t": -3.363203603511108,
+      "r2": 0.03620312945883031,
+      "n": 35013
+    },
+    {
+      "variable": "ORACLE_flow_fi_ee_mw",
+      "block": "oracle realised",
+      "beta": -0.03484880735964748,
+      "hac_t": -3.8699123291701087,
+      "r2": 0.03191899043295332,
+      "n": 35039
+    },
+    {
+      "variable": "consumption_mw",
+      "block": "fingrid ex-ante",
+      "beta": 0.0143558463308761,
+      "hac_t": 2.9224143010875796,
+      "r2": 0.024685828856887082,
+      "n": 35019
+    },
+    {
+      "variable": "solar_capacity_mw",
+      "block": "fingrid ex-ante",
+      "beta": -0.024615014873794604,
+      "hac_t": -2.747922813775633,
+      "r2": 0.018881109508780414,
+      "n": 35040
+    },
+    {
+      "variable": "ORACLE_flow_fi_no_mw",
+      "block": "oracle realised",
+      "beta": -0.26784609956905975,
+      "hac_t": -4.155860890629163,
+      "r2": 0.01702103363119911,
+      "n": 35039
+    },
+    {
+      "variable": "cloud_cover__Lapua___S._Ostrobothnia",
+      "block": "weather site",
+      "beta": -0.18644788946453109,
+      "hac_t": -3.422718820681356,
+      "r2": 0.009743817780186403,
+      "n": 35040
+    },
+    {
+      "variable": "cloud_cover__Kolari-Muonio_fells,_Lapland",
+      "block": "weather site",
+      "beta": -0.17802604106449116,
+      "hac_t": -3.868197037950173,
+      "r2": 0.008976773912049207,
+      "n": 35040
+    },
+    {
+      "variable": "temp_sq",
+      "block": "transform",
+      "beta": 0.0724949810954789,
+      "hac_t": 1.6570552353547883,
+      "r2": 0.008584328591916157,
+      "n": 35040
+    },
+    {
+      "variable": "cloud_cover__Joroinen,_Eastern_Finland",
+      "block": "weather site",
+      "beta": -0.16500881147424223,
+      "hac_t": -3.7311780869540834,
+      "r2": 0.0070439649767307655,
+      "n": 35040
+    },
+    {
+      "variable": "cloud_cover__Rauma___SW_Satakunta",
+      "block": "weather site",
+      "beta": -0.1573706725565818,
+      "hac_t": -3.1013253826325102,
+      "r2": 0.006970883736828526,
+      "n": 35040
+    },
+    {
+      "variable": "cloud_cover__Raahe_coast_(Kalajoki-Raahe)",
+      "block": "weather site",
+      "beta": -0.15670279273022483,
+      "hac_t": -3.3223826116768693,
+      "r2": 0.006691786004818012,
+      "n": 35040
+    },
+    {
+      "variable": "solar_forecast_mw",
+      "block": "fingrid ex-ante",
+      "beta": -0.03959830936921818,
+      "hac_t": -6.088770403949345,
+      "r2": 0.00642684960980755,
+      "n": 35040
+    },
+    {
+      "variable": "cloud_cover__Ii-Simo,_N._Ostrobothnia_coast",
+      "block": "weather site",
+      "beta": -0.13899498161987747,
+      "hac_t": -3.420756728926585,
+      "r2": 0.005439967092893849,
+      "n": 35040
+    },
+    {
+      "variable": "cdd_10",
+      "block": "transform",
+      "beta": -2.371570460178595,
+      "hac_t": -3.8133506620200346,
+      "r2": 0.004777313425773366,
+      "n": 35040
+    },
+    {
+      "variable": "is_holiday",
+      "block": "calendar",
+      "beta": -22.4418392364416,
+      "hac_t": -3.703935758773274,
+      "r2": 0.004202300819014959,
+      "n": 35040
+    },
+    {
+      "variable": "wind_x_temp",
+      "block": "derived",
+      "beta": 0.0005552903055414212,
+      "hac_t": 0.931222592338353,
+      "r2": 0.002864913477375164,
+      "n": 35040
+    },
+    {
+      "variable": "global_tilted_irradiance_instant__Helsinki___Uusimaa",
+      "block": "weather site",
+      "beta": -0.021253441698182395,
+      "hac_t": -4.087362309082429,
+      "r2": 0.002260080149770083,
+      "n": 35040
+    },
+    {
+      "variable": "global_tilted_irradiance_instant__Rauma___SW_Satakunta",
+      "block": "weather site",
+      "beta": -0.017022852061916973,
+      "hac_t": -3.428074613629353,
+      "r2": 0.0014128773256739668,
+      "n": 35040
+    },
+    {
+      "variable": "cloud_cover__Helsinki___Uusimaa",
+      "block": "weather site",
+      "beta": -0.07069053495459167,
+      "hac_t": -1.5745205970220224,
+      "r2": 0.001395373910177522,
+      "n": 35040
+    },
+    {
+      "variable": "is_workday",
+      "block": "calendar",
+      "beta": 5.295739944698272,
+      "hac_t": 2.141630316663927,
+      "r2": 0.001273171372763171,
+      "n": 35040
+    },
+    {
+      "variable": "solar_irradiance_weighted",
+      "block": "weather agg",
+      "beta": -0.019288275741886556,
+      "hac_t": -2.9053840341934056,
+      "r2": 0.0011814380195293017,
+      "n": 35040
+    },
+    {
+      "variable": "solar_effective",
+      "block": "weather agg",
+      "beta": -0.019547713291269586,
+      "hac_t": -2.7461611486676394,
+      "r2": 0.0010974858982394364,
+      "n": 35040
+    },
+    {
+      "variable": "ORACLE_consumption_actual_mw",
+      "block": "oracle realised",
+      "beta": 0.002192379988992949,
+      "hac_t": 0.5000402834086163,
+      "r2": 0.0007231241047676029,
+      "n": 35040
+    },
+    {
+      "variable": "global_tilted_irradiance_instant__Joroinen,_Eastern_Finland",
+      "block": "weather site",
+      "beta": -0.008002971036346616,
+      "hac_t": -1.689387124605823,
+      "r2": 0.0002933744844418884,
+      "n": 35040
+    },
+    {
+      "variable": "global_tilted_irradiance_instant__Lapua___S._Ostrobothnia",
+      "block": "weather site",
+      "beta": -0.007072109617021149,
+      "hac_t": -1.3845642576224189,
+      "r2": 0.0002270005210964765,
+      "n": 35040
+    },
+    {
+      "variable": "local_dow",
+      "block": "calendar",
+      "beta": -0.45361861026547307,
+      "hac_t": -0.8716769387710044,
+      "r2": 0.00017414323048514646,
+      "n": 35040
+    },
+    {
+      "variable": "global_tilted_irradiance_instant__Kolari-Muonio_fells,_Lapland",
+      "block": "weather site",
+      "beta": -0.006255314924985676,
+      "hac_t": -1.1430089420170968,
+      "r2": 0.00016728463750748102,
+      "n": 35040
+    },
+    {
+      "variable": "global_tilted_irradiance_instant__Ii-Simo,_N._Ostrobothnia_coast",
+      "block": "weather site",
+      "beta": -0.004796700566585634,
+      "hac_t": -0.8996703813219619,
+      "r2": 0.00011225717664853363,
+      "n": 35040
+    },
+    {
+      "variable": "global_tilted_irradiance_instant__Raahe_coast_(Kalajoki-Raahe)",
+      "block": "weather site",
+      "beta": -0.0038767654593546827,
+      "hac_t": -0.6746750540781954,
+      "r2": 7.192585073123592e-05,
+      "n": 35040
+    },
+    {
+      "variable": "local_hour",
+      "block": "calendar",
+      "beta": -0.001620269616461931,
+      "hac_t": -0.016922692639137305,
+      "r2": 2.665303155957588e-08,
+      "n": 35040
+    }
+  ],
+  "forward_admissible": [
+    {
+      "variable": "residual_load_sq",
+      "block": "derived",
+      "r2": 0.33810160312871773,
+      "delta_pp": 33.81016031287177,
+      "hac_t": 15.818635015741615
+    },
+    {
+      "variable": "fi_lag168_7dmean",
+      "block": "price lag",
+      "r2": 0.4332835645232722,
+      "delta_pp": 9.518196139455448,
+      "hac_t": 4.092540829339781
+    },
+    {
+      "variable": "se1_lag168",
+      "block": "price lag",
+      "r2": 0.4485301871797174,
+      "delta_pp": 1.5246622656445163,
+      "hac_t": 3.3828606072637144
+    },
+    {
+      "variable": "rl_per_wind_cap",
+      "block": "derived",
+      "r2": 0.4609187645122578,
+      "delta_pp": 1.2388577332540396,
+      "hac_t": 3.458617450520156
+    },
+    {
+      "variable": "residual_load_ex_ante",
+      "block": "derived",
+      "r2": 0.47114938428606457,
+      "delta_pp": 1.0230619773806793,
+      "hac_t": -2.972251743755899
+    },
+    {
+      "variable": "wind_capacity_mw",
+      "block": "fingrid ex-ante",
+      "r2": 0.49634414139790106,
+      "delta_pp": 2.5194757111836497,
+      "hac_t": 5.842279133800093
+    },
+    {
+      "variable": "solar_capacity_mw",
+      "block": "fingrid ex-ante",
+      "r2": 0.5037290078837908,
+      "delta_pp": 0.7384866485889763,
+      "hac_t": -3.831676835772011
+    },
+    {
+      "variable": "rl_x_workday",
+      "block": "derived",
+      "r2": 0.5103076312546843,
+      "delta_pp": 0.6578623370893433,
+      "hac_t": 6.29885502924706
+    },
+    {
+      "variable": "wind_speed_120m__Rauma___SW_Satakunta",
+      "block": "weather site",
+      "r2": 0.5147505433327837,
+      "delta_pp": 0.4442912078099437,
+      "hac_t": -5.506510955195527
+    },
+    {
+      "variable": "temperature_2m__Rauma___SW_Satakunta",
+      "block": "weather site",
+      "r2": 0.5190118557939563,
+      "delta_pp": 0.42613124611725617,
+      "hac_t": -2.8560310430323996
+    },
+    {
+      "variable": "solar_effective",
+      "block": "weather agg",
+      "r2": 0.5218422406025264,
+      "delta_pp": 0.2830384808570119,
+      "hac_t": -6.409062187540792
+    },
+    {
+      "variable": "wind_penetration",
+      "block": "derived",
+      "r2": 0.5248206148813139,
+      "delta_pp": 0.29783742787875545,
+      "hac_t": -3.0438838035686278
+    },
+    {
+      "variable": "wind_cap_factor",
+      "block": "derived",
+      "r2": 0.5337112857716151,
+      "delta_pp": 0.8890670890301156,
+      "hac_t": 3.8474629213249365
+    },
+    {
+      "variable": "is_holiday",
+      "block": "calendar",
+      "r2": 0.5371717050115535,
+      "delta_pp": 0.34604192399384504,
+      "hac_t": -5.555426750359685
+    }
+  ],
+  "admissible_r2": 0.5371717050115535,
+  "oracle_added": [
+    {
+      "variable": "ORACLE_ee_same_hour",
+      "r2": 0.7267113213132499,
+      "delta_pp": 18.953961630169637
+    },
+    {
+      "variable": "ORACLE_se3_same_hour",
+      "r2": 0.7589927980740381,
+      "delta_pp": 3.2281476760788186
+    },
+    {
+      "variable": "ORACLE_se1_same_hour",
+      "r2": 0.7680634783526754,
+      "delta_pp": 0.9070680278637333
+    },
+    {
+      "variable": "ORACLE_nuclear_mw",
+      "r2": 0.7740090442982838,
+      "delta_pp": 0.5945565945608355
+    },
+    {
+      "variable": "ORACLE_flow_fi_se3_mw",
+      "r2": 0.7762635937654202,
+      "delta_pp": 0.22545494671364352
+    },
+    {
+      "variable": "ORACLE_flow_fi_se1_mw",
+      "r2": 0.780150026002997,
+      "delta_pp": 0.3886432237576787
+    }
+  ],
+  "oracle_r2": 0.780150026002997
+}

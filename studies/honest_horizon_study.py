@@ -56,13 +56,33 @@ EVAL_START = pd.Timestamp("2025-07-01", tz="UTC")
 RESULTS = REPO/"studies"/"results"; RESULTS.mkdir(parents=True, exist_ok=True)
 
 
-def sfit(X, y, alpha=1.0, upper=None):
-    """Ridge with upper bounds (intercept un-penalised)."""
+def sfit(X, y, alpha=1.0, upper=None, lower=None):
+    """Ridge with per-coefficient bounds (intercept un-penalised).
+
+    `upper` caps a coefficient, `lower` floors it. Both take
+    {column_index: bound}.
+
+    Sign constraints exist because an unconstrained ridge will happily
+    fit a physically impossible coefficient when a feature is collinear
+    with a trend — measured: the cross-border capacity term fitted
+    +1.397 where more import capacity must lower the price, i.e. it was
+    proxying the time trend rather than physics. A feature whose sign is
+    known a priori should be constrained, so a refit on new data cannot
+    silently invert it.
+
+    Currently constrained in the shipped fit: wind and PV to <= 0 (zero
+    marginal cost cannot raise the price). Residual load is the natural
+    >= 0 case, which is why `lower` was added.
+    """
     p = X.shape[1]
     A = np.vstack([X, np.sqrt(alpha)*np.eye(p)]); A[len(X), 0] = 0.0
     b = np.concatenate([y, np.zeros(p)])
     lo = np.full(p, -np.inf); hi = np.full(p, np.inf)
     for i, u in (upper or {}).items(): hi[i] = u
+    for i, l in (lower or {}).items(): lo[i] = l
+    if np.any(lo > hi):
+        bad = [i for i in range(p) if lo[i] > hi[i]]
+        raise ValueError(f"contradictory bounds on column(s) {bad}")
     return lsq_linear(A, b, bounds=(lo, hi), method="trf").x
 
 
